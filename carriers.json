@@ -1,0 +1,14 @@
+[
+  {
+    "name": "twilio",
+    "type": "twilio"
+  },
+  {
+    "name": "jasmin",
+    "type": "jasmin"
+  },
+  {
+    "name": "generic_carrier",
+    "type": "generic"
+  }
+]

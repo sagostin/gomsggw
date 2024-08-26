@@ -67,7 +67,7 @@ func main() {
 	// server.ProcessSMS()
 
 	// Add some example routes
-	server.AddRoute("1", "carrier", "twilio")
+	server.AddRoute("1", "carrier", "twilio", carriers["twilio"])
 
 	server.Start()
 

@@ -17,17 +17,11 @@ import (
 	"github.com/fiorix/go-smpp/smpp/pdu/pdufield"
 )
 
-// Default settings.
-var (
-	DefaultUser     = "client"
-	DefaultPasswd   = "secret"
-	DefaultSystemID = "smpptest"
-)
-
 type SMSMessage struct {
 	Source      string
 	Destination string
 	Content     string
+	Client      *Client
 }
 
 type Route struct {
@@ -38,13 +32,11 @@ type Route struct {
 
 // Server is an SMPP server for testing purposes.
 type Server struct {
-	User    string
-	Passwd  string
-	TLS     *tls.Config
-	Handler HandlerFunc
-
-	conns      map[smpp.Conn]struct{}
-	mu         sync.Mutex
+	TLS        *tls.Config
+	Handler    HandlerFunc
+	Clients    map[string]*Client // Map of Username to Client
+	conns      map[string]smpp.Conn
+	mu         sync.RWMutex
 	l          net.Listener
 	smsChannel chan SMSMessage
 	routes     []Route
@@ -53,24 +45,26 @@ type Server struct {
 // HandlerFunc is the signature of a function that handles PDUs.
 type HandlerFunc func(s *Server, c smpp.Conn, m pdu.Body)
 
-// NewServer creates and initializes a new Server.
-func NewServer() *Server {
-	s := NewUnstartedServer()
-	s.Start()
-	return s
-}
+// NewServer creates a new Server with default settings.
+func NewServer() (*Server, error) {
+	clients, err := loadClients()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load clients: %v", err)
+	}
 
-// NewUnstartedServer creates a new Server with default settings.
-func NewUnstartedServer() *Server {
+	clientMap := make(map[string]*Client)
+	for i := range clients {
+		clientMap[clients[i].Username] = &clients[i]
+	}
+
 	return &Server{
-		User:       DefaultUser,
-		Passwd:     DefaultPasswd,
+		Clients:    clientMap,
 		Handler:    CustomHandler,
 		l:          newLocalListener(),
-		conns:      make(map[smpp.Conn]struct{}),
+		conns:      make(map[string]smpp.Conn),
 		smsChannel: make(chan SMSMessage, 1000),
 		routes:     make([]Route, 0),
-	}
+	}, nil
 }
 
 func newLocalListener() net.Listener {
@@ -114,18 +108,15 @@ func (srv *Server) Serve() {
 			break // on srv.l.Close
 		}
 		c := newConn(cli)
-		srv.mu.Lock()
-		srv.conns[c] = struct{}{}
-		srv.mu.Unlock()
 		go srv.handle(c)
 	}
 }
 
 // BroadcastMessage broadcasts a PDU to all bound clients.
 func (srv *Server) BroadcastMessage(p pdu.Body) {
-	srv.mu.Lock()
-	defer srv.mu.Unlock()
-	for c := range srv.conns {
+	srv.mu.RLock()
+	defer srv.mu.RUnlock()
+	for _, c := range srv.conns {
 		c.Write(p)
 	}
 }
@@ -174,7 +165,12 @@ func (srv *Server) handle(c *conn) {
 	defer func() {
 		c.Close()
 		srv.mu.Lock()
-		delete(srv.conns, c)
+		for username, conn := range srv.conns {
+			if conn == c {
+				delete(srv.conns, username)
+				break
+			}
+		}
 		srv.mu.Unlock()
 	}()
 	if err := srv.auth(c); err != nil {
@@ -212,18 +208,25 @@ func (srv *Server) auth(c *conn) error {
 		return errors.New("unexpected pdu, want bind")
 	}
 	f := p.Fields()
-	user := f[pdufield.SystemID]
-	passwd := f[pdufield.Password]
-	if user == nil || passwd == nil {
+	username := f[pdufield.SystemID].String()
+	password := f[pdufield.Password].String()
+	if username == "" || password == "" {
 		return errors.New("malformed pdu, missing system_id/password")
 	}
-	if user.String() != srv.User {
-		return errors.New("invalid user")
+
+	authed, err := authClient(username, password, srv.Clients)
+	if err != nil {
+		return err
 	}
-	if passwd.String() != srv.Passwd {
-		return errors.New("invalid passwd")
+	if !authed {
+		return errors.New("authentication failed")
 	}
-	resp.Fields().Set(pdufield.SystemID, DefaultSystemID)
+
+	srv.mu.Lock()
+	srv.conns[username] = c
+	srv.mu.Unlock()
+
+	resp.Fields().Set(pdufield.SystemID, username)
 	return c.Write(resp)
 }
 
@@ -233,7 +236,10 @@ func CustomHandler(s *Server, c smpp.Conn, m pdu.Body) {
 		handleSubmitSM(s, c, m)
 	default:
 		log.Printf("Received PDU: %s", m.Header().ID)
-		c.Write(m)
+		err := c.Write(m)
+		if err != nil {
+			log.Printf("Error writing PDU: %v", err)
+		}
 	}
 }
 
@@ -243,19 +249,40 @@ func handleSubmitSM(s *Server, c smpp.Conn, m pdu.Body) {
 	destAddr := f[pdufield.DestinationAddr].String()
 	shortMessage := f[pdufield.ShortMessage].String()
 
-	log.Printf("Received SubmitSM: From=%s, To=%s, Message=%s", sourceAddr, destAddr, shortMessage)
+	// Find the client associated with this connection
+	s.mu.RLock()
+	var client *Client
+	for username, conn := range s.conns {
+		if conn == c {
+			client = s.Clients[username]
+			break
+		}
+	}
+	s.mu.RUnlock()
+
+	if client == nil {
+		log.Printf("Error: Unable to identify client for connection")
+		return
+	}
+
+	log.Printf("Received SubmitSM from client %s: From=%s, To=%s, Message=%s", client.Username, sourceAddr, destAddr, shortMessage)
 
 	// Send to channel for async processing
 	s.smsChannel <- SMSMessage{
 		Source:      sourceAddr,
 		Destination: destAddr,
 		Content:     shortMessage,
+		Client:      client,
 	}
 
 	resp := pdu.NewSubmitSMResp()
 	resp.Header().Seq = m.Header().Seq
-	resp.Fields().Set(pdufield.MessageID, fmt.Sprintf("%d", time.Now().UnixNano()))
-	err := c.Write(resp)
+	err := resp.Fields().Set(pdufield.MessageID, fmt.Sprintf("%d", time.Now().UnixNano()))
+	if err != nil {
+		log.Printf("Error setting MessageID: %v", err)
+		return
+	}
+	err = c.Write(resp)
 	if err != nil {
 		log.Printf("Error sending SubmitSMResp: %v", err)
 	}
@@ -267,6 +294,7 @@ func (srv *Server) AddRoute(prefix, routeType, endpoint string) {
 
 func (srv *Server) findRoute(destination string) *Route {
 	for _, route := range srv.routes {
+		// todo support numbers based on carriers
 		if len(destination) >= len(route.Prefix) && destination[:len(route.Prefix)] == route.Prefix {
 			return &route
 		}

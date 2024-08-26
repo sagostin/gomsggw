@@ -59,8 +59,12 @@ func main() {
 		port = "0.0.0.0:3000"
 	}
 
-	server := NewUnstartedServer()
+	// load smpp clients / pbx credentials
+
+	server, _ := NewServer()
 	server.l, _ = net.Listen("tcp", os.Getenv("SMPP_LISTEN"))
+
+	// server.ProcessSMS()
 
 	// Add some example routes
 	server.AddRoute("1", "carrier", "twilio")

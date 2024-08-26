@@ -43,14 +43,14 @@ func main() {
 
 	for name, handler := range gateway.Carriers {
 		inboundPath := fmt.Sprintf("/inbound/%s", name)
-		outboundPath := fmt.Sprintf("/outbound/%s", name)
+		//outboundPath := fmt.Sprintf("/outbound/%s", name)
 
 		app.Post(inboundPath, func(c *fiber.Ctx) error {
 			return handler.HandleInbound(c, gateway)
 		})
-		app.Post(outboundPath, func(c *fiber.Ctx) error {
+		/*app.Post(outboundPath, func(c *fiber.Ctx) error {
 			return handler.HandleOutbound(c, gateway)
-		})
+		})*/
 	}
 
 	// Start server

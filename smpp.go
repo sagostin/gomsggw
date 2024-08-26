@@ -327,7 +327,7 @@ func (srv *Server) findRoute(source, destination string) *Route {
 func (srv *Server) clientOutboundCarrier(source string) (string, error) {
 	for _, client := range srv.Clients {
 		for _, num := range client.Numbers {
-			if strings.Contains(num.Number, source) {
+			if strings.Contains(source, num.Number) {
 				return num.Carrier, nil
 			}
 		}

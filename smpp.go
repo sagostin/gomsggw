@@ -342,6 +342,7 @@ func (srv *Server) clientOutboundCarrier(source string) (string, error) {
 }
 
 func (srv *Server) clientInboundConn(destination string) (smpp.Conn, error) {
+
 	for _, client := range srv.Clients {
 		for _, num := range client.Numbers {
 			log.Printf("%s", num)
@@ -410,6 +411,11 @@ func SendToSmppClient(sms *SMS) error {
 
 	sm := pdu.NewSubmitSM(make(pdutlv.Fields))
 	f := sm.Fields()
+
+	// replace + in from and to
+
+	sms.From = strings.ReplaceAll(sms.From, "+", "")
+	sms.To = strings.ReplaceAll(sms.To, "+", "")
 
 	err = f.Set(pdufield.SourceAddr, sms.From)
 	if err != nil {

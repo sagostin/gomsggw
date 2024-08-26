@@ -56,7 +56,7 @@ func (h *TwilioHandler) HandleInbound(c *fiber.Ctx, gateway *SMSGateway) error {
 		// forward to SMPP conn as SMS to PBX/System
 		err := SendToSmppClient(sms)
 		if err != nil {
-			h.logger.Log(fmt.Sprintf("Error forwarding SMS to Jasmin: %v", err))
+			h.logger.Log(fmt.Sprintf("Error forwarding SMS to Client: %v", err))
 			return c.Status(500).SendString("Error forwarding SMS")
 		}
 		// todo maybe not include this if it is a normal message?

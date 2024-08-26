@@ -58,11 +58,6 @@ func main() {
 		port = "0.0.0.0:3000"
 	}
 
-	err = app.Listen(port)
-	if err != nil {
-		log.Println(err)
-	}
-
 	server := NewServer()
 
 	// Add some example routes
@@ -71,5 +66,9 @@ func main() {
 	server.AddRoute("91", "smpp", "smpp_server2:2775")
 
 	fmt.Printf("Starting SMPP server on %s\n", server.Addr())
-	select {} // Keep the server running
+
+	err = app.Listen(port)
+	if err != nil {
+		log.Println(err)
+	}
 }

@@ -3,19 +3,13 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-	"net/http"
-	"net/url"
-	"os"
 	"time"
 )
 
-func (sms *SMS) forwardToJasmin(logger *CustomLogger) error {
-	baseURL := os.Getenv("JASMIN_URL") + "/send"
-
+/*func (sms *SMS) forwardToJasmin(logger *CustomLogger) error {
 	params := url.Values{}
 	params.Add("username", os.Getenv("JASMIN_USER")) // Replace with actual username
 	params.Add("password", os.Getenv("JASMIN_PASS")) // Replace with actual password
@@ -24,22 +18,8 @@ func (sms *SMS) forwardToJasmin(logger *CustomLogger) error {
 	params.Add("content", sms.Content)
 
 	// Construct the full URL
-	fullURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
-
-	// Make the GET request to Jasmin
-	resp, err := http.Get(fullURL)
-	if err != nil {
-		return fmt.Errorf("error making request to Jasmin: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status from Jasmin: %s", resp.Status)
-	}
-
-	logger.Log(fmt.Sprintf("Successfully forwarded to Jasmin: From %s To %s", sms.From, sms.To))
 	return nil
-}
+}*/
 
 // NewSMSGateway creates a new SMSGateway instance
 func NewSMSGateway(mongoURI string, logger *CustomLogger) (*SMSGateway, error) {

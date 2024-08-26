@@ -53,7 +53,8 @@ func (h *TwilioHandler) HandleInbound(c *fiber.Ctx, gateway *SMSGateway) error {
 		twiml += "<Message>You have successfully opted in to receive messages from this sender.</Message>"
 	} else {
 		// Forward the SMS to Jasmin
-		err := sms.forwardToJasmin(h.logger)
+		// forward to SMPP conn as SMS to PBX/System
+		err := SendToSmppClient(sms)
 		if err != nil {
 			h.logger.Log(fmt.Sprintf("Error forwarding SMS to Jasmin: %v", err))
 			return c.Status(500).SendString("Error forwarding SMS")

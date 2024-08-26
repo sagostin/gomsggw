@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/fiorix/go-smpp/smpp/pdu/pdutlv"
 	"io"
 	"log"
 	"net"
@@ -17,6 +18,8 @@ import (
 	"github.com/fiorix/go-smpp/smpp/pdu"
 	"github.com/fiorix/go-smpp/smpp/pdu/pdufield"
 )
+
+var smppServer *Server
 
 type SMSMessage struct {
 	Source      string
@@ -54,6 +57,8 @@ func NewServer() (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to load clients: %v", err)
 	}
+
+	// todo watch file for client changes and add them to the map / remove them?
 
 	clientMap := make(map[string]*Client)
 	for i := range clients {
@@ -336,6 +341,18 @@ func (srv *Server) clientOutboundCarrier(source string) (string, error) {
 	return "", nil
 }
 
+func (srv *Server) clientInboundConn(destination string) (smpp.Conn, error) {
+	for _, client := range srv.Clients {
+		for _, num := range client.Numbers {
+			if strings.Contains(destination, num.Number) {
+				return srv.conns[client.Username], nil
+			}
+		}
+	}
+
+	return nil, nil
+}
+
 func (srv *Server) AddRoute(prefix, routeType, endpoint string, handler CarrierHandler) {
 	srv.routes = append(srv.routes, Route{Prefix: prefix, Type: routeType, Endpoint: endpoint, Handler: handler})
 }
@@ -378,4 +395,48 @@ func (srv *Server) ProcessSMS() {
 			}
 		}(msg)
 	}
+}
+
+func SendToSmppClient(sms *SMS) error {
+	inboundConn, err := smppServer.clientInboundConn(sms.To)
+	if err != nil {
+		return fmt.Errorf("failed to find client connection: %v", err)
+	}
+
+	if inboundConn == nil {
+		return fmt.Errorf("no connection found for destination: %s", sms.To)
+	}
+
+	sm := pdu.NewSubmitSM(make(pdutlv.Fields))
+	f := sm.Fields()
+
+	err = f.Set(pdufield.SourceAddr, sms.From)
+	if err != nil {
+		return fmt.Errorf("failed to set source address: %v", err)
+	}
+
+	err = f.Set(pdufield.DestinationAddr, sms.To)
+	if err != nil {
+		return fmt.Errorf("failed to set destination address: %v", err)
+	}
+
+	err = f.Set(pdufield.ShortMessage, sms.Content)
+	if err != nil {
+		return fmt.Errorf("failed to set message content: %v", err)
+	}
+
+	// Set other optional fields as needed
+	// For example, to set validity period:
+	// err = f.Set(pdufield.ValidityPeriod, "000001000000000R") // 1 day
+	// if err != nil {
+	//     return fmt.Errorf("failed to set validity period: %v", err)
+	// }
+
+	err = inboundConn.Write(sm)
+	if err != nil {
+		return fmt.Errorf("failed to send SMS: %v", err)
+	}
+
+	log.Printf("SMS sent to client. From: %s, To: %s, Content: %s", sms.From, sms.To, sms.Content)
+	return nil
 }

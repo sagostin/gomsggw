@@ -61,17 +61,17 @@ func main() {
 
 	// load smpp clients / pbx credentials
 
-	server, _ := NewServer()
-	server.l, _ = net.Listen("tcp", os.Getenv("SMPP_LISTEN"))
+	smppServer, _ = NewServer()
+	smppServer.l, _ = net.Listen("tcp", os.Getenv("SMPP_LISTEN"))
 
 	// server.ProcessSMS()
 
 	// Add some example routes
-	server.AddRoute("1", "carrier", "twilio", carriers["twilio"])
+	smppServer.AddRoute("1", "carrier", "twilio", carriers["twilio"])
 
-	server.Start()
+	smppServer.Start()
 
-	fmt.Printf("Starting SMPP server on %s\n", server.Addr())
+	fmt.Printf("Starting SMPP server on %s\n", smppServer.Addr())
 
 	err = app.Listen(port)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
 	"log"
+	"net"
 	"os"
 )
 
@@ -53,17 +54,18 @@ func main() {
 	}
 
 	// Start server
-	port := os.Getenv("LISTEN")
+	port := os.Getenv("WEB_LISTEN")
 	if port == "" {
 		port = "0.0.0.0:3000"
 	}
 
-	server := NewServer()
+	server := NewUnstartedServer()
+	server.l, _ = net.Listen("tcp", os.Getenv("SMPP_LISTEN"))
 
 	// Add some example routes
-	server.AddRoute("1", "carrier", "carrier1_endpoint")
-	server.AddRoute("44", "smpp", "smpp_server1:2775")
-	server.AddRoute("91", "smpp", "smpp_server2:2775")
+	server.AddRoute("1", "carrier", "twilio")
+
+	server.Start()
 
 	fmt.Printf("Starting SMPP server on %s\n", server.Addr())
 

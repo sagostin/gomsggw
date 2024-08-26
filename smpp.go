@@ -412,12 +412,10 @@ func SendToSmppClient(sms *SMS) error {
 	sm := pdu.NewSubmitSM(make(pdutlv.Fields))
 	f := sm.Fields()
 
-	sm.Header().Seq = 1
-
 	// replace + in from and to
 
-	sms.From = strings.ReplaceAll(sms.From, "+", "")
-	sms.To = strings.ReplaceAll(sms.To, "+", "")
+	/*sms.From = strings.ReplaceAll(sms.From, "+", "")
+	sms.To = strings.ReplaceAll(sms.To, "+", "")*/
 
 	err = f.Set(pdufield.SourceAddr, sms.From)
 	if err != nil {
@@ -429,9 +427,44 @@ func SendToSmppClient(sms *SMS) error {
 		return fmt.Errorf("failed to set destination address: %v", err)
 	}
 
-	err = sm.Fields().Set(pdufield.MessageID, fmt.Sprintf("%s_%s_%d", sms.From, sms.To, time.Now().UnixNano()))
+	/*err = f.Set(pdufield.ServiceType, 0x01)
 	if err != nil {
 		return fmt.Errorf("failed to set destination address: %v", err)
+	}*/
+
+	err = f.Set(pdufield.SourceAddrNPI, 0x01)
+	if err != nil {
+		return fmt.Errorf("failed to set src npi: %v", err)
+	}
+
+	err = f.Set(pdufield.SourceAddrTON, 0x01)
+	if err != nil {
+		return fmt.Errorf("failed to set src ton: %v", err)
+	}
+
+	err = f.Set(pdufield.DestAddrNPI, 0x01)
+	if err != nil {
+		return fmt.Errorf("failed to set dest npi: %v", err)
+	}
+
+	err = f.Set(pdufield.DestAddrTON, 0x01)
+	if err != nil {
+		return fmt.Errorf("failed to set dest ton: %v", err)
+	}
+
+	err = sm.Fields().Set(pdufield.MessageID, fmt.Sprintf("%s_%s_%d", sms.From, sms.To, time.Now().UnixNano()))
+	if err != nil {
+		return fmt.Errorf("failed to set message id: %v", err)
+	}
+
+	err = f.Set(pdufield.DataCoding, 0x00)
+	if err != nil {
+		return fmt.Errorf("failed to set data coding: %v", err)
+	}
+
+	err = f.Set(pdufield.RegisteredDelivery, uint8(0x01))
+	if err != nil {
+		return fmt.Errorf("failed to set delivery: %v", err)
 	}
 
 	err = f.Set(pdufield.ShortMessage, sms.Content)

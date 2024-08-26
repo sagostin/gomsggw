@@ -1,5 +1,5 @@
 # Start from a Golang base image
-FROM golang:1.21-alpine as builder
+FROM golang:1.21-alpine AS builder
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -19,18 +19,21 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 # Start a new stage from scratch
 FROM alpine:latest
 
-RUN apk --no-cache add ca-certificates
+# Add CA certificates and create non-root user
+RUN apk --no-cache add ca-certificates && \
+    adduser -D appuser
 
-WORKDIR /root/
+# Set the working directory
+WORKDIR /app
 
 # Copy the pre-built binary file from the previous stage
 COPY --from=builder /app/main .
 
-# Copy the .env file
-COPY .env .
+# Copy the .env and carriers.json files
+COPY .env carriers.json ./
 
-# Copy the carriers.json file
-COPY carriers.json .
+# Use the non-root user
+USER appuser
 
 # Expose port 3000
 EXPOSE 3000

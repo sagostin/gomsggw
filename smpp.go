@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,12 +23,14 @@ type SMSMessage struct {
 	Destination string
 	Content     string
 	Client      *Client
+	Route       *Route
 }
 
 type Route struct {
 	Prefix   string
 	Type     string // "carrier" or "smpp"
 	Endpoint string
+	Handler  CarrierHandler
 }
 
 // Server is an SMPP server for testing purposes.
@@ -267,12 +270,20 @@ func handleSubmitSM(s *Server, c smpp.Conn, m pdu.Body) {
 
 	log.Printf("Received SubmitSM from client %s: From=%s, To=%s, Message=%s", client.Username, sourceAddr, destAddr, shortMessage)
 
+	route := s.findRoute(sourceAddr, destAddr)
+	if route == nil {
+		log.Printf("No route found for source %s and destination %s", sourceAddr, destAddr)
+		// Handle the case when no route is found (e.g., send an error response)
+		return
+	}
+
 	// Send to channel for async processing
 	s.smsChannel <- SMSMessage{
 		Source:      sourceAddr,
 		Destination: destAddr,
 		Content:     shortMessage,
 		Client:      client,
+		Route:       route,
 	}
 
 	resp := pdu.NewSubmitSMResp()
@@ -288,38 +299,82 @@ func handleSubmitSM(s *Server, c smpp.Conn, m pdu.Body) {
 	}
 }
 
-func (srv *Server) AddRoute(prefix, routeType, endpoint string) {
-	srv.routes = append(srv.routes, Route{Prefix: prefix, Type: routeType, Endpoint: endpoint})
-}
+func (srv *Server) findRoute(source, destination string) *Route {
+	carrier, err := srv.clientOutboundCarrier(source)
+	if err != nil {
+		log.Printf("Error finding carrier: %v", err)
+		return nil
+	}
 
-func (srv *Server) findRoute(destination string) *Route {
+	if carrier != "" {
+		for _, route := range srv.routes {
+			if route.Type == "carrier" && route.Endpoint == carrier {
+				return &route
+			}
+		}
+	}
+
+	// Fallback to prefix-based routing if no carrier route found
 	for _, route := range srv.routes {
-		// todo support numbers based on carriers
-		if len(destination) >= len(route.Prefix) && destination[:len(route.Prefix)] == route.Prefix {
+		if strings.HasPrefix(destination, route.Prefix) {
 			return &route
 		}
 	}
+
 	return nil
+}
+
+func (srv *Server) clientOutboundCarrier(source string) (string, error) {
+	for _, client := range srv.Clients {
+		for _, num := range client.Numbers {
+			if strings.Contains(num.Number, source) {
+				return num.Carrier, nil
+			}
+		}
+	}
+
+	return "", nil
+}
+
+func (srv *Server) AddRoute(prefix, routeType, endpoint string, handler CarrierHandler) {
+	srv.routes = append(srv.routes, Route{Prefix: prefix, Type: routeType, Endpoint: endpoint, Handler: handler})
 }
 
 func (srv *Server) ProcessSMS() {
 	for msg := range srv.smsChannel {
 		go func(m SMSMessage) {
-			route := srv.findRoute(m.Destination)
-			if route == nil {
-				log.Printf("No route found for destination: %s", m.Destination)
+			if m.Route == nil {
+				log.Printf("No route found for message: From=%s, To=%s", m.Source, m.Destination)
 				return
 			}
 
-			switch route.Type {
+			switch m.Route.Type {
 			case "carrier":
-				log.Printf("Sending SMS via carrier: %s", route.Endpoint)
+				log.Printf("Sending SMS via carrier: %s", m.Route.Endpoint)
 				// Implement carrier-specific logic here
+
+				switch m.Route.Endpoint {
+				case "twilio":
+					sms := SMS{
+						From:        m.Source,
+						To:          m.Destination,
+						Content:     m.Content,
+						CarrierData: nil,
+					}
+
+					err := m.Route.Handler.SendSMS(&sms)
+					if err != nil {
+						log.Printf(err.Error())
+						return
+					}
+				default:
+					log.Printf("error sending to carrier")
+				}
 			case "smpp":
-				log.Printf("Sending SMS via SMPP: %s", route.Endpoint)
+				log.Printf("Sending SMS via SMPP: %s", m.Route.Endpoint)
 				// Implement SMPP client logic here
 			default:
-				log.Printf("Unknown route type: %s", route.Type)
+				log.Printf("Unknown route type: %s", m.Route.Type)
 			}
 		}(msg)
 	}

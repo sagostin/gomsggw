@@ -344,6 +344,7 @@ func (srv *Server) clientOutboundCarrier(source string) (string, error) {
 func (srv *Server) clientInboundConn(destination string) (smpp.Conn, error) {
 	for _, client := range srv.Clients {
 		for _, num := range client.Numbers {
+			log.Printf("%s", num)
 			if strings.Contains(destination, num.Number) {
 				return srv.conns[client.Username], nil
 			}

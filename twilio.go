@@ -60,7 +60,7 @@ func (h *TwilioHandler) HandleInbound(c *fiber.Ctx, gateway *SMSGateway) error {
 			return c.Status(500).SendString("Error forwarding SMS")
 		}
 		// todo maybe not include this if it is a normal message?
-		twiml += "<Message>Your message has been received and processed.</Message>"
+		/*twiml += "<Message>Your message has been received and processed.</Message>"*/
 	}
 
 	twiml += "</Response>"

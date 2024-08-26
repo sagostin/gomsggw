@@ -293,7 +293,7 @@ func handleSubmitSM(s *Server, c smpp.Conn, m pdu.Body) {
 
 	resp := pdu.NewSubmitSMResp()
 	resp.Header().Seq = m.Header().Seq
-	err := resp.Fields().Set(pdufield.MessageID, fmt.Sprintf("%d", time.Now().UnixNano()))
+	err := resp.Fields().Set(pdufield.MessageID, fmt.Sprintf("%s_%s_%d", client.Username, destAddr, time.Now().UnixNano()))
 	if err != nil {
 		log.Printf("Error setting MessageID: %v", err)
 		return
@@ -412,6 +412,8 @@ func SendToSmppClient(sms *SMS) error {
 	sm := pdu.NewSubmitSM(make(pdutlv.Fields))
 	f := sm.Fields()
 
+	sm.Header().Seq = 1
+
 	// replace + in from and to
 
 	sms.From = strings.ReplaceAll(sms.From, "+", "")
@@ -423,6 +425,11 @@ func SendToSmppClient(sms *SMS) error {
 	}
 
 	err = f.Set(pdufield.DestinationAddr, sms.To)
+	if err != nil {
+		return fmt.Errorf("failed to set destination address: %v", err)
+	}
+
+	err = sm.Fields().Set(pdufield.MessageID, fmt.Sprintf("%s_%s_%d", sms.From, sms.To, time.Now().UnixNano()))
 	if err != nil {
 		return fmt.Errorf("failed to set destination address: %v", err)
 	}

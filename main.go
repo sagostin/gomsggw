@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -196,7 +197,7 @@ func (g *SMSGateway) isOptedOut(sender, receiver string) (bool, error) {
 		bson.M{"sender": sender, "receiver": receiver},
 	).Decode(&status)
 
-	if err == mongo.ErrNoDocuments {
+	if errors.Is(err, mongo.ErrNoDocuments) {
 		return false, nil // Not in DB, so not opted out
 	} else if err != nil {
 		return false, err

@@ -1,25 +1,17 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
+	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
-	"github.com/fiorix/go-smpp/smpp/pdu/pdutlv"
-	"io"
+	"github.com/M2MGateway/go-smpp"
+	"github.com/M2MGateway/go-smpp/pdu"
 	"log"
 	"net"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/fiorix/go-smpp/smpp"
-	"github.com/fiorix/go-smpp/smpp/pdu"
-	"github.com/fiorix/go-smpp/smpp/pdu/pdufield"
 )
-
-var smppServer *Server
 
 type SMSMessage struct {
 	Source      string
@@ -36,275 +28,171 @@ type Route struct {
 	Handler  CarrierHandler
 }
 
-// Server is an SMPP server for testing purposes.
-type Server struct {
-	TLS        *tls.Config
-	Handler    HandlerFunc
-	Clients    map[string]*Client // Map of Username to Client
-	conns      map[string]smpp.Conn
-	mu         sync.RWMutex
-	l          net.Listener
-	smsChannel chan SMSMessage
-	routes     []Route
+type SmppServer struct {
+	TLS                *tls.Config
+	Clients            map[string]*Client // Map of Username to Client
+	conns              map[string]*smpp.Session
+	mu                 sync.RWMutex
+	l                  net.Listener
+	smsInboundChannel  chan SMSMessage
+	smsOutboundChannel chan SMS
+	routes             []Route
 }
 
-// HandlerFunc is the signature of a function that handles PDUs.
-type HandlerFunc func(s *Server, c smpp.Conn, m pdu.Body)
-
-// NewServer creates a new Server with default settings.
-func NewServer() (*Server, error) {
+func initSmppServer() (*SmppServer, error) {
 	clients, err := loadClients()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load clients: %v", err)
 	}
-
-	// todo watch file for client changes and add them to the map / remove them?
 
 	clientMap := make(map[string]*Client)
 	for i := range clients {
 		clientMap[clients[i].Username] = &clients[i]
 	}
 
-	return &Server{
-		Clients:    clientMap,
-		Handler:    CustomHandler,
-		l:          newLocalListener(),
-		conns:      make(map[string]smpp.Conn),
-		smsChannel: make(chan SMSMessage, 1000),
-		routes:     make([]Route, 0),
+	return &SmppServer{
+		Clients:            clientMap,
+		conns:              make(map[string]*smpp.Session),
+		smsInboundChannel:  make(chan SMSMessage),
+		smsOutboundChannel: make(chan SMS),
+		routes:             make([]Route, 0),
 	}, nil
 }
 
-func newLocalListener() net.Listener {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err == nil {
-		return l
-	}
-	if l, err = net.Listen("tcp6", "[::1]:0"); err != nil {
-		panic(fmt.Sprintf("smpptest: failed to listen on a port: %v", err))
-	}
-	return l
+type SimpleHandler struct {
+	server *SmppServer
 }
 
-// Start starts the server.
-func (srv *Server) Start() {
-	go srv.Serve()
-	go srv.ProcessSMS()
+func NewSimpleHandler(server *SmppServer) *SimpleHandler {
+	return &SimpleHandler{server: server}
 }
 
-// Addr returns the local address of the server.
-func (srv *Server) Addr() string {
-	if srv.l == nil {
-		return ""
-	}
-	return srv.l.Addr().String()
-}
+func (h *SimpleHandler) Serve(session *smpp.Session) {
+	defer session.Close(context.Background())
 
-// Close stops the server.
-func (srv *Server) Close() {
-	if srv.l == nil {
-		panic("smpptest: server is not started")
-	}
-	srv.l.Close()
-}
+	//log.Printf("New connection from %s", session.RemoteAddr())
 
-// Serve accepts new clients and handles them.
-func (srv *Server) Serve() {
+	// Start EnquireLink process
+	go h.enquireLink(session)
+
 	for {
-		cli, err := srv.l.Accept()
+		select {
+		/*case <-session.Context().Done():
+		//log.Printf("Connection closed from %s", session.RemoteAddr())
+		return*/
+		case packet := <-session.PDU():
+			h.handlePDU(session, packet)
+		}
+	}
+}
+
+func (h *SimpleHandler) enquireLink(session *smpp.Session) {
+	ctx := context.Background()
+	tick := 30 * time.Second
+	timeout := 5 * time.Second
+
+	err := session.EnquireLink(ctx, tick, timeout)
+	if err != nil {
+		log.Printf("EnquireLink process ended: %v", err)
+	}
+}
+
+func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
+	switch p := packet.(type) {
+	case *pdu.BindTransceiver:
+		h.handleBind(session, p)
+	case *pdu.SubmitSM:
+		h.handleSubmitSM(session, p)
+	case *pdu.DeliverSM:
+		h.handleDeliverSM(session, p)
+	case *pdu.Unbind:
+		h.handleUnbind(session, p)
+	case pdu.Responsable:
+		log.Printf("Received PDU: %T", p)
+		err := session.Send(p.Resp())
 		if err != nil {
-			break // on srv.l.Close
+			log.Printf("Error sending response: %v", err)
 		}
-		c := newConn(cli)
-		go srv.handle(c)
+	default:
+		log.Printf("Received unhandled PDU: %T", p)
 	}
 }
 
-// BroadcastMessage broadcasts a PDU to all bound clients.
-func (srv *Server) BroadcastMessage(p pdu.Body) {
-	srv.mu.RLock()
-	defer srv.mu.RUnlock()
-	for _, c := range srv.conns {
-		c.Write(p)
-	}
-}
+func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTransceiver) {
+	log.Printf("Received bind request: %T", bindReq)
 
-// Conn implements a server side connection.
-type conn struct {
-	rwc net.Conn
-	r   *bufio.Reader
-	w   *bufio.Writer
-}
+	username := bindReq.SystemID
+	password := bindReq.Password
 
-func newConn(c net.Conn) *conn {
-	return &conn{
-		rwc: c,
-		r:   bufio.NewReader(c),
-		w:   bufio.NewWriter(c),
-	}
-}
-
-func (c *conn) RemoteAddr() net.Addr {
-	return c.rwc.RemoteAddr()
-}
-
-func (c *conn) Read() (pdu.Body, error) {
-	return pdu.Decode(c.r)
-}
-
-func (c *conn) Write(p pdu.Body) error {
-	var b bytes.Buffer
-	err := p.SerializeTo(&b)
-	if err != nil {
-		return err
-	}
-	_, err = io.Copy(c.w, &b)
-	if err != nil {
-		return err
-	}
-	return c.w.Flush()
-}
-
-func (c *conn) Close() error {
-	return c.rwc.Close()
-}
-
-func (srv *Server) handle(c *conn) {
-	defer func() {
-		c.Close()
-		srv.mu.Lock()
-		for username, conn := range srv.conns {
-			if conn == c {
-				delete(srv.conns, username)
-				break
-			}
-		}
-		srv.mu.Unlock()
-	}()
-	if err := srv.auth(c); err != nil {
-		if err != io.EOF {
-			log.Println("smpptest: server auth failed:", err)
-		}
+	if username == "" || password == "" {
+		log.Printf("Empty system id or password: %s", username)
 		return
 	}
-	for {
-		p, err := c.Read()
-		if err != nil {
-			if err != io.EOF {
-				log.Println("smpptest: read failed:", err)
-			}
-			break
-		}
-		srv.Handler(srv, c, p)
-	}
-}
 
-func (srv *Server) auth(c *conn) error {
-	p, err := c.Read()
+	authed, err := authClient(username, password, h.server.Clients)
 	if err != nil {
-		return err
-	}
-	var resp pdu.Body
-	switch p.Header().ID {
-	case pdu.BindTransmitterID:
-		resp = pdu.NewBindTransmitterResp()
-	case pdu.BindReceiverID:
-		resp = pdu.NewBindReceiverResp()
-	case pdu.BindTransceiverID:
-		resp = pdu.NewBindTransceiverResp()
-	default:
-		return errors.New("unexpected pdu, want bind")
-	}
-	f := p.Fields()
-	username := f[pdufield.SystemID].String()
-	password := f[pdufield.Password].String()
-	if username == "" || password == "" {
-		return errors.New("malformed pdu, missing system_id/password")
+		log.Printf("Authentication error: %v", err)
+		return
 	}
 
-	authed, err := authClient(username, password, srv.Clients)
-	if err != nil {
-		return err
-	}
-	if !authed {
-		return errors.New("authentication failed")
-	}
-
-	srv.mu.Lock()
-	srv.conns[username] = c
-	srv.mu.Unlock()
-
-	resp.Fields().Set(pdufield.SystemID, username)
-	return c.Write(resp)
-}
-
-func CustomHandler(s *Server, c smpp.Conn, m pdu.Body) {
-	switch m.Header().ID {
-	case pdu.SubmitSMID:
-		handleSubmitSM(s, c, m)
-	default:
-		log.Printf("Received PDU: %s", m.Header().ID)
-		err := c.Write(m)
+	if authed {
+		resp := bindReq.Resp()
+		err = session.Send(resp)
 		if err != nil {
-			log.Printf("Error writing PDU: %v", err)
+			log.Printf("Error sending bind response: %v", err)
 		}
+
+		h.server.mu.Lock()
+		h.server.conns[username] = session
+		h.server.mu.Unlock()
+
+		log.Printf("Client %s authenticated successfully", username)
+	} else {
+		log.Printf("Authentication failed for client: %s", username)
 	}
 }
 
-func handleSubmitSM(s *Server, c smpp.Conn, m pdu.Body) {
-	f := m.Fields()
-	sourceAddr := f[pdufield.SourceAddr].String()
-	destAddr := f[pdufield.DestinationAddr].String()
-	shortMessage := f[pdufield.ShortMessage].String()
+func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.SubmitSM) {
+	log.Printf("Received SubmitSM: From=%s, To=%s", submitSM.SourceAddr, submitSM.DestAddr)
 
-	// Find the client associated with this connection
-	s.mu.RLock()
+	// Find the client associated with this session
 	var client *Client
-	for username, conn := range s.conns {
-		if conn == c {
-			client = s.Clients[username]
+	h.server.mu.RLock()
+	for username, conn := range h.server.conns {
+		if conn == session {
+			client = h.server.Clients[username]
 			break
 		}
 	}
-	s.mu.RUnlock()
+	h.server.mu.RUnlock()
 
 	if client == nil {
 		log.Printf("Error: Unable to identify client for connection")
 		return
 	}
 
-	log.Printf("Received SubmitSM from client %s: From=%s, To=%s, Message=%s", client.Username, sourceAddr, destAddr, shortMessage)
-
-	route := s.findRoute(sourceAddr, destAddr)
+	route := h.server.findRoute(submitSM.SourceAddr.String(), submitSM.DestAddr.String())
 	if route == nil {
-		log.Printf("No route found for source %s and destination %s", sourceAddr, destAddr)
-		// Handle the case when no route is found (e.g., send an error response)
+		log.Printf("No route found for source %s and destination %s", submitSM.SourceAddr, submitSM.DestAddr)
 		return
 	}
 
-	// Send to channel for async processing
-	s.smsChannel <- SMSMessage{
-		Source:      sourceAddr,
-		Destination: destAddr,
-		Content:     shortMessage,
+	h.server.smsInboundChannel <- SMSMessage{
+		Source:      submitSM.SourceAddr.String(),
+		Destination: submitSM.DestAddr.String(),
+		Content:     string(submitSM.Message.Message),
 		Client:      client,
 		Route:       route,
 	}
 
-	resp := pdu.NewSubmitSMResp()
-	resp.Header().Seq = m.Header().Seq
-	err := resp.Fields().Set(pdufield.MessageID, fmt.Sprintf("%s_%s_%d", client.Username, destAddr, time.Now().UnixNano()))
+	resp := submitSM.Resp()
+	err := session.Send(resp)
 	if err != nil {
-		log.Printf("Error setting MessageID: %v", err)
-		return
-	}
-	err = c.Write(resp)
-	if err != nil {
-		log.Printf("Error sending SubmitSMResp: %v", err)
+		log.Printf("Error sending SubmitSM response: %v", err)
 	}
 }
 
-func (srv *Server) findRoute(source, destination string) *Route {
+func (srv *SmppServer) findRoute(source, destination string) *Route {
 	carrier, err := srv.clientOutboundCarrier(source)
 	if err != nil {
 		log.Printf("Error finding carrier: %v", err)
@@ -329,7 +217,7 @@ func (srv *Server) findRoute(source, destination string) *Route {
 	return nil
 }
 
-func (srv *Server) clientOutboundCarrier(source string) (string, error) {
+func (srv *SmppServer) clientOutboundCarrier(source string) (string, error) {
 	for _, client := range srv.Clients {
 		for _, num := range client.Numbers {
 			if strings.Contains(source, num.Number) {
@@ -341,7 +229,7 @@ func (srv *Server) clientOutboundCarrier(source string) (string, error) {
 	return "", nil
 }
 
-func (srv *Server) clientInboundConn(destination string) (smpp.Conn, error) {
+func (srv *SmppServer) clientInboundConn(destination string) (*smpp.Session, error) {
 
 	for _, client := range srv.Clients {
 		for _, num := range client.Numbers {
@@ -355,12 +243,40 @@ func (srv *Server) clientInboundConn(destination string) (smpp.Conn, error) {
 	return nil, nil
 }
 
-func (srv *Server) AddRoute(prefix, routeType, endpoint string, handler CarrierHandler) {
+func (h *SimpleHandler) handleDeliverSM(session *smpp.Session, deliverSM *pdu.DeliverSM) {
+	log.Printf("Received DeliverSM: From=%s, To=%s", deliverSM.SourceAddr, deliverSM.DestAddr)
+	resp := deliverSM.Resp()
+	err := session.Send(resp)
+	if err != nil {
+		log.Printf("Error sending DeliverSM response: %v", err)
+	}
+}
+
+func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) {
+	log.Printf("Received Unbind request")
+	resp := unbind.Resp()
+	err := session.Send(resp)
+	if err != nil {
+		log.Printf("Error sending Unbind response: %v", err)
+	}
+
+	// Remove the session from the server's connections
+	h.server.mu.Lock()
+	for username, conn := range h.server.conns {
+		if conn == session {
+			delete(h.server.conns, username)
+			break
+		}
+	}
+	h.server.mu.Unlock()
+}
+
+func (srv *SmppServer) AddRoute(prefix, routeType, endpoint string, handler CarrierHandler) {
 	srv.routes = append(srv.routes, Route{Prefix: prefix, Type: routeType, Endpoint: endpoint, Handler: handler})
 }
 
-func (srv *Server) ProcessSMS() {
-	for msg := range srv.smsChannel {
+func (srv *SmppServer) handleInboundSMS() {
+	for msg := range srv.smsInboundChannel {
 		go func(m SMSMessage) {
 			if m.Route == nil {
 				log.Printf("No route found for message: From=%s, To=%s", m.Source, m.Destination)
@@ -399,91 +315,52 @@ func (srv *Server) ProcessSMS() {
 	}
 }
 
-func SendToSmppClient(sms *SMS) error {
-	inboundConn, err := smppServer.clientInboundConn(sms.To)
-	if err != nil {
-		return fmt.Errorf("failed to find client connection: %v", err)
+func (srv *SmppServer) handleOutboundSMS() {
+	for m := range srv.smsOutboundChannel {
+		go func(msg *SMS) {
+			session, err := srv.findSmppSession(msg.To)
+			if err != nil {
+				log.Printf("Error finding SMPP session: %v", err)
+			}
+
+			nextSeq := session.NextSequence
+
+			submitSM := &pdu.SubmitSM{
+				SourceAddr:         pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
+				DestAddr:           pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
+				Message:            pdu.ShortMessage{Message: []byte(msg.Content)},
+				RegisteredDelivery: pdu.RegisteredDelivery{MCDeliveryReceipt: 1},
+				Header:             pdu.Header{Sequence: nextSeq()},
+			}
+
+			/*cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()*/
+
+			err = session.Send(submitSM)
+			if err != nil {
+				log.Printf("SMS send failed with status: %d", err)
+			} else {
+				log.Printf("SMS sent successfully via SMPP: From %s To %s", msg.From, msg.To)
+				/*log.Printf("%s", resp)*/
+			}
+		}(&m)
+	}
+}
+
+func (srv *SmppServer) findSmppSession(destination string) (*smpp.Session, error) {
+	srv.mu.RLock()
+	defer srv.mu.RUnlock()
+
+	for _, client := range srv.Clients {
+		for _, num := range client.Numbers {
+			if strings.Contains(destination, num.Number) {
+				if session, ok := srv.conns[client.Username]; ok {
+					return session, nil
+				}
+				return nil, fmt.Errorf("client found but not connected: %s", client.Username)
+			}
+		}
 	}
 
-	if inboundConn == nil {
-		return fmt.Errorf("no connection found for destination: %s", sms.To)
-	}
-
-	sm := pdu.NewSubmitSM(make(pdutlv.Fields))
-	f := sm.Fields()
-
-	// replace + in from and to
-
-	/*sms.From = strings.ReplaceAll(sms.From, "+", "")
-	sms.To = strings.ReplaceAll(sms.To, "+", "")*/
-
-	err = f.Set(pdufield.SourceAddr, sms.From)
-	if err != nil {
-		return fmt.Errorf("failed to set source address: %v", err)
-	}
-
-	err = f.Set(pdufield.DestinationAddr, sms.To)
-	if err != nil {
-		return fmt.Errorf("failed to set destination address: %v", err)
-	}
-
-	/*err = f.Set(pdufield.ServiceType, 0x01)
-	if err != nil {
-		return fmt.Errorf("failed to set destination address: %v", err)
-	}*/
-
-	err = f.Set(pdufield.SourceAddrNPI, 0x01)
-	if err != nil {
-		return fmt.Errorf("failed to set src npi: %v", err)
-	}
-
-	err = f.Set(pdufield.SourceAddrTON, 0x01)
-	if err != nil {
-		return fmt.Errorf("failed to set src ton: %v", err)
-	}
-
-	err = f.Set(pdufield.DestAddrNPI, 0x01)
-	if err != nil {
-		return fmt.Errorf("failed to set dest npi: %v", err)
-	}
-
-	err = f.Set(pdufield.DestAddrTON, 0x01)
-	if err != nil {
-		return fmt.Errorf("failed to set dest ton: %v", err)
-	}
-
-	err = sm.Fields().Set(pdufield.MessageID, fmt.Sprintf("%s_%s_%d", sms.From, sms.To, time.Now().UnixNano()))
-	if err != nil {
-		return fmt.Errorf("failed to set message id: %v", err)
-	}
-
-	err = f.Set(pdufield.DataCoding, 0x00)
-	if err != nil {
-		return fmt.Errorf("failed to set data coding: %v", err)
-	}
-
-	err = f.Set(pdufield.RegisteredDelivery, uint8(0x01))
-	if err != nil {
-		return fmt.Errorf("failed to set delivery: %v", err)
-	}
-
-	err = f.Set(pdufield.ShortMessage, sms.Content)
-	if err != nil {
-		return fmt.Errorf("failed to set message content: %v", err)
-	}
-
-	// Set other optional fields as needed
-	// For example, to set validity period:
-	// err = f.Set(pdufield.ValidityPeriod, "000001000000000R") // 1 day
-	// if err != nil {
-	//     return fmt.Errorf("failed to set validity period: %v", err)
-	// }
-
-	err = inboundConn.Write(sm)
-	if err != nil {
-		return fmt.Errorf("failed to send SMS: %v", err)
-	}
-
-	log.Printf("SMS sent to client. From: %s, To: %s, Content: %s", sms.From, sms.To, sms.Content)
-	return nil
+	return nil, fmt.Errorf("no session found for destination: %s", destination)
 }

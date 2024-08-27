@@ -11,21 +11,23 @@ import (
 // TwilioHandler implements CarrierHandler for Twilio
 type TwilioHandler struct {
 	BaseCarrierHandler
-	client *twilio.RestClient
+	client  *twilio.RestClient
+	gateway *SMSGateway
 }
 
-func NewTwilioHandler(logger *CustomLogger) *TwilioHandler {
+func NewTwilioHandler(logger *CustomLogger, gateway *SMSGateway) *TwilioHandler {
 	return &TwilioHandler{
 		BaseCarrierHandler: BaseCarrierHandler{name: "twilio", logger: logger},
 		client: twilio.NewRestClientWithParams(twilio.ClientParams{
 			Username: os.Getenv("TWILIO_ACCOUNT_SID"),
 			Password: os.Getenv("TWILIO_AUTH_TOKEN"),
 		}),
+		gateway: gateway,
 	}
 }
 
 func (h *TwilioHandler) HandleInbound(c *fiber.Ctx, gateway *SMSGateway) error {
-	sms := &SMS{
+	sms := SMS{
 		From:    c.FormValue("From"),
 		To:      c.FormValue("To"),
 		Content: c.FormValue("Body"),
@@ -38,14 +40,14 @@ func (h *TwilioHandler) HandleInbound(c *fiber.Ctx, gateway *SMSGateway) error {
 	twiml := "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response>"
 
 	if sms.Content == "STOP" || sms.Content == "UNSUBSCRIBE" {
-		err := gateway.setOptOutStatus(sms.To, sms.From, true)
+		err := h.gateway.setOptOutStatus(sms.To, sms.From, true)
 		if err != nil {
 			h.logger.Log(fmt.Sprintf("Error setting opt-out status: %v", err))
 			return c.Status(500).SendString(fmt.Sprintf("Error setting opt-out status: %v", err))
 		}
 		twiml += "<Message>You have successfully opted out of messages from this sender.</Message>"
 	} else if sms.Content == "START" || sms.Content == "SUBSCRIBE" {
-		err := gateway.setOptOutStatus(sms.To, sms.From, false)
+		err := h.gateway.setOptOutStatus(sms.To, sms.From, false)
 		if err != nil {
 			h.logger.Log(fmt.Sprintf("Error setting opt-in status: %v", err))
 			return c.Status(500).SendString(fmt.Sprintf("Error setting opt-in status: %v", err))
@@ -54,11 +56,15 @@ func (h *TwilioHandler) HandleInbound(c *fiber.Ctx, gateway *SMSGateway) error {
 	} else {
 		// Forward the SMS to Jasmin
 		// forward to SMPP conn as SMS to PBX/System
-		err := SendToSmppClient(sms)
-		if err != nil {
+		h.gateway.SmppServer.smsOutboundChannel <- sms
+		/*if err != nil {
 			h.logger.Log(fmt.Sprintf("Error forwarding SMS to Client: %v", err))
 			return c.Status(500).SendString("Error forwarding SMS")
-		}
+		}*/
+		/*if err != nil {
+			h.logger.Log(fmt.Sprintf("Error forwarding SMS to Client: %v", err))
+			return c.Status(500).SendString("Error forwarding SMS")
+		}*/
 		// todo maybe not include this if it is a normal message?
 		/*twiml += "<Message>Your message has been received and processed.</Message>"*/
 	}

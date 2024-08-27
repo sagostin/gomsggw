@@ -25,7 +25,7 @@ type CarrierConfig struct {
 	// Add any carrier-specific configuration fields here
 }
 
-func loadCarriers(configPath string, logger *CustomLogger) (map[string]CarrierHandler, error) {
+func loadCarriers(configPath string, logger *CustomLogger, gateway *SMSGateway) (map[string]CarrierHandler, error) {
 	data, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		return nil, err
@@ -41,7 +41,7 @@ func loadCarriers(configPath string, logger *CustomLogger) (map[string]CarrierHa
 	for _, config := range configs {
 		switch config.Type {
 		case "twilio":
-			carriers[config.Name] = NewTwilioHandler(logger)
+			carriers[config.Name] = NewTwilioHandler(logger, gateway)
 		// Add cases for other carrier types here
 		default:
 			return nil, fmt.Errorf("unknown carrier type: %s", config.Type)

@@ -34,4 +34,5 @@ type SMSGateway struct {
 	MongoClient      *mongo.Client
 	OptOutCollection *mongo.Collection
 	Logger           *CustomLogger
+	SmppServer       *SmppServer
 }

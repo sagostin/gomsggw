@@ -4,12 +4,65 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/sirupsen/logrus"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 )
+
+type LoggingFormat struct {
+	TransactionID string       `json:"transaction_id,omitempty"`
+	Message       string       `json:"message,omitempty"`
+	Error         error        `json:"error,omitempty"`
+	Function      string       `json:"function,omitempty"`
+	Level         logrus.Level `json:"level,omitempty"`
+	Path          string       `json:"path,omitempty"`
+}
+
+func (e LoggingFormat) String() string {
+	marshal, err := json.Marshal(e)
+	if err != nil {
+		return ""
+	}
+
+	return string(marshal)
+}
+
+func (e LoggingFormat) ToError() error {
+	e.Print()
+	// todo send logs over to loki??!??
+	return fmt.Errorf(e.String())
+}
+
+func (e LoggingFormat) Print() {
+	// todo send over to loki as well??
+	if os.Getenv("DEBUG") == "true" {
+		switch e.Level.String() {
+		case "warning":
+			logrus.Warn(e.String())
+		case "error":
+			logrus.Error(e.String())
+		default:
+			logrus.Info(e.String())
+		}
+	}
+
+	lokiClient := NewLokiClient(os.Getenv("LOKI_URL"), os.Getenv("LOKI_USERNAME"), os.Getenv("LOKI_PASSWORD"))
+	labels := map[string]string{"job": "sms-mms-gateway", "server_id": os.Getenv("SERVER_ID")}
+
+	data, err := json.Marshal(e)
+	if err != nil {
+		logrus.Error("error marshalling to send to loki")
+		return
+	}
+	err = lokiClient.PushLog(labels, LogEntry{Timestamp: time.Now(), Line: string(data)})
+	if err != nil {
+		logrus.Error("error sending to loki")
+		logrus.Error(err)
+		return
+	}
+}
 
 // LokiClient holds the configuration for the Loki client.
 type LokiClient struct {
@@ -18,7 +71,7 @@ type LokiClient struct {
 	Password string // Password for basic auth
 }
 
-// Update the LogEntry struct to use time.Time for Timestamp
+// LogEntry struct to use time.Time for Timestamp
 type LogEntry struct {
 	Timestamp time.Time
 	Line      string
@@ -50,16 +103,16 @@ func (c *LokiClient) PushLog(labels map[string]string, entry LogEntry) error {
 	unixNano := entry.Timestamp.UnixNano()
 	timestampStr := strconv.FormatInt(unixNano, 10)
 
-	// Ensure the log line is properly escaped for JSON
+	/*// Ensure the log line is properly escaped for JSON
 	escapedLine := strconv.Quote(entry.Line)
 	// Remove the surrounding quotes added by Quote
-	escapedLine = escapedLine[1 : len(escapedLine)-1]
+	escapedLine = escapedLine[1 : len(escapedLine)-1]*/
 
 	payload := LokiPushData{
 		Streams: []LokiStream{
 			{
 				Stream: labels,
-				Values: [][2]string{{timestampStr, escapedLine}},
+				Values: [][2]string{{timestampStr, entry.Line}},
 			},
 		},
 	}
@@ -91,34 +144,4 @@ func (c *LokiClient) PushLog(labels map[string]string, entry LogEntry) error {
 	}
 
 	return nil
-}
-
-// CustomLogger wraps both standard logger and Loki client
-type CustomLogger struct {
-	stdLogger  *log.Logger
-	lokiClient *LokiClient
-}
-
-// NewCustomLogger creates a new CustomLogger
-func NewCustomLogger(lokiClient *LokiClient) *CustomLogger {
-	return &CustomLogger{
-		stdLogger:  log.New(os.Stdout, "", log.LstdFlags),
-		lokiClient: lokiClient,
-	}
-}
-
-// Log sends a log message to both stdout and Loki
-func (l *CustomLogger) Log(message string) {
-	l.stdLogger.Println(message)
-
-	entry := LogEntry{
-		Timestamp: time.Now(),
-		Line:      message,
-	}
-
-	labels := map[string]string{"job": "sms-gateway"}
-	err := l.lokiClient.PushLog(labels, entry)
-	if err != nil {
-		l.stdLogger.Printf("Error sending log to Loki: %v", err)
-	}
 }

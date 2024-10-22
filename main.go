@@ -5,43 +5,41 @@ import (
 	"fmt"
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
+	"github.com/sirupsen/logrus"
 	"log"
 	"os"
+	"strings"
 )
 
 func main() {
+	logf := LoggingFormat{Path: "main", Function: "main"}
+
 	// Load environment variables
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("Error loading .env file. Using existing environment variables.")
+		logf.Level = logrus.ErrorLevel
+		logf.Error = err
 	}
-
-	// Initialize Loki client
-	lokiClient := NewLokiClient(
-		os.Getenv("LOKI_URL"),
-		os.Getenv("LOKI_USERNAME"),
-		os.Getenv("LOKI_PASSWORD"),
-	)
-
-	// Create custom logger
-	logger := NewCustomLogger(lokiClient)
 
 	app := fiber.New()
 
-	gateway, err := NewGateway(os.Getenv("MONGODB_URI"), logger)
+	gateway, err := NewGateway(os.Getenv("MONGODB_URI"))
 	if err != nil {
-		logger.Log(fmt.Sprintf("Failed to create SMS gateway: %v", err))
+		logf.Level = logrus.ErrorLevel
+		logf.Error = err
+		logf.Message = "Failed to create gateway"
+		logf.Print()
 		os.Exit(1)
 	}
 
-	carriers, err := loadCarriers("carriers.json", logger, gateway)
+	err = loadCarriers(gateway)
 	if err != nil {
-		logger.Log(fmt.Sprintf("Failed to load carriers: %v", err))
+		logf.Level = logrus.ErrorLevel
+		logf.Error = err
+		logf.Message = "Failed to load carriers"
+		logf.Print()
 		os.Exit(1)
 	}
-
-	gateway.Routing = &Routing{Routes: make([]*Route, 0)}
-	gateway.Routing.AddRoute("1", "carrier", "twilio", carriers["twilio"])
 
 	go func() {
 		smppServer, err := initSmppServer()
@@ -49,7 +47,6 @@ func main() {
 			return
 		}
 		smppServer.routing = gateway.Routing
-		gateway.Carriers = carriers
 		gateway.SMPPServer = smppServer
 
 		smppServer.Start(gateway)
@@ -62,19 +59,28 @@ func main() {
 			routing: gateway.Routing,
 		}
 		gateway.MM4Server = mm4Server
+
 		err := mm4Server.Start()
 		if err != nil {
-			print("error starting mm4")
-			return
+			logf.Level = logrus.ErrorLevel
+			logf.Error = err
+			logf.Message = "Failed to create MM4 server"
+			logf.Print()
+			os.Exit(1)
 		}
 	}()
 
-	//todo support multiple
-	inboundPath := fmt.Sprintf("/inbound/twilio")
-	// Capture 'name' and 'handler' to avoid closure issues
-	app.Post(inboundPath, func(c *fiber.Ctx) error {
-		return carriers["twilio"].Inbound(c, gateway)
-	})
+	//todo support multiple & load on the fly
+	twilioEnable := os.Getenv("CARRIER_TWILIO")
+	if strings.ToLower(twilioEnable) == "true" {
+		inboundPath := fmt.Sprintf("/inbound/twilio")
+		// Capture 'name' and 'handler' to avoid closure issues
+		app.Post(inboundPath, func(c *fiber.Ctx) error {
+			return gateway.Carriers["twilio"].Inbound(c, gateway)
+		})
+
+		gateway.Routing.AddRoute("carrier", "twilio", gateway.Carriers["twilio"])
+	}
 
 	// Define the GET /media/:id route
 	app.Get("/media/:id", func(c *fiber.Ctx) error {

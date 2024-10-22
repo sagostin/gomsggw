@@ -3,16 +3,22 @@ package main
 import (
 	"fmt"
 	"github.com/gofiber/fiber/v2"
+	"os"
+	"strings"
 )
 
 func (h *BaseCarrierHandler) Name() string {
 	return h.name
 }
 
+// BaseCarrierHandler provides common functionality for carriers
+type BaseCarrierHandler struct {
+	name string
+}
+
 // CarrierHandler interface for different carrier handlers
 type CarrierHandler interface {
 	Inbound(c *fiber.Ctx, gateway *Gateway) error
-	//HandleOutbound(c *fiber.Ctx, gateway *Gateway) error
 	SendSMS(sms *CarrierMessage) error
 	SendMMS(sms *MM4Message) error
 	Name() string
@@ -24,35 +30,40 @@ type CarrierConfig struct {
 	// Add any carrier-specific configuration fields here
 }
 
-func loadCarriers(configPath string, logger *CustomLogger, gateway *Gateway) (map[string]CarrierHandler, error) {
-	/*data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return nil, err
-	}*/
-
+func loadCarriers(gateway *Gateway) error {
 	var configs []CarrierConfig
-	/*err = json.Unmarshal(data, &configs)
-	if err != nil {
-		return nil, err
-	}*/
+
 	// todo load from elsewhere
-	configs = append(configs, CarrierConfig{
-		Name: "twilio",
-		Type: "twilio",
-	})
+	twilioEnable := os.Getenv("CARRIER_TWILIO")
+	if strings.ToLower(twilioEnable) == "true" {
+		configs = append(configs, CarrierConfig{
+			Name: "twilio",
+			Type: "twilio",
+		})
+	}
+
+	telynxEnable := os.Getenv("CARRIER_TELYNX")
+	if strings.ToLower(telynxEnable) == "true" {
+		configs = append(configs, CarrierConfig{
+			Name: "telynx",
+			Type: "telynx",
+		})
+	}
 
 	carriers := make(map[string]CarrierHandler)
 	for _, config := range configs {
 		switch config.Type {
 		case "twilio":
-			carriers[config.Name] = NewTwilioHandler(logger, gateway)
+			carriers[config.Name] = NewTwilioHandler(gateway)
 		// Add cases for other carrier types here
 		default:
-			return nil, fmt.Errorf("unknown carrier type: %s", config.Type)
+			return fmt.Errorf("unknown carrier type: %s", config.Type)
 		}
 	}
 
-	return carriers, nil
+	gateway.Carriers = carriers
+
+	return nil
 }
 
 // CarrierMessage represents an SMS message for SMPP.

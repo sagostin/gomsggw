@@ -3,16 +3,16 @@ module zultys-smpp-mm4
 go 1.21
 
 require (
+	github.com/M2MGateway/go-smpp v0.0.0-20221204100419-92d023664ef0
 	github.com/gofiber/fiber/v2 v2.52.5
 	github.com/joho/godotenv v1.5.1
+	github.com/sirupsen/logrus v1.9.3
 	github.com/twilio/twilio-go v1.22.3
 	go.mongodb.org/mongo-driver v1.16.1
 )
 
 require (
-	github.com/M2MGateway/go-smpp v0.0.0-20221204100419-92d023664ef0 // indirect
 	github.com/andybalholm/brotli v1.0.5 // indirect
-	github.com/fiorix/go-smpp v0.0.0-20210403173735-2894b96e70ba // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/golang/snappy v0.0.4 // indirect
 	github.com/google/uuid v1.5.0 // indirect

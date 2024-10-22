@@ -13,9 +13,10 @@ func (h *BaseCarrierHandler) Name() string {
 
 // CarrierHandler interface for different carrier handlers
 type CarrierHandler interface {
-	HandleInbound(c *fiber.Ctx, gateway *SMSGateway) error
-	HandleOutbound(c *fiber.Ctx, gateway *SMSGateway) error
-	SendSMS(sms *SMS) error
+	Inbound(c *fiber.Ctx, gateway *Gateway) error
+	//HandleOutbound(c *fiber.Ctx, gateway *Gateway) error
+	SendSMS(sms *CarrierMessage) error
+	SendMMS(sms *MM4Message) error
 	Name() string
 }
 
@@ -25,7 +26,7 @@ type CarrierConfig struct {
 	// Add any carrier-specific configuration fields here
 }
 
-func loadCarriers(configPath string, logger *CustomLogger, gateway *SMSGateway) (map[string]CarrierHandler, error) {
+func loadCarriers(configPath string, logger *CustomLogger, gateway *Gateway) (map[string]CarrierHandler, error) {
 	data, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		return nil, err
@@ -49,4 +50,12 @@ func loadCarriers(configPath string, logger *CustomLogger, gateway *SMSGateway) 
 	}
 
 	return carriers, nil
+}
+
+// CarrierMessage represents an SMS message for SMPP.
+type CarrierMessage struct {
+	From        string
+	To          string
+	Content     string
+	CarrierData map[string]string
 }

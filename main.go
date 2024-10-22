@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/M2MGateway/go-smpp"
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
 	"log"
@@ -34,25 +33,44 @@ func main() {
 		os.Exit(1)
 	}
 
-	smppServer, err := initSmppServer()
-	if err != nil {
-		return
-	}
 	carriers, err := loadCarriers("carriers.json", logger, gateway)
 	if err != nil {
 		logger.Log(fmt.Sprintf("Failed to load carriers: %v", err))
 		os.Exit(1)
 	}
 
-	smppServer.AddRoute("1", "carrier", "twilio", carriers["twilio"])
-	gateway.Carriers = carriers
-	gateway.SmppServer = smppServer
+	gateway.Routing = &Routing{Routes: make([]*Route, 0)}
+
+	gateway.Routing.AddRoute("1", "carrier", "twilio", carriers["twilio"])
+
+	go func() {
+		smppServer, err := initSmppServer()
+		if err != nil {
+			return
+		}
+		smppServer.routing = gateway.Routing
+		gateway.Carriers = carriers
+		gateway.SMPPServer = smppServer
+
+		smppServer.Start(gateway)
+	}()
+
+	go func() {
+		mm4Server := MM4Server{
+			Addr:  os.Getenv("MM4_LISTEN"),
+			mongo: gateway.MongoClient,
+		}
+		err := mm4Server.Start()
+		if err != nil {
+			return
+		}
+	}()
 
 	for name, handler := range gateway.Carriers {
 		inboundPath := fmt.Sprintf("/inbound/%s", name)
 
 		app.Post(inboundPath, func(c *fiber.Ctx) error {
-			return handler.HandleInbound(c, gateway)
+			return handler.Inbound(c, gateway)
 		})
 	}
 
@@ -61,28 +79,6 @@ func main() {
 	if webListen == "" {
 		webListen = "0.0.0.0:3000"
 	}
-
-	handler := NewSimpleHandler(gateway.SmppServer)
-	smppListen := os.Getenv("SMPP_LISTEN")
-	if smppListen == "" {
-		smppListen = "0.0.0.0:2775"
-	}
-
-	go func() {
-		log.Printf("Starting SMPP server on %s", smppListen)
-		err = smpp.ServeTCP(smppListen, handler, nil)
-		if err != nil {
-			log.Fatalf("Error serving SMPP: %v", err)
-		}
-	}()
-
-	go func() {
-		smppServer.handleInboundSMS()
-	}()
-
-	go func() {
-		smppServer.handleOutboundSMS()
-	}()
 
 	err = app.Listen(webListen)
 	if err != nil {

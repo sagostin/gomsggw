@@ -10,6 +10,7 @@ type Client struct {
 	Username string         `json:"username"`
 	Password string         `json:"password"`
 	Numbers  []ClientNumber `json:"numbers"`
+	Address  string         `json:"address"`
 }
 
 type ClientNumber struct {

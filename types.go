@@ -28,11 +28,13 @@ type BaseCarrierHandler struct {
 	logger *CustomLogger
 }
 
-// SMSGateway handles SMS processing for different carriers
-type SMSGateway struct {
+// Gateway handles SMS processing for different carriers
+type Gateway struct {
 	Carriers         map[string]CarrierHandler
 	MongoClient      *mongo.Client
 	OptOutCollection *mongo.Collection
 	Logger           *CustomLogger
-	SmppServer       *SmppServer
+	SMPPServer       *SMPPServer
+	Routing          *Routing
+	MM4Server        *MM4Server
 }

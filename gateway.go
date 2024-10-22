@@ -21,8 +21,8 @@ import (
 	return nil
 }*/
 
-// NewSMSGateway creates a new SMSGateway instance
-func NewSMSGateway(mongoURI string, logger *CustomLogger) (*SMSGateway, error) {
+// NewSMSGateway creates a new Gateway instance
+func NewSMSGateway(mongoURI string, logger *CustomLogger) (*Gateway, error) {
 	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func NewSMSGateway(mongoURI string, logger *CustomLogger) (*SMSGateway, error) {
 		return nil, err
 	}
 
-	return &SMSGateway{
+	return &Gateway{
 		Carriers:         make(map[string]CarrierHandler),
 		MongoClient:      client,
 		OptOutCollection: optOutCollection,
@@ -54,7 +54,7 @@ func NewSMSGateway(mongoURI string, logger *CustomLogger) (*SMSGateway, error) {
 	}, nil
 }
 
-func (g *SMSGateway) isOptedOut(sender, receiver string) (bool, error) {
+func (g *Gateway) isOptedOut(sender, receiver string) (bool, error) {
 	var status OptOutStatus
 	err := g.OptOutCollection.FindOne(
 		context.Background(),
@@ -69,7 +69,7 @@ func (g *SMSGateway) isOptedOut(sender, receiver string) (bool, error) {
 	return status.OptedOut, nil
 }
 
-func (g *SMSGateway) setOptOutStatus(sender, receiver string, optOut bool) error {
+func (g *Gateway) setOptOutStatus(sender, receiver string, optOut bool) error {
 	_, err := g.OptOutCollection.UpdateOne(
 		context.Background(),
 		bson.M{"sender": sender, "receiver": receiver},

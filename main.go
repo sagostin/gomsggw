@@ -27,7 +27,7 @@ func main() {
 
 	app := fiber.New()
 
-	gateway, err := NewSMSGateway(os.Getenv("MONGODB_URI"), logger)
+	gateway, err := NewGateway(os.Getenv("MONGODB_URI"), logger)
 	if err != nil {
 		logger.Log(fmt.Sprintf("Failed to create SMS gateway: %v", err))
 		os.Exit(1)
@@ -40,7 +40,6 @@ func main() {
 	}
 
 	gateway.Routing = &Routing{Routes: make([]*Route, 0)}
-
 	gateway.Routing.AddRoute("1", "carrier", "twilio", carriers["twilio"])
 
 	go func() {
@@ -56,24 +55,25 @@ func main() {
 	}()
 
 	go func() {
-		mm4Server := MM4Server{
+		mm4Server := &MM4Server{
 			Addr:    os.Getenv("MM4_LISTEN"),
 			mongo:   gateway.MongoClient,
 			routing: gateway.Routing,
 		}
+		gateway.MM4Server = mm4Server
 		err := mm4Server.Start()
 		if err != nil {
+			print("error starting mm4")
 			return
 		}
 	}()
 
-	for name, handler := range gateway.Carriers {
-		inboundPath := fmt.Sprintf("/inbound/%s", name)
-
-		app.Post(inboundPath, func(c *fiber.Ctx) error {
-			return handler.Inbound(c, gateway)
-		})
-	}
+	//todo support multiple
+	inboundPath := fmt.Sprintf("/inbound/twilio")
+	// Capture 'name' and 'handler' to avoid closure issues
+	app.Post(inboundPath, func(c *fiber.Ctx) error {
+		return carriers["twilio"].Inbound(c, gateway)
+	})
 
 	// Start server
 	webListen := os.Getenv("WEB_LISTEN")

@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/gofiber/fiber/v2"
-	"io/ioutil"
 )
 
 func (h *BaseCarrierHandler) Name() string {
@@ -27,16 +25,21 @@ type CarrierConfig struct {
 }
 
 func loadCarriers(configPath string, logger *CustomLogger, gateway *Gateway) (map[string]CarrierHandler, error) {
-	data, err := ioutil.ReadFile(configPath)
+	/*data, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		return nil, err
-	}
+	}*/
 
 	var configs []CarrierConfig
-	err = json.Unmarshal(data, &configs)
+	/*err = json.Unmarshal(data, &configs)
 	if err != nil {
 		return nil, err
-	}
+	}*/
+	// todo load from elsewhere
+	configs = append(configs, CarrierConfig{
+		Name: "twilio",
+		Type: "twilio",
+	})
 
 	carriers := make(map[string]CarrierHandler)
 	for _, config := range configs {

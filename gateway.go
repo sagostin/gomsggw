@@ -21,36 +21,17 @@ import (
 	return nil
 }*/
 
-// NewSMSGateway creates a new Gateway instance
-func NewSMSGateway(mongoURI string, logger *CustomLogger) (*Gateway, error) {
+// NewGateway creates a new Gateway instance
+func NewGateway(mongoURI string, logger *CustomLogger) (*Gateway, error) {
 	client, err := mongo.Connect(context.Background(), options.Client().ApplyURI(mongoURI))
 	if err != nil {
 		return nil, err
 	}
 
-	database := client.Database("sms_gateway")
-	optOutCollection := database.Collection("opt_out_status")
-
-	// Create a compound index on sender and receiver
-	_, err = optOutCollection.Indexes().CreateOne(
-		context.Background(),
-		mongo.IndexModel{
-			Keys: bson.D{
-				{Key: "sender", Value: 1},
-				{Key: "receiver", Value: 1},
-			},
-			Options: options.Index().SetUnique(true),
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	return &Gateway{
-		Carriers:         make(map[string]CarrierHandler),
-		MongoClient:      client,
-		OptOutCollection: optOutCollection,
-		Logger:           logger,
+		Carriers:    make(map[string]CarrierHandler),
+		MongoClient: client,
+		Logger:      logger,
 	}, nil
 }
 

@@ -57,8 +57,9 @@ func main() {
 
 	go func() {
 		mm4Server := MM4Server{
-			Addr:  os.Getenv("MM4_LISTEN"),
-			mongo: gateway.MongoClient,
+			Addr:    os.Getenv("MM4_LISTEN"),
+			mongo:   gateway.MongoClient,
+			routing: gateway.Routing,
 		}
 		err := mm4Server.Start()
 		if err != nil {

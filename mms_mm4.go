@@ -198,11 +198,6 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		}
 	}
 
-	// Update the timestamp with current time
-	s.mu.Lock()
-	s.connectedClients[hashedIP] = time.Now()
-	s.mu.Unlock()
-
 	session := &Session{
 		Conn:       conn,
 		Reader:     reader,
@@ -216,7 +211,7 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 	}
 
 	// Handle the session
-	if err := session.handleSession(); err != nil {
+	if err := session.handleSession(s); err != nil {
 		logf.Level = logrus.ErrorLevel
 		logf.Error = err
 		logf.Message = "Session error"
@@ -267,7 +262,7 @@ type Session struct {
 }
 
 // handleSession processes SMTP commands from the client.
-func (s *Session) handleSession() error {
+func (s *Session) handleSession(srv *MM4Server) error {
 	for {
 		// Read client input
 		line, err := s.Reader.ReadString('\n')
@@ -287,14 +282,14 @@ func (s *Session) handleSession() error {
 		}
 
 		// Handle the command
-		if err := s.handleCommand(line); err != nil {
+		if err := s.handleCommand(line, srv); err != nil {
 			return err
 		}
 	}
 }
 
 // handleCommand processes a single SMTP command.
-func (s *Session) handleCommand(line string) error {
+func (s *Session) handleCommand(line string, srv *MM4Server) error {
 	// Split command and arguments
 	parts := strings.SplitN(line, " ", 2)
 	cmd := strings.ToUpper(parts[0])
@@ -302,6 +297,11 @@ func (s *Session) handleCommand(line string) error {
 	if len(parts) > 1 {
 		arg = parts[1]
 	}
+
+	// Update the timestamp with current time
+	srv.mu.Lock()
+	srv.connectedClients[s.IPHash] = time.Now()
+	srv.mu.Unlock()
 
 	// Handle commands
 	switch cmd {

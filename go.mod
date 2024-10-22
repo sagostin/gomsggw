@@ -1,4 +1,4 @@
-module jasmin-carrier-gw
+module zultys-smpp-mm4
 
 go 1.21
 

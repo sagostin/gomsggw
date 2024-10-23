@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	logf := LoggingFormat{Path: "main", Function: "main"}
+	logf := LoggingFormat{Type: LogType.Startup}
 
 	// Load environment variables
 	err := godotenv.Load()
@@ -27,7 +27,7 @@ func main() {
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
 		logf.Error = err
-		logf.Message = "Failed to create gateway"
+		logf.Message = "failed to create gateway"
 		logf.Print()
 		os.Exit(1)
 	}
@@ -36,7 +36,7 @@ func main() {
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
 		logf.Error = err
-		logf.Message = "Failed to load carriers"
+		logf.Message = "failed to load carriers"
 		logf.Print()
 		os.Exit(1)
 	}
@@ -44,7 +44,11 @@ func main() {
 	go func() {
 		smppServer, err := initSmppServer()
 		if err != nil {
-			return
+			logf.Level = logrus.ErrorLevel
+			logf.Error = err
+			logf.Message = "failed to create MM4 server"
+			logf.Print()
+			os.Exit(1)
 		}
 		smppServer.routing = gateway.Routing
 		gateway.SMPPServer = smppServer
@@ -64,7 +68,7 @@ func main() {
 		if err != nil {
 			logf.Level = logrus.ErrorLevel
 			logf.Error = err
-			logf.Message = "Failed to create MM4 server"
+			logf.Message = "failed to create MM4 server"
 			logf.Print()
 			os.Exit(1)
 		}
@@ -86,7 +90,7 @@ func main() {
 	app.Get("/media/:id", func(c *fiber.Ctx) error {
 		fileID := c.Params("id")
 		if fileID == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "File ID is required")
+			return fiber.NewError(fiber.StatusBadRequest, "file ID is required")
 		}
 
 		// Retrieve the media file from MongoDB
@@ -100,7 +104,7 @@ func main() {
 		fileBytes, err := base64.StdEncoding.DecodeString(mediaFile.Base64Data)
 		if err != nil {
 			// Return 500 if decoding fails
-			return fiber.NewError(fiber.StatusInternalServerError, "Failed to decode file data")
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to decode file data")
 		}
 
 		// Set the appropriate Content-Type header

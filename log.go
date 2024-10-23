@@ -12,15 +12,76 @@ import (
 )
 
 type LoggingFormat struct {
-	TransactionID string       `json:"transaction_id,omitempty"`
-	Message       string       `json:"message,omitempty"`
-	Error         error        `json:"error,omitempty"`
-	Function      string       `json:"function,omitempty"`
-	Level         logrus.Level `json:"level,omitempty"`
-	Path          string       `json:"path,omitempty"`
+	Message        string                 `json:"message,omitempty"`
+	Error          error                  `json:"error,omitempty"`
+	Type           string                 `json:"type,omitempty"`
+	Level          logrus.Level           `json:"level,omitempty"`
+	AdditionalData map[string]interface{} `json:"additional_data,omitempty"`
 }
 
-func (e LoggingFormat) String() string {
+func (e *LoggingFormat) AddField(key string, value interface{}) {
+	if e.AdditionalData == nil {
+		e.AdditionalData = make(map[string]interface{})
+	}
+	e.AdditionalData[key] = value
+}
+
+// LogTypeStruct represents specific types of log messages within a category.
+type LogTypeStruct struct {
+	// Carrier-related log types
+	// prefixes
+	Carrier  string
+	Endpoint string
+	Server   string
+	MM4      string
+	SMPP     string
+	// status - second prefix
+	Startup  string
+	Shutdown string
+	// suffixes
+	Routing        string
+	Queue          string
+	Inbound        string
+	Outbound       string
+	Authentication string
+	// Add more log types as needed
+	DEBUG string
+}
+
+// LogType is a singleton instance of LogTypeStruct containing all log types.
+var LogType = LogTypeStruct{
+	// Initialize the log types with lowercase and underscores
+	//directions - prefix
+	Carrier:  "carrier",
+	Endpoint: "endpoint",
+	Server:   "server",
+	// service types - prefix
+	MM4:  "mm4",
+	SMPP: "smpp",
+	// statuses - second prefix
+	Startup:  "startup",
+	Shutdown: "shutdown",
+	// direction / type - suffix
+	Inbound:        "inbound",
+	Outbound:       "outbound",
+	Routing:        "routing",
+	Queue:          "queue",
+	Authentication: "authentication",
+	DEBUG:          "debug",
+}
+
+// LogMessages contains standardized log message templates.
+var LogMessages = struct {
+	Transaction    string // used for sending/receiving mms/sms transactions
+	Authentication string
+	// Add more messages as needed
+}{
+	// Initialize the message templates
+	Transaction:    "%s, %s - from: %s, to: %s",      // direction, carrier - from: number, to: number
+	Authentication: "%s, auth: %s, user: %s, ip: %s", // server (mm4/smpp), success/failed (err), userid, ip
+}
+
+func (e *LoggingFormat) String() string {
 	marshal, err := json.Marshal(e)
 	if err != nil {
 		return ""
@@ -29,20 +90,23 @@ func (e LoggingFormat) String() string {
 	return string(marshal)
 }
 
-func (e LoggingFormat) ToError() error {
+func (e *LoggingFormat) ToError() error {
 	e.Print()
 	// todo send logs over to loki??!??
 	return fmt.Errorf(e.String())
 }
 
-func (e LoggingFormat) Print() {
+func (e *LoggingFormat) Print() {
 	// todo send over to loki as well??
-	if os.Getenv("DEBUG") == "true" {
+	debugEnabled := os.Getenv("DEBUG") == "true"
+	if debugEnabled {
 		switch e.Level.String() {
 		case "warning":
 			logrus.Warn(e.String())
 		case "error":
 			logrus.Error(e.String())
+		case "debug":
+			logrus.Debug(e.String())
 		default:
 			logrus.Info(e.String())
 		}

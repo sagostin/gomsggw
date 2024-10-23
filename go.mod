@@ -3,7 +3,6 @@ module zultys-smpp-mm4
 go 1.21
 
 require (
-	github.com/M2MGateway/go-smpp v0.0.0-20221204100419-92d023664ef0
 	github.com/gofiber/fiber/v2 v2.52.5
 	github.com/joho/godotenv v1.5.1
 	github.com/sirupsen/logrus v1.9.3

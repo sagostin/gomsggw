@@ -4,14 +4,15 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"github.com/M2MGateway/go-smpp"
-	"github.com/M2MGateway/go-smpp/pdu"
 	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"net"
 	"os"
 	"strings"
 	"sync"
 	"time"
+	"zultys-smpp-mm4/smpp"
+	"zultys-smpp-mm4/smpp/pdu"
 )
 
 type SMSMessage struct {
@@ -22,6 +23,15 @@ type SMSMessage struct {
 	Route       *Route
 }
 
+// SMPPMessage represents an SMS message for SMPP.
+type SMPPMessage struct {
+	From        string
+	To          string
+	Content     string
+	CarrierData map[string]string
+	logID       string
+}
+
 type SMPPServer struct {
 	TLS                *tls.Config
 	GatewayClients     map[string]*Client // Map of Username to Client
@@ -29,12 +39,12 @@ type SMPPServer struct {
 	mu                 sync.RWMutex
 	l                  net.Listener
 	smsOutboundChannel chan SMSMessage
-	smsInboundChannel  chan CarrierMessage
+	smsInboundChannel  chan SMPPMessage
 	routing            *Routing
 }
 
 func (srv *SMPPServer) Start(gateway *Gateway) {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "Start"}
+	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Startup}
 
 	handler := NewSimpleHandler(gateway.SMPPServer)
 	smppListen := os.Getenv("SMPP_LISTEN")
@@ -44,13 +54,13 @@ func (srv *SMPPServer) Start(gateway *Gateway) {
 
 	go func() {
 		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("Starting SMPP server on %s", smppListen)
+		logf.Message = fmt.Sprintf("starting SMPP server on %s", smppListen)
 		logf.Print()
 
 		err := smpp.ServeTCP(smppListen, handler, nil)
 		if err != nil {
 			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Failed to start SMPP server on %s", smppListen)
+			logf.Message = fmt.Sprintf("failed to start SMPP server on %s", smppListen)
 			logf.Error = err
 			logf.Print()
 			os.Exit(1)
@@ -68,7 +78,7 @@ func (srv *SMPPServer) Start(gateway *Gateway) {
 }
 
 func initSmppServer() (*SMPPServer, error) {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "initSmppServer"}
+	logf := LoggingFormat{Type: LogType.SMPP}
 
 	clients, err := loadClients()
 	if err != nil {
@@ -87,7 +97,7 @@ func initSmppServer() (*SMPPServer, error) {
 		GatewayClients:     clientMap,
 		conns:              make(map[string]*smpp.Session),
 		smsOutboundChannel: make(chan SMSMessage),
-		smsInboundChannel:  make(chan CarrierMessage),
+		smsInboundChannel:  make(chan SMPPMessage),
 	}, nil
 }
 
@@ -119,7 +129,7 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 }
 
 func (h *SimpleHandler) enquireLink(session *smpp.Session) {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "enquireLink"}
+	logf := LoggingFormat{Type: LogType.SMPP}
 
 	ctx := context.Background()
 	tick := 30 * time.Second
@@ -135,7 +145,7 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session) {
 }
 
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "handlePDU"}
+	logf := LoggingFormat{Type: LogType.SMPP}
 
 	switch p := packet.(type) {
 	case *pdu.BindTransceiver:
@@ -151,29 +161,41 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 		if err != nil {
 			logf.Error = err
 			logf.Level = logrus.ErrorLevel
-			logf.Message = "Error sending response to PDU"
+			logf.Message = "error sending response to PDU"
 			logf.Print()
 		}
 	default:
 		logf.Level = logrus.WarnLevel
-		logf.Message = fmt.Sprintf("Received unhandled PDU: %T", p)
+		logf.Message = fmt.Sprintf("received unhandled PDU: %T", p)
 		logf.Print()
 	}
 }
 
 func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTransceiver) {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "handleBind"}
+	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Authentication}
+	logf.AddField("type", LogType.SMPP)
 
-	logf.Level = logrus.WarnLevel
-	logf.Message = fmt.Sprintf("Received bind request: %T", bindReq)
-	logf.Print()
+	// server (mm4/smpp), success/failed (err), userid, ip
+	// Authentication
+
+	/*logf.Level = logrus.WarnLevel
+	logf.Message = fmt.Sprintf("received bind request: %T", bindReq)
+	logf.Print()*/
 
 	username := bindReq.SystemID
 	password := bindReq.Password
 
+	ip, err := h.server.GetClientIP(session)
+	if err != nil {
+		// todo what here??
+	}
+
+	logf.AddField("systemID", username)
+	logf.AddField("ip", ip)
+
 	if username == "" || password == "" {
 		logf.Level = logrus.WarnLevel
-		logf.Message = fmt.Sprintf("Empty system ID or password: %s", username)
+		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "invalid username or password", username, ip)
 		logf.Print()
 		return
 	}
@@ -181,7 +203,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 	authed, err := authClient(username, password, h.server.GatewayClients)
 	if err != nil {
 		logf.Level = logrus.WarnLevel
-		logf.Message = fmt.Sprintf("Authentication error: %v", err)
+		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "unable to authenticate", username, ip)
 		logf.Print()
 		return
 	}
@@ -192,7 +214,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		if err != nil {
 			logf.Level = logrus.ErrorLevel
 			logf.Error = err
-			logf.Message = fmt.Sprintf("Error sending bind response: %v", err)
+			logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "error sending bind req", username, ip)
 			logf.Print()
 			logf.Error = nil
 		}
@@ -202,20 +224,20 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		h.server.mu.Unlock()
 
 		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("Client %s authenticated successfully", username)
+		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "success", username, ip)
 		logf.Print()
 	} else {
 		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Authentication failed for client: %s", username)
+		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "failed to authenticate", username, ip)
 		logf.Print()
 	}
 }
 
 func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.SubmitSM) {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "handleSubmitSM"}
-	logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf("Received SubmitSM: From=%s, To=%s", submitSM.SourceAddr, submitSM.DestAddr)
-	logf.Print()
+	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Routing}
+	/*	logf.Level = logrus.InfoLevel
+		logf.Message = fmt.Sprintf("Received SubmitSM: From=%s, To=%s", submitSM.SourceAddr, submitSM.DestAddr)
+		logf.Print()*/
 
 	// Find the client associated with this session
 	var client *Client
@@ -230,18 +252,27 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 
 	if client == nil {
 		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Error: Unable to identify client for connection")
+		logf.Message = fmt.Sprintf("unable to identify client for connection")
 		logf.Print()
 		return
 	}
 
+	logf.AddField("from", submitSM.SourceAddr.String())
+	logf.AddField("to", submitSM.DestAddr.String())
+	logf.AddField("systemID", client.Username)
+
 	route := h.server.findRoute(submitSM.SourceAddr.String(), submitSM.DestAddr.String())
 	if route == nil {
 		logf.Level = logrus.WarnLevel
-		logf.Message = fmt.Sprintf("No route found for source %s and destination %s", submitSM.SourceAddr, submitSM.DestAddr)
+		logf.Message = fmt.Sprintf("no route found for source %s and destination %s", submitSM.SourceAddr, submitSM.DestAddr)
 		logf.Print()
 		return
 	}
+
+	// todo route to other smpp endpoints if available
+	logf.Level = logrus.InfoLevel
+	logf.Message = fmt.Sprintf("routing message via carrier: %s", route.Endpoint)
+	logf.Print()
 
 	h.server.smsOutboundChannel <- SMSMessage{
 		Source:      submitSM.SourceAddr.String(),
@@ -255,20 +286,15 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	err := session.Send(resp)
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Error sending SubmitSM response")
+		logf.Message = fmt.Sprintf("error sending SubmitSM response")
 		logf.Error = err
 		logf.Print()
 	}
 }
 
 func (srv *SMPPServer) findRoute(source, destination string) *Route {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "findRoute"}
 	carrier, err := srv.clientOutboundCarrier(source)
 	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Error finding carrier")
-		logf.Error = err
-		logf.Print()
 		return nil
 	}
 
@@ -317,33 +343,33 @@ func (srv *SMPPServer) clientInboundConn(destination string) (*smpp.Session, err
 }
 
 func (h *SimpleHandler) handleDeliverSM(session *smpp.Session, deliverSM *pdu.DeliverSM) {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "handleDeliverSM"}
-
-	logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf("Received DeliverSM: From=%s, To=%s", deliverSM.SourceAddr, deliverSM.DestAddr)
-	logf.Print()
+	logf := LoggingFormat{Type: "handleDeliverSM"}
+	/*
+		logf.Level = logrus.InfoLevel
+		logf.Message = fmt.Sprintf("Received DeliverSM: From=%s, To=%s", deliverSM.SourceAddr, deliverSM.DestAddr)
+		logf.Print()*/
 
 	resp := deliverSM.Resp()
 	err := session.Send(resp)
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Error sending DeliverSM response")
+		logf.Message = fmt.Sprintf("error sending DeliverSM response")
 		logf.Error = err
 		logf.Print()
 	}
 }
 
 func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) {
-	logf := LoggingFormat{Path: "sms_smpp", Function: "handleUnbind"}
+	logf := LoggingFormat{Type: "handleUnbind"}
 	logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf("Received unbind request")
+	logf.Message = fmt.Sprintf("received unbind request")
 	logf.Print()
 
 	resp := unbind.Resp()
 	err := session.Send(resp)
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Error sending Unbind response: %v", err)
+		logf.Message = fmt.Sprintf("error sending Unbind response: %v", err)
 		logf.Error = err
 		logf.Print()
 	}
@@ -359,13 +385,20 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 	h.server.mu.Unlock()
 }
 
+// handleInboundSMS handle inbound sms from an SMPP client
 func (srv *SMPPServer) handleInboundSMS() {
 	for msg := range srv.smsOutboundChannel {
 		go func(m SMSMessage) {
-			logf := LoggingFormat{Path: "sms_smpp", Function: "handleInboundSMS"}
+			transId := primitive.NewObjectID().Hex()
+			logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Inbound + "_" + LogType.Endpoint}
+			logf.AddField("logID", transId)
+			logf.AddField("to", m.Destination)
+			logf.AddField("from", m.Source)
+			logf.AddField("systemID", m.Client.Username)
+
 			if m.Route == nil {
 				logf.Level = logrus.WarnLevel
-				logf.Message = fmt.Sprintf("No route found for message: From=%s, To=%s", m.Source, m.Destination)
+				logf.Message = fmt.Sprintf("no route found for message: from=%s, to=%s", m.Source, m.Destination)
 				logf.Print()
 				return
 			}
@@ -373,58 +406,70 @@ func (srv *SMPPServer) handleInboundSMS() {
 			switch m.Route.Type {
 			case "carrier":
 				logf.Level = logrus.InfoLevel
-				logf.Message = fmt.Sprintf("Sending SMS via carrier: %s", m.Route.Endpoint)
+				logf.Message = fmt.Sprintf("sending SMS via carrier: %s", m.Route.Endpoint)
 				logf.Print()
 				// Implement carrier-specific logic here
 
 				switch m.Route.Endpoint {
 				case "twilio":
-					sms := CarrierMessage{
+					sms := SMPPMessage{
 						From:        m.Source,
 						To:          m.Destination,
 						Content:     m.Content,
 						CarrierData: nil,
+						logID:       transId,
 					}
 
 					err := m.Route.Handler.SendSMS(&sms)
 					if err != nil {
 						logf.Level = logrus.ErrorLevel
-						logf.Message = fmt.Sprintf("Failed to send SMS")
+						logf.Message = fmt.Sprintf("failed to send SMS")
 						logf.Error = err
 						logf.Print()
 						return
 					}
 				default:
 					logf.Level = logrus.WarnLevel
-					logf.Message = fmt.Sprintf("Error sending to carrier")
+					logf.Message = fmt.Sprintf("error sending to carrier")
 					logf.Print()
 				}
-			case "smpp":
+			case "sms_session":
 				logf.Level = logrus.WarnLevel
 				logf.Message = fmt.Sprintf("NOT IMPLEMENTED - Sending SMS via SMPP: %s", m.Route.Endpoint)
 				logf.Print()
 				// Implement SMPP client logic here
 			default:
 				logf.Level = logrus.WarnLevel
-				logf.Message = fmt.Sprintf("Unknown route type: %s", m.Route.Type)
+				logf.Message = fmt.Sprintf("unknown route type: %s", m.Route.Type)
 				logf.Print()
 			}
 		}(msg)
 	}
 }
 
+// handleOutboundSMS to SMPP client (inbound from carrier)
 func (srv *SMPPServer) handleOutboundSMS() {
 	for m := range srv.smsInboundChannel {
-		go func(msg *CarrierMessage) {
-			logf := LoggingFormat{Path: "sms_smpp", Function: "handleOutboundSMS"}
+		go func(msg *SMPPMessage) {
+			logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Outbound + "_" + LogType.Endpoint}
+			logf.AddField("logID", msg.logID)
 
 			session, err := srv.findSmppSession(msg.To)
 			if err != nil {
 				logf.Level = logrus.ErrorLevel
-				logf.Message = fmt.Sprintf("Error finding SMPP session: %v", err)
+				logf.Message = fmt.Sprintf("error finding SMPP session: %v", err)
 				logf.Print()
 				return
 			}
+
+			source, err := srv.findClientFromSource(msg.To)
+			if err != nil {
+				logf.Level = logrus.ErrorLevel
+				logf.Message = fmt.Sprintf("error finding source systemID")
+				logf.Error = err
+			}
+
+			logf.AddField("systemID", source.Username)
 
 			nextSeq := session.NextSequence
 
@@ -442,16 +487,32 @@ func (srv *SMPPServer) handleOutboundSMS() {
 			err = session.Send(submitSM)
 			if err != nil {
 				logf.Level = logrus.ErrorLevel
-				logf.Message = fmt.Sprintf("SMS send failed with status: %d", err)
+				logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", source.Username, msg.From, msg.To)
 				logf.Print()
 			} else {
 				logf.Level = logrus.InfoLevel
-				logf.Message = fmt.Sprintf("SMS sent successfully via SMPP - From: %s To: %s", msg.From, msg.To)
+				logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", source.Username, msg.From, msg.To)
+				// logf.Message = fmt.Sprintf("SMS sent successfully via SMPP - From: %s To: %s", msg.From, msg.To)
 				logf.Print()
 				/*log.Printf("%s", resp)*/
 			}
 		}(&m)
 	}
+}
+
+func (srv *SMPPServer) findClientFromSource(source string) (*Client, error) {
+	srv.mu.RLock()
+	defer srv.mu.RUnlock()
+
+	for _, client := range srv.GatewayClients {
+		for _, num := range client.Numbers {
+			if strings.Contains(source, num.Number) {
+				return client, nil
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("no session found for destination: %s", source)
 }
 
 func (srv *SMPPServer) findSmppSession(destination string) (*smpp.Session, error) {
@@ -470,4 +531,23 @@ func (srv *SMPPServer) findSmppSession(destination string) (*smpp.Session, error
 	}
 
 	return nil, fmt.Errorf("no session found for destination: %s", destination)
+}
+
+func (srv *SMPPServer) GetClientIP(session *smpp.Session) (string, error) {
+	if session == nil {
+		return "", fmt.Errorf("session is nil")
+	}
+
+	addr := session.Parent.RemoteAddr()
+	if addr == nil {
+		return "", fmt.Errorf("could not retrieve remote address from session")
+	}
+
+	// addr.String() returns "IP:Port"
+	host, _, err := net.SplitHostPort(addr.String())
+	if err != nil {
+		return "", fmt.Errorf("error splitting host and port: %w", err)
+	}
+
+	return host, nil
 }

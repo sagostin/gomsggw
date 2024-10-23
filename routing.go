@@ -33,7 +33,7 @@ func findRouteByNumberOptimized(sourceNumber string, destinationNumber string, n
 }
 
 type Route struct {
-	Type     string // "carrier" or "smpp"
+	Type     string // "carrier" or "sms_session"
 	Endpoint string
 	Handler  CarrierHandler
 }

@@ -7,6 +7,14 @@ import (
 	"strings"
 )
 
+/*var CarrierType = struct {
+	Twilio string
+	Telynx string
+}{
+	Twilio: "twilio",
+	Telynx: "telynx",
+}*/
+
 func (h *BaseCarrierHandler) Name() string {
 	return h.name
 }
@@ -19,7 +27,7 @@ type BaseCarrierHandler struct {
 // CarrierHandler interface for different carrier handlers
 type CarrierHandler interface {
 	Inbound(c *fiber.Ctx, gateway *Gateway) error
-	SendSMS(sms *CarrierMessage) error
+	SendSMS(sms *SMPPMessage) error
 	SendMMS(sms *MM4Message) error
 	Name() string
 }
@@ -33,21 +41,16 @@ type CarrierConfig struct {
 func loadCarriers(gateway *Gateway) error {
 	var configs []CarrierConfig
 
-	// todo load from elsewhere
-	twilioEnable := os.Getenv("CARRIER_TWILIO")
-	if strings.ToLower(twilioEnable) == "true" {
-		configs = append(configs, CarrierConfig{
-			Name: "twilio",
-			Type: "twilio",
-		})
-	}
+	// todo add more?
+	carrier := []string{"twilio", "telynx"}
 
-	telynxEnable := os.Getenv("CARRIER_TELYNX")
-	if strings.ToLower(telynxEnable) == "true" {
-		configs = append(configs, CarrierConfig{
-			Name: "telynx",
-			Type: "telynx",
-		})
+	for _, cName := range carrier {
+		if strings.ToLower(os.Getenv("CARRIER_"+strings.ToUpper(cName))) == "true" {
+			configs = append(configs, CarrierConfig{
+				Name: cName,
+				Type: cName,
+			})
+		}
 	}
 
 	carriers := make(map[string]CarrierHandler)
@@ -64,12 +67,4 @@ func loadCarriers(gateway *Gateway) error {
 	gateway.Carriers = carriers
 
 	return nil
-}
-
-// CarrierMessage represents an SMS message for SMPP.
-type CarrierMessage struct {
-	From        string
-	To          string
-	Content     string
-	CarrierData map[string]string
 }

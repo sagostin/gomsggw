@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -28,8 +27,6 @@ type MediaFile struct {
 
 // SaveBase64ToMongoDB stores base64-encoded data as a document with a 7-day expiration
 func saveBase64ToMongoDB(client *mongo.Client, fileName string, base64Data string, contentType string) (string, error) {
-	logf := LoggingFormat{Path: "media_storage", Function: "saveBase64ToMongoDB"}
-
 	collection := client.Database(DBName).Collection(CollectionName)
 
 	// Create the document with base64 data and expiration date
@@ -44,25 +41,14 @@ func saveBase64ToMongoDB(client *mongo.Client, fileName string, base64Data strin
 	// Insert the document into the collection
 	result, err := collection.InsertOne(context.Background(), mediaFile)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "failed to insert media file"
-
-		return "", logf.ToError()
+		return "", fmt.Errorf("failed to insert media file to db: %s", fileName)
 	}
 
 	// Type assert the InsertedID to primitive.TransactionID
 	insertedID, ok := result.InsertedID.(primitive.ObjectID)
 	if !ok {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "failed to convert inserted id"
-		return "", logf.ToError()
+		return "", fmt.Errorf("failed to convert inserted id: %s", insertedID)
 	}
-
-	logf.Level = logrus.InfoLevel
-	logf.Message = "Saved file with ID: " + insertedID.Hex()
-	logf.Print()
 
 	// Get the hexadecimal string representation of the TransactionID
 	return insertedID.Hex(), nil
@@ -70,7 +56,6 @@ func saveBase64ToMongoDB(client *mongo.Client, fileName string, base64Data strin
 
 // GetMediaFromMongoDB retrieves a media file document from MongoDB
 func getMediaFromMongoDB(client *mongo.Client, fileID string) (*MediaFile, error) {
-	logf := LoggingFormat{Path: "media_storage", Function: "getMediaFromMongoDB"}
 	collection := client.Database(DBName).Collection(CollectionName)
 
 	hex, err := primitive.ObjectIDFromHex(fileID)
@@ -81,10 +66,7 @@ func getMediaFromMongoDB(client *mongo.Client, fileID string) (*MediaFile, error
 	var mediaFile MediaFile
 	err = collection.FindOne(context.Background(), bson.M{"_id": hex}).Decode(&mediaFile)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "failed to retrieve media file"
-		return nil, logf.ToError()
+		return nil, fmt.Errorf("failed to retrieve media file: %s", fileID)
 	}
 
 	return &mediaFile, nil

@@ -79,8 +79,8 @@ func (h *TelnyxHandler) Inbound(c iris.Context, gateway *Gateway) error {
 		return nil
 	}
 
-	if webhookPayload.Data.EventType == "message.finalized" {
-		// ignore delivery??
+	if webhookPayload.Data.EventType != "message.received" {
+		// ignore delivery?? or log it?? todo
 		c.StatusCode(http.StatusOK)
 		return nil
 	}

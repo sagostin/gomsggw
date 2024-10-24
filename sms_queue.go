@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	SMSQueueDBName         = "sms_queue_db"
+	SMSQueueDBName         = "gateway_data"
 	SMSQueueCollectionName = "sms_queue"
 )
 

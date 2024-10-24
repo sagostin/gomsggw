@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	DBName         = "media_storage"
+	DBName         = "gateway_data"
 	CollectionName = "media_files"
 	TTLDuration    = 7 * 24 * time.Hour // 7-day expiration
 )

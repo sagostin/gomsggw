@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/gofiber/fiber/v2"
+	"github.com/kataras/iris/v12"
 	"github.com/sirupsen/logrus"
 	"github.com/twilio/twilio-go"
 	twilioApi "github.com/twilio/twilio-go/rest/api/v2010"
@@ -36,7 +36,7 @@ func NewTwilioHandler(gateway *Gateway) *TwilioHandler {
 }
 
 // Inbound handles incoming Twilio webhooks for MMS and SMS messages.
-func (h *TwilioHandler) Inbound(c *fiber.Ctx, gateway *Gateway) error {
+func (h *TwilioHandler) Inbound(c iris.Context, gateway *Gateway) error {
 	// Initialize logging with a unique transaction ID
 	transId := primitive.NewObjectID().Hex()
 	logf := LoggingFormat{
@@ -92,14 +92,19 @@ func (h *TwilioHandler) Inbound(c *fiber.Ctx, gateway *Gateway) error {
 	twiml := "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n</Response>"
 
 	// Set the correct Content-Type header
-	c.Set("Content-Type", "application/xml")
+	c.Header("Content-Type", "application/xml")
+
+	_, err = c.Write([]byte(twiml))
+	if err != nil {
+		return err
+	}
 
 	// Send the TwiML response
-	return c.Send([]byte(twiml))
+	return err
 }
 
 // fetchMediaFiles retrieves media files from Twilio and returns a slice of File structs.
-func fetchMediaFiles(c *fiber.Ctx, numMedia int, accountSid, messageSid string, logf LoggingFormat) ([]File, error) {
+func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string, logf LoggingFormat) ([]File, error) {
 	var files []File
 
 	for i := 0; i < numMedia; i++ {

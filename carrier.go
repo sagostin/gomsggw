@@ -2,7 +2,7 @@ package main
 
 import (
 	"fmt"
-	"github.com/gofiber/fiber/v2"
+	"github.com/kataras/iris/v12"
 	"os"
 	"strings"
 )
@@ -26,43 +26,45 @@ type BaseCarrierHandler struct {
 
 // CarrierHandler interface for different carrier handlers
 type CarrierHandler interface {
-	Inbound(c *fiber.Ctx, gateway *Gateway) error
+	Inbound(c iris.Context, gateway *Gateway) error
 	SendSMS(sms *SMPPMessage) error
 	SendMMS(sms *MM4Message) error
 	Name() string
 }
 
-type CarrierConfig struct {
+type Carrier struct {
 	Name string `json:"name"`
-	Type string `json:"type"`
 	// Add any carrier-specific configuration fields here
 }
 
 func loadCarriers(gateway *Gateway) error {
-	var configs []CarrierConfig
+	var configs []Carrier
 
 	// todo add more?
-	carrier := []string{"twilio", "telynx"}
+	carrier := []string{"twilio", "telnyx"}
 
 	for _, cName := range carrier {
-		if strings.ToLower(os.Getenv("CARRIER_"+strings.ToUpper(cName))) == "true" {
-			configs = append(configs, CarrierConfig{
+		if strings.ToLower(os.Getenv(strings.ToUpper(cName)+"_ENABLE")) == "true" {
+			configs = append(configs, Carrier{
 				Name: cName,
-				Type: cName,
 			})
 		}
 	}
 
 	carriers := make(map[string]CarrierHandler)
 	for _, config := range configs {
-		switch config.Type {
+		switch config.Name {
 		case "twilio":
 			carriers[config.Name] = NewTwilioHandler(gateway)
+		case "telnyx":
+			carriers[config.Name] = NewTelnyxHandler(gateway)
 		// Add cases for other carrier types here
 		default:
-			return fmt.Errorf("unknown carrier type: %s", config.Type)
+			return fmt.Errorf("unknown carrier type: %s", config.Name)
 		}
 	}
+
+	// Capture 'name' and 'handler' to avoid closure issues
 
 	gateway.Carriers = carriers
 

@@ -8,12 +8,13 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"log"
+	"os"
 	"regexp"
 	"time"
 )
 
 const (
-	SMSQueueDBName         = "sms_queue_db"
+	SMSQueueDBName         = "gateway_data"
 	SMSQueueCollectionName = "sms_queue"
 )
 
@@ -24,6 +25,7 @@ type SMSQueueItem struct {
 	To          string             `bson:"to"`
 	LogID       string             `bson:"logID"`
 	Content     string             `bson:"content"`
+	Gateway     string             `bson:"gateway"`
 	Client      string             `bson:"client"`       // Username or identifier of the client
 	Route       string             `bson:"route"`        // Route identifier
 	CreatedAt   time.Time          `bson:"created_at"`   // Timestamp when the message was queued
@@ -45,6 +47,7 @@ func EnqueueSMS(ctx context.Context, collection *mongo.Collection, sms SMPPMessa
 		Client:      sms.CarrierData["Client"], // Assuming CarrierData includes "Client"
 		Route:       sms.CarrierData["Route"],  // Assuming CarrierData includes "Route"
 		LogID:       sms.logID,
+		Gateway:     os.Getenv("SERVER_ID"),
 		CreatedAt:   time.Now().UTC(),
 		RetryCount:  0,
 		LastAttempt: time.Time{}, // Zero value
@@ -173,6 +176,14 @@ func (srv *SMPPServer) processQueuedMessagesForUser(username string) {
 	}
 
 	for _, smsItem := range smsItems {
+		if smsItem.Gateway != os.Getenv("SERVER_ID") {
+			// this we can skip because it was not originally on this
+			// this is to cheat using other systems so we can have multiple things
+			// share a db because we will load balance with the hook twilio connects from/to
+
+			continue
+		}
+
 		// Create SMPPMessage from SMSQueueItem
 		sms := SMPPMessage{
 			From:    smsItem.From,

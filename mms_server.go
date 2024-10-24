@@ -64,7 +64,7 @@ func (s *MM4Server) Start() error {
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
 		logf.Error = err
-		logf.Message = "failed to load carriers"
+		logf.Message = "failed to load clients"
 		return logf.ToError()
 	}
 

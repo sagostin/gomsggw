@@ -1,14 +1,11 @@
 package main
 
 import (
-	"encoding/base64"
-	"fmt"
-	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
+	"github.com/kataras/iris/v12"
 	"github.com/sirupsen/logrus"
 	"log"
 	"os"
-	"strings"
 )
 
 func main() {
@@ -21,7 +18,7 @@ func main() {
 		logf.Error = err
 	}
 
-	app := fiber.New()
+	app := iris.New()
 
 	gateway, err := NewGateway(os.Getenv("MONGODB_URI"))
 	if err != nil {
@@ -39,6 +36,10 @@ func main() {
 		logf.Message = "failed to load carriers"
 		logf.Print()
 		os.Exit(1)
+	}
+
+	for _, c := range gateway.Carriers {
+		gateway.Routing.AddRoute("carrier", c.Name(), c)
 	}
 
 	go func() {
@@ -74,55 +75,19 @@ func main() {
 		}
 	}()
 
-	//todo support multiple & load on the fly
-	twilioEnable := os.Getenv("CARRIER_TWILIO")
-	if strings.ToLower(twilioEnable) == "true" {
-		inboundPath := fmt.Sprintf("/inbound/twilio")
-		// Capture 'name' and 'handler' to avoid closure issues
-		app.Post(inboundPath, func(c *fiber.Ctx) error {
-			return gateway.Carriers["twilio"].Inbound(c, gateway)
-		})
-
-		gateway.Routing.AddRoute("carrier", "twilio", gateway.Carriers["twilio"])
-	}
-
-	// Define the GET /media/:id route
-	app.Get("/media/:id", func(c *fiber.Ctx) error {
-		fileID := c.Params("id")
-		if fileID == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "file ID is required")
-		}
-
-		// Retrieve the media file from MongoDB
-		mediaFile, err := getMediaFromMongoDB(gateway.MongoClient, fileID)
-		if err != nil {
-			// Return 404 if the file is not found or any other retrieval error occurs
-			return fiber.NewError(fiber.StatusNotFound, err.Error())
-		}
-
-		// Decode the Base64-encoded data
-		fileBytes, err := base64.StdEncoding.DecodeString(mediaFile.Base64Data)
-		if err != nil {
-			// Return 500 if decoding fails
-			return fiber.NewError(fiber.StatusInternalServerError, "failed to decode file data")
-		}
-
-		// Set the appropriate Content-Type header
-		c.Set("Content-Type", mediaFile.ContentType)
-
-		// Optionally, set Content-Disposition to suggest a filename for download
-		// Uncomment the following line if you want the browser to prompt a download
-		// c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s", mediaFile.FileName))
-
-		// Send the file bytes as the response
-		return c.Send(fileBytes)
-	})
-
 	// Start server
 	webListen := os.Getenv("WEB_LISTEN")
 	if webListen == "" {
 		webListen = "0.0.0.0:3000"
 	}
+
+	// Define the /reload_clients route
+	app.Get("/reload_clients", basicAuthMiddleware, gateway.webReloadClients)
+
+	// Define the /media/{id} route
+	app.Get("/media/{id}", gateway.webMediaFile)
+	// Define the /inbound/{carrier} route
+	app.Post("/inbound/{carrier}", gateway.webInboundCarrier)
 
 	err = app.Listen(webListen)
 	if err != nil {

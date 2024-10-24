@@ -222,7 +222,6 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 			logf.Print()
 			logf.Error = nil
 		}
-		h.server.reconnectChannel <- username
 
 		logf.Level = logrus.InfoLevel
 		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "success", username, ip)
@@ -231,6 +230,8 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		h.server.mu.Lock()
 		h.server.conns[username] = session
 		h.server.mu.Unlock()
+
+		h.server.reconnectChannel <- username
 	} else {
 		logf.Level = logrus.ErrorLevel
 		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "failed to authenticate", username, ip)
@@ -404,7 +405,7 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 // handleInboundSMS handle inbound sms from an SMPP client
 func (srv *SMPPServer) handleInboundSMS() {
 	for msg := range srv.smsOutboundChannel {
-		go func(m SMSMessage) {
+		go func(m *SMSMessage) {
 			transId := primitive.NewObjectID().Hex()
 			logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Inbound + "_" + LogType.Endpoint}
 			logf.AddField("logID", transId)
@@ -444,6 +445,23 @@ func (srv *SMPPServer) handleInboundSMS() {
 						logf.Print()
 						return
 					}
+				case "telnyx":
+					sms := SMPPMessage{
+						From:        m.Source,
+						To:          m.Destination,
+						Content:     m.Content,
+						CarrierData: nil,
+						logID:       transId,
+					}
+
+					err := m.Route.Handler.SendSMS(&sms)
+					if err != nil {
+						logf.Level = logrus.ErrorLevel
+						logf.Message = fmt.Sprintf("failed to send SMS")
+						logf.Error = err
+						logf.Print()
+						return
+					}
 				default:
 					logf.Level = logrus.WarnLevel
 					logf.Message = fmt.Sprintf("error sending to carrier")
@@ -459,7 +477,7 @@ func (srv *SMPPServer) handleInboundSMS() {
 				logf.Message = fmt.Sprintf("unknown route type: %s", m.Route.Type)
 				logf.Print()
 			}
-		}(msg)
+		}(&msg)
 	}
 }
 

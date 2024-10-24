@@ -7,6 +7,10 @@
       {
       "number": "17786538344",
       "carrier": "twilio"
+      },
+      {
+        "number": "17789070844",
+        "carrier": "telnyx"
       }
     ]
   }

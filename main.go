@@ -1,60 +1,79 @@
 package main
 
 import (
-	"fmt"
-	"github.com/M2MGateway/go-smpp"
-	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
+	"github.com/kataras/iris/v12"
+	"github.com/sirupsen/logrus"
 	"log"
 	"os"
 )
 
 func main() {
+	logf := LoggingFormat{Type: LogType.Startup}
+
 	// Load environment variables
 	err := godotenv.Load()
 	if err != nil {
-		log.Println("Error loading .env file. Using existing environment variables.")
+		logf.Level = logrus.ErrorLevel
+		logf.Error = err
 	}
 
-	// Initialize Loki client
-	lokiClient := NewLokiClient(
-		os.Getenv("LOKI_URL"),
-		os.Getenv("LOKI_USERNAME"),
-		os.Getenv("LOKI_PASSWORD"),
-	)
+	app := iris.New()
 
-	// Create custom logger
-	logger := NewCustomLogger(lokiClient)
-
-	app := fiber.New()
-
-	gateway, err := NewSMSGateway(os.Getenv("MONGODB_URI"), logger)
+	gateway, err := NewGateway(os.Getenv("MONGODB_URI"))
 	if err != nil {
-		logger.Log(fmt.Sprintf("Failed to create SMS gateway: %v", err))
+		logf.Level = logrus.ErrorLevel
+		logf.Error = err
+		logf.Message = "failed to create gateway"
+		logf.Print()
 		os.Exit(1)
 	}
 
-	smppServer, err := initSmppServer()
+	err = loadCarriers(gateway)
 	if err != nil {
-		return
-	}
-	carriers, err := loadCarriers("carriers.json", logger, gateway)
-	if err != nil {
-		logger.Log(fmt.Sprintf("Failed to load carriers: %v", err))
+		logf.Level = logrus.ErrorLevel
+		logf.Error = err
+		logf.Message = "failed to load carriers"
+		logf.Print()
 		os.Exit(1)
 	}
 
-	smppServer.AddRoute("1", "carrier", "twilio", carriers["twilio"])
-	gateway.Carriers = carriers
-	gateway.SmppServer = smppServer
-
-	for name, handler := range gateway.Carriers {
-		inboundPath := fmt.Sprintf("/inbound/%s", name)
-
-		app.Post(inboundPath, func(c *fiber.Ctx) error {
-			return handler.HandleInbound(c, gateway)
-		})
+	for _, c := range gateway.Carriers {
+		gateway.Routing.AddRoute("carrier", c.Name(), c)
 	}
+
+	go func() {
+		smppServer, err := initSmppServer()
+		if err != nil {
+			logf.Level = logrus.ErrorLevel
+			logf.Error = err
+			logf.Message = "failed to create MM4 server"
+			logf.Print()
+			os.Exit(1)
+		}
+		smppServer.routing = gateway.Routing
+		gateway.SMPPServer = smppServer
+
+		smppServer.Start(gateway)
+	}()
+
+	go func() {
+		mm4Server := &MM4Server{
+			Addr:    os.Getenv("MM4_LISTEN"),
+			mongo:   gateway.MongoClient,
+			routing: gateway.Routing,
+		}
+		gateway.MM4Server = mm4Server
+
+		err := mm4Server.Start()
+		if err != nil {
+			logf.Level = logrus.ErrorLevel
+			logf.Error = err
+			logf.Message = "failed to create MM4 server"
+			logf.Print()
+			os.Exit(1)
+		}
+	}()
 
 	// Start server
 	webListen := os.Getenv("WEB_LISTEN")
@@ -62,27 +81,13 @@ func main() {
 		webListen = "0.0.0.0:3000"
 	}
 
-	handler := NewSimpleHandler(gateway.SmppServer)
-	smppListen := os.Getenv("SMPP_LISTEN")
-	if smppListen == "" {
-		smppListen = "0.0.0.0:2775"
-	}
+	// Define the /reload_clients route
+	app.Get("/reload_clients", basicAuthMiddleware, gateway.webReloadClients)
 
-	go func() {
-		log.Printf("Starting SMPP server on %s", smppListen)
-		err = smpp.ServeTCP(smppListen, handler, nil)
-		if err != nil {
-			log.Fatalf("Error serving SMPP: %v", err)
-		}
-	}()
-
-	go func() {
-		smppServer.handleInboundSMS()
-	}()
-
-	go func() {
-		smppServer.handleOutboundSMS()
-	}()
+	// Define the /media/{id} route
+	app.Get("/media/{id}", gateway.webMediaFile)
+	// Define the /inbound/{carrier} route
+	app.Post("/inbound/{carrier}", gateway.webInboundCarrier)
 
 	err = app.Listen(webListen)
 	if err != nil {

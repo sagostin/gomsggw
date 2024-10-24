@@ -1,11 +1,16 @@
 [
   {
-    "username": "zultys_620KS",
-    "password": "zultys_620KS",
+    "username": "tops_zultys_test",
+    "password": "tops_zultys_test",
+    "address": "108.165.150.61",
     "numbers": [
       {
       "number": "17786538344",
       "carrier": "twilio"
+      },
+      {
+        "number": "17789070844",
+        "carrier": "telnyx"
       }
     ]
   }

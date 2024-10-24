@@ -1,52 +1,72 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"github.com/gofiber/fiber/v2"
-	"io/ioutil"
+	"github.com/kataras/iris/v12"
+	"os"
+	"strings"
 )
+
+/*var CarrierType = struct {
+	Twilio string
+	Telynx string
+}{
+	Twilio: "twilio",
+	Telynx: "telynx",
+}*/
 
 func (h *BaseCarrierHandler) Name() string {
 	return h.name
 }
 
+// BaseCarrierHandler provides common functionality for carriers
+type BaseCarrierHandler struct {
+	name string
+}
+
 // CarrierHandler interface for different carrier handlers
 type CarrierHandler interface {
-	HandleInbound(c *fiber.Ctx, gateway *SMSGateway) error
-	HandleOutbound(c *fiber.Ctx, gateway *SMSGateway) error
-	SendSMS(sms *SMS) error
+	Inbound(c iris.Context, gateway *Gateway) error
+	SendSMS(sms *SMPPMessage) error
+	SendMMS(sms *MM4Message) error
 	Name() string
 }
 
-type CarrierConfig struct {
+type Carrier struct {
 	Name string `json:"name"`
-	Type string `json:"type"`
 	// Add any carrier-specific configuration fields here
 }
 
-func loadCarriers(configPath string, logger *CustomLogger, gateway *SMSGateway) (map[string]CarrierHandler, error) {
-	data, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		return nil, err
-	}
+func loadCarriers(gateway *Gateway) error {
+	var configs []Carrier
 
-	var configs []CarrierConfig
-	err = json.Unmarshal(data, &configs)
-	if err != nil {
-		return nil, err
+	// todo add more?
+	carrier := []string{"twilio", "telnyx"}
+
+	for _, cName := range carrier {
+		if strings.ToLower(os.Getenv(strings.ToUpper(cName)+"_ENABLE")) == "true" {
+			configs = append(configs, Carrier{
+				Name: cName,
+			})
+		}
 	}
 
 	carriers := make(map[string]CarrierHandler)
 	for _, config := range configs {
-		switch config.Type {
+		switch config.Name {
 		case "twilio":
-			carriers[config.Name] = NewTwilioHandler(logger, gateway)
+			carriers[config.Name] = NewTwilioHandler(gateway)
+		case "telnyx":
+			carriers[config.Name] = NewTelnyxHandler(gateway)
 		// Add cases for other carrier types here
 		default:
-			return nil, fmt.Errorf("unknown carrier type: %s", config.Type)
+			return fmt.Errorf("unknown carrier type: %s", config.Name)
 		}
 	}
 
-	return carriers, nil
+	// Capture 'name' and 'handler' to avoid closure issues
+
+	gateway.Carriers = carriers
+
+	return nil
 }

@@ -172,9 +172,9 @@ func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFo
 			continue
 		}
 
-		extension := parts[1]
+		/*extension := parts[1]*/
 		mediaSid := path.Base(mediaURL)
-		filename := fmt.Sprintf("%s.%s", mediaSid, extension) // e.g., mediaSid.jpg
+		filename := fmt.Sprintf("%s" /*.%s"*/, mediaSid /*, extension*/) // e.g., mediaSid.jpg
 
 		// Fetch the media content
 		contentBytes, err := fetchMediaContentTelnyx(mediaURL)
@@ -205,11 +205,11 @@ func fetchMediaContentTelnyx(mediaURL string) ([]byte, error) {
 	}
 
 	// Telnyx may require Bearer token for media retrieval
-	apiKey := os.Getenv("TELNYX_API_KEY")
+	/*apiKey := os.Getenv("TELNYX_API_KEY")
 	if apiKey == "" {
 		return nil, errors.New("TELNYX_API_KEY not set")
 	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)*/
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -333,9 +333,9 @@ func (h *TelnyxHandler) SendMMS(mms *MM4Message) error {
 
 	// Construct the TelnyxMessage payload
 	message := TelnyxMessage{
-		From:      mms.From,
-		To:        mms.To,
-		Text:      string(mms.Content),
+		From: mms.From,
+		To:   mms.To,
+		Text:/*string(mms.Content)*/ "",
 		Subject:   "Picture", // Or derive from your context
 		MediaUrls: []string{},
 	}
@@ -343,6 +343,10 @@ func (h *TelnyxHandler) SendMMS(mms *MM4Message) error {
 	// Add media URLs
 	if len(mms.Files) > 0 {
 		for _, file := range mms.Files {
+			if strings.Contains(file.ContentType, "application/smil") {
+				continue
+			}
+
 			// Assume you have a function to upload media and get a publicly accessible URL
 			mediaURL, err := h.uploadMediaAndGetURL(file)
 			if err != nil {

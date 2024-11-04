@@ -151,6 +151,15 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session) {
 	}
 }
 
+func (srv *SMPPServer) findAuthdSession(session *smpp.Session) error {
+	for _, sess := range srv.conns {
+		if session.Parent.RemoteAddr() == sess.Parent.RemoteAddr() {
+			return nil
+		}
+	}
+	return fmt.Errorf("unable to find matching session")
+}
+
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	logf := LoggingFormat{Type: LogType.SMPP}
 
@@ -158,6 +167,14 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	case *pdu.BindTransceiver:
 		h.handleBind(session, p)
 	case *pdu.SubmitSM:
+		err := h.server.findAuthdSession(session)
+		if err != nil {
+			logf.Error = err
+			logf.Level = logrus.ErrorLevel
+			logf.Message = "received submitSM from invalid unauthenticated user"
+			logf.AddField("ip", session.Parent.RemoteAddr())
+			logf.Print()
+		}
 		h.handleSubmitSM(session, p)
 	case *pdu.DeliverSM:
 		h.handleDeliverSM(session, p)
@@ -299,11 +316,12 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 }
 
 func (srv *SMPPServer) findRoute(source, destination string) *Route {
-	carrier, err := srv.clientOutboundCarrier(source)
-	if err != nil {
-		return nil
+	client, _ := srv.findClientByNumber(destination)
+	if client != nil {
+		return &Route{Type: "smpp", Endpoint: client.Username}
 	}
 
+	carrier, _ := srv.clientOutboundCarrier(source)
 	if carrier != "" {
 		for _, route := range srv.routing.Routes {
 			if route.Type == "carrier" && route.Endpoint == carrier {
@@ -413,6 +431,14 @@ func (srv *SMPPServer) handleInboundSMS() {
 			logf.AddField("from", m.Source)
 			logf.AddField("systemID", m.Client.Username)
 
+			sms := SMPPMessage{
+				From:        m.Source,
+				To:          m.Destination,
+				Content:     m.Content,
+				CarrierData: nil,
+				logID:       transId,
+			}
+
 			if m.Route == nil {
 				logf.Level = logrus.WarnLevel
 				logf.Message = fmt.Sprintf("no route found for message: from=%s, to=%s", m.Source, m.Destination)
@@ -446,14 +472,6 @@ func (srv *SMPPServer) handleInboundSMS() {
 						return
 					}
 				case "telnyx":
-					sms := SMPPMessage{
-						From:        m.Source,
-						To:          m.Destination,
-						Content:     m.Content,
-						CarrierData: nil,
-						logID:       transId,
-					}
-
 					err := m.Route.Handler.SendSMS(&sms)
 					if err != nil {
 						logf.Level = logrus.ErrorLevel
@@ -467,9 +485,11 @@ func (srv *SMPPServer) handleInboundSMS() {
 					logf.Message = fmt.Sprintf("error sending to carrier")
 					logf.Print()
 				}
-			case "sms_session":
-				logf.Level = logrus.WarnLevel
-				logf.Message = fmt.Sprintf("NOT IMPLEMENTED - Sending SMS via SMPP: %s", m.Route.Endpoint)
+			case "smpp":
+				srv.sendSMPP(sms)
+
+				logf.Level = logrus.InfoLevel
+				logf.Message = fmt.Sprintf("sent SMS as smpp: %s", m.Route.Endpoint)
 				logf.Print()
 				// Implement SMPP client logic here
 			default:
@@ -506,7 +526,7 @@ func (srv *SMPPServer) sendSMPP(msg SMPPMessage) {
 	}
 
 	// Find the client (source systemID) from the destination number
-	source, err := srv.findClientFromSource(msg.To)
+	source, err := srv.findClientByNumber(msg.To)
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
 		logf.Message = "Error finding source systemID"
@@ -594,7 +614,7 @@ func (srv *SMPPServer) handleOutboundSMS() {
 				return
 			}
 
-			source, err := srv.findClientFromSource(msg.To)
+			source, err := srv.findClientByNumber(msg.To)
 			if err != nil {
 				logf.Level = logrus.ErrorLevel
 				logf.Message = fmt.Sprintf("error finding source systemID")
@@ -632,19 +652,19 @@ func (srv *SMPPServer) handleOutboundSMS() {
 	}*/
 }
 
-func (srv *SMPPServer) findClientFromSource(source string) (*Client, error) {
+func (srv *SMPPServer) findClientByNumber(number string) (*Client, error) {
 	srv.mu.RLock()
 	defer srv.mu.RUnlock()
 
 	for _, client := range srv.GatewayClients {
 		for _, num := range client.Numbers {
-			if strings.Contains(source, num.Number) {
+			if strings.Contains(number, num.Number) {
 				return client, nil
 			}
 		}
 	}
 
-	return nil, fmt.Errorf("no session found for destination: %s", source)
+	return nil, fmt.Errorf("no session found for number: %s", number)
 }
 
 func (srv *SMPPServer) findSmppSession(destination string) (*smpp.Session, error) {

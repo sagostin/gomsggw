@@ -6,6 +6,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"net/http"
 	"os"
+	"strings"
 )
 
 // basicAuthMiddleware is a middleware that enforces Basic Authentication using an API key
@@ -199,6 +200,12 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 		// Respond with 404 Not Found
 		ctx.StatusCode(http.StatusNotFound)
 		ctx.WriteString("media file not found")
+		return
+	}
+
+	if strings.Contains(mediaFile.ContentType, "application/smil") {
+		// todo
+		ctx.StatusCode(500)
 		return
 	}
 

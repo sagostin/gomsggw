@@ -7,10 +7,12 @@ import (
 )
 
 type Client struct {
-	Username string         `json:"username"`
-	Password string         `json:"password"`
-	Numbers  []ClientNumber `json:"numbers"`
-	Address  string         `json:"address"`
+	Username   string         `json:"username"`
+	Password   string         `json:"password"`
+	Numbers    []ClientNumber `json:"numbers"`
+	Address    string         `json:"address"`
+	Name       string         `json:"name"`
+	LogPrivacy bool           `json:"log_privacy"`
 }
 
 type ClientNumber struct {

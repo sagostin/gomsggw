@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/joho/godotenv"
 	"github.com/kataras/iris/v12"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"log"
 	"os"
@@ -72,6 +73,25 @@ func main() {
 			logf.Message = "failed to create MM4 server"
 			logf.Print()
 			os.Exit(1)
+		}
+	}()
+
+	// Create and register the exporter with Prometheus
+	exporter := NewMetricExporter("gateway_metrics", gateway)
+	prometheus.MustRegister(exporter)
+
+	// Start the Prometheus HTTP server
+	prometheusExporter := PrometheusExporter{
+		Path:   os.Getenv("PROMETHEUS_PATH"),
+		Listen: os.Getenv("PROMETHEUS_LISTEN"),
+	}
+
+	go func() {
+		if err := prometheusExporter.Start(); err != nil {
+			logf.Level = logrus.ErrorLevel
+			logf.Error = err
+			logf.Message = "failed to start prometheus exporter"
+			logf.Print()
 		}
 	}()
 

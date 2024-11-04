@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
@@ -54,6 +55,66 @@ type MM4Server struct {
 	outboundMessageCh chan *MM4Message
 	mongo             *mongo.Client
 	connectedClients  map[string]time.Time
+
+	mm4QueueCollection *mongo.Collection
+	mm4QueueChannel    chan *MM4Message
+}
+
+// mm4_server.go
+func (s *MM4Server) processMM4Queue() {
+	ticker := time.NewTicker(1 * time.Minute) // Adjust the interval as needed
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			s.dequeueAndProcessMM4Messages()
+		}
+	}
+}
+
+func (s *MM4Server) dequeueAndProcessMM4Messages() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	mm4Items, err := DequeueMM4Messages(ctx, s.mm4QueueCollection, 100) // Batch size of 100
+	if err != nil {
+		logrus.Errorf("Failed to dequeue MM4 messages: %v", err)
+		return
+	}
+
+	for _, item := range mm4Items {
+		// Reconstruct MM4Message from MM4QueueItem
+		mm4Message := &MM4Message{
+			From:          item.From,
+			To:            item.To,
+			Content:       item.Content,
+			Headers:       textproto.MIMEHeader(item.Headers),
+			Client:        s.GatewayClients[item.Client],
+			Route:         s.findRoute(item.From, item.To), // Implement findRoute accordingly
+			MessageID:     "",                              // Populate if needed
+			TransactionID: "",                              // Populate if needed
+			logID:         item.LogID,
+		}
+
+		// Attempt to send the message
+		err := s.sendMM4Message(mm4Message)
+		if err != nil {
+			logrus.Errorf("Failed to send MM4 message (LogID: %s): %v", item.LogID, err)
+			// Increment retry count
+			incErr := IncrementMM4RetryCount(ctx, s.mm4QueueCollection, item.ID)
+			if incErr != nil {
+				logrus.Errorf("Failed to increment retry count for MM4 message (LogID: %s): %v", item.LogID, incErr)
+			}
+			continue
+		}
+
+		// Remove the message from the queue upon successful send
+		removeErr := RemoveMM4Message(ctx, s.mm4QueueCollection, item.ID)
+		if removeErr != nil {
+			logrus.Errorf("Failed to remove MM4 message from queue (LogID: %s): %v", item.LogID, removeErr)
+		}
+	}
 }
 
 // Start begins listening for incoming SMTP connections.
@@ -78,6 +139,13 @@ func (s *MM4Server) Start() error {
 	s.inboundMessageCh = make(chan *MM4Message)
 	s.outboundMessageCh = make(chan *MM4Message)
 	s.connectedClients = make(map[string]time.Time)
+
+	// Initialize MM4 queue collection
+	s.mm4QueueCollection = s.mongo.Database(MM4QueueDBName).Collection(MM4QueueCollectionName)
+	// Initialize MM4 queue channel
+	s.mm4QueueChannel = make(chan *MM4Message, 1000) // Adjust buffer size as needed
+	// Start MM4 queue processor
+	go s.processMM4Queue()
 
 	listener, err := net.Listen("tcp", s.Addr)
 	if err != nil {
@@ -407,7 +475,7 @@ func (s *Session) handleMM4Message() error {
 		}
 	}
 
-	msgType := s.Headers.Get("X-Mms-Message-Type")
+	//_ := s.Headers.Get("X-Mms-Message-Type")
 	transactionID := s.Headers.Get("X-Mms-Transaction-ID")
 	messageID := s.Headers.Get("X-Mms-Message-ID")
 
@@ -423,6 +491,7 @@ func (s *Session) handleMM4Message() error {
 		logID:         transId,
 		MessageID:     messageID,
 	}
+	// Existing header checks..
 
 	// Parse MIME parts to extract files
 	if err := mm4Message.parseMIMEParts(); err != nil {
@@ -431,10 +500,23 @@ func (s *Session) handleMM4Message() error {
 
 	// Save files to disk or process them as needed
 	if err := mm4Message.saveFiles(s.mongo); err != nil {
-		println("failed to save files: %v", err)
+		logrus.Errorf("Failed to save files: %v", err)
 	}
 
-	switch msgType {
+	// Enqueue the MM4 message for processing
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := EnqueueMM4Message(ctx, s.Server.mm4QueueCollection, *mm4Message)
+	if err != nil {
+		logrus.Errorf("Failed to enqueue MM4 message (LogID: %s): %v", mm4Message.logID, err)
+		return fmt.Errorf("failed to enqueue message")
+	}
+
+	logrus.Infof("Enqueued MM4 message (LogID: %s) for processing", mm4Message.logID)
+	writeResponse(s.Writer, "250 Message queued for processing")
+
+	/*switch msgType {
 	case "MM4_forward.REQ":
 		s.Server.inboundMessageCh <- mm4Message
 	case "MM4_forward.RES":
@@ -448,7 +530,35 @@ func (s *Session) handleMM4Message() error {
 		// log.Println("Received MM4_read_reply_report.RES")
 	default:
 		// log.Printf("Unknown MM4 message type: %s", msgType)
+	}*/
+	return nil
+}
+
+// mm4_server.go
+func (s *MM4Server) sendMM4Message(mm4Message *MM4Message) error {
+	// Determine the route based on MM4Message.Route
+	route := mm4Message.Route
+	if route == nil {
+		return fmt.Errorf("no route defined for MM4 message (LogID: %s)", mm4Message.logID)
 	}
+
+	switch route.Type {
+	case "carrier":
+		// Implement carrier-specific sending logic
+		err := route.Handler.SendMMS(mm4Message)
+		if err != nil {
+			return fmt.Errorf("failed to send MM4 message via carrier: %v", err)
+		}
+	case "mm4":
+		// Send MM4 to another MM4 client
+		err := s.sendMM4ToClient(route.Endpoint, mm4Message)
+		if err != nil {
+			return fmt.Errorf("failed to send MM4 message to client: %v", err)
+		}
+	default:
+		return fmt.Errorf("unknown route type: %s", route.Type)
+	}
+
 	return nil
 }
 
@@ -521,7 +631,7 @@ func (m *MM4Message) saveFiles(client *mongo.Client) error {
 	return nil
 }
 
-// handleInboundMessages processes inbound MM4 messages.
+// handleInboundMessages processes inbound MM4 messages from MM4 clients
 func (s *MM4Server) handleInboundMessages() {
 	logf := LoggingFormat{Type: LogType.MM4 + "_" + LogType.Routing}
 
@@ -600,17 +710,19 @@ func (s *MM4Server) handleOutboundMessages() {
 // findRoute determines the appropriate route for a message.
 func (s *MM4Server) findRoute(source, destination string) *Route {
 	// First, try to find a route based on the carrier
-	carrier, err := s.getCarrierByNumber(source)
-	if err == nil && carrier != "" {
-		for _, route := range s.routing.Routes {
-			if route.Type == "carrier" && route.Endpoint == carrier {
-				return route
-			}
-		}
+
+	// check by destination before assuming it needs to be sent to the carrier
+	destinationAddress := s.getIPByRecipient(destination)
+	if destinationAddress != "" {
+		return &Route{ /*Prefix: "0", */ Type: "mm4", Endpoint: destinationAddress}
 	} else {
-		destinationAddress := s.getIPByRecipient(destination)
-		if destinationAddress != "" {
-			return &Route{ /*Prefix: "0", */ Type: "mm4", Endpoint: destinationAddress}
+		carrier, err := s.getCarrierByNumber(source)
+		if err == nil && carrier != "" {
+			for _, route := range s.routing.Routes {
+				if route.Type == "carrier" && route.Endpoint == carrier {
+					return route
+				}
+			}
 		}
 	}
 
@@ -965,7 +1077,7 @@ func (s *Session) sendMM4Message() error {
 	// Step 4.5: Add Media Files as Subsequent MIME Parts
 	for _, file := range s.Files {
 		// Skip adding the SMIL file again if it's already added
-		if file.ContentType == "application/smil" && file.Filename == "0.smil" {
+		if file.ContentType == "application/smil" /*&& file.Filename == "0.smil" */ {
 			continue
 		}
 

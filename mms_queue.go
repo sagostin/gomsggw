@@ -44,7 +44,7 @@ func EnqueueMM4Message(ctx context.Context, collection *mongo.Collection, mm4 MM
 		To:          mm4.To,
 		Content:     mm4.Content,
 		Headers:     convertHeaders(mm4.Headers),
-		Client:      mm4.Client.Username, // Assuming Client has Username
+		Client:      mm4.Client.Username, // Assuming AMPQClient has Username
 		Route:       "",                  // You can set this based on your routing logic
 		LogID:       mm4.logID,
 		CreatedAt:   time.Now().UTC(),

@@ -17,7 +17,7 @@ const (
 )
 
 type MediaFile struct {
-	ID          string    `json:"id" bson:"_id,omitempty"`
+	ID          string    `json:"id,omitempty" bson:"_id,omitempty"`
 	FileName    string    `json:"file_name" bson:"file_name"`
 	ContentType string    `json:"content_type" bson:"content_type"`
 	Base64Data  string    `json:"base64_data" bson:"base64_data"`

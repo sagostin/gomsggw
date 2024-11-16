@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 	"net"
 	"os"
 	"strings"
@@ -16,35 +15,12 @@ import (
 	"zultys-smpp-mm4/smpp/pdu"
 )
 
-type SMSMessage struct {
-	Source      string
-	Destination string
-	Content     string
-	Client      *Client
-	Route       *Route
-}
-
-// SMPPMessage represents an SMS message for SMPP.
-type SMPPMessage struct {
-	From        string
-	To          string
-	Content     string
-	CarrierData map[string]string
-	logID       string
-}
-
 type SMPPServer struct {
-	TLS                *tls.Config
-	GatewayClients     map[string]*Client // Map of Username to Client
-	conns              map[string]*smpp.Session
-	mu                 sync.RWMutex
-	l                  net.Listener
-	smsOutboundChannel chan SMSMessage
-	smsInboundChannel  chan SMPPMessage
-	smsQueueCollection *mongo.Collection // MongoDB collection for SMS queue
-	smsQueue           chan SMPPMessage
-	reconnectChannel   chan string
-	routing            *Routing
+	TLS              *tls.Config
+	conns            map[string]*smpp.Session
+	mu               sync.RWMutex
+	reconnectChannel chan string
+	gateway          *Gateway
 }
 
 func (srv *SMPPServer) Start(gateway *Gateway) {
@@ -56,8 +32,10 @@ func (srv *SMPPServer) Start(gateway *Gateway) {
 		smppListen = "0.0.0.0:2775"
 	}
 
-	srv.smsQueueCollection = gateway.MongoClient.Database(SMSQueueDBName).Collection(SMSQueueCollectionName)
+	srv.gateway = gateway
 
+	/*srv.smsQueueCollection = gateway.MongoClient.Database(SMSQueueDBName).Collection(SMSQueueCollectionName)
+	 */
 	go func() {
 		logf.Level = logrus.InfoLevel
 		logf.Message = fmt.Sprintf("starting SMPP server on %s", smppListen)
@@ -72,39 +50,16 @@ func (srv *SMPPServer) Start(gateway *Gateway) {
 			os.Exit(1)
 		}
 	}()
-
-	go srv.handleInboundSMS()
-
-	go srv.handleOutboundSMS()
 	// Start processing the SMS queue
-	go srv.processReconnectNotifications()
+	/*go srv.processReconnectNotifications()*/
 
 	select {}
 }
 
 func initSmppServer() (*SMPPServer, error) {
-	logf := LoggingFormat{Type: LogType.SMPP}
-
-	clients, err := loadClients()
-	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("failed to load clients")
-		logf.Error = err
-		return nil, logf.ToError()
-	}
-
-	clientMap := make(map[string]*Client)
-	for i := range clients {
-		clientMap[clients[i].Username] = &clients[i]
-	}
-
 	return &SMPPServer{
-		GatewayClients:     clientMap,
-		conns:              make(map[string]*smpp.Session),
-		smsOutboundChannel: make(chan SMSMessage),
-		smsInboundChannel:  make(chan SMPPMessage),
-		smsQueue:           make(chan SMPPMessage),
-		reconnectChannel:   make(chan string),
+		conns:            make(map[string]*smpp.Session),
+		reconnectChannel: make(chan string),
 	}, nil
 }
 
@@ -117,37 +72,44 @@ func NewSimpleHandler(server *SMPPServer) *SimpleHandler {
 }
 
 func (h *SimpleHandler) Serve(session *smpp.Session) {
-	defer session.Close(context.Background())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() {
+		cancel()
+		_ = session.Close(ctx)
+	}()
 
-	//log.Printf("New connection from %s", session.RemoteAddr())
-
-	// Start EnquireLink process
-	go h.enquireLink(session)
+	go h.enquireLink(session, ctx)
 
 	for {
 		select {
-		/*case <-session.Context().Done():
-		//log.Printf("Connection closed from %s", session.RemoteAddr())
-		return*/
+		case <-ctx.Done():
+			return
 		case packet := <-session.PDU():
 			h.handlePDU(session, packet)
 		}
 	}
 }
 
-func (h *SimpleHandler) enquireLink(session *smpp.Session) {
+func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) {
 	logf := LoggingFormat{Type: LogType.SMPP}
 
-	ctx := context.Background()
-	tick := 30 * time.Second
-	timeout := 5 * time.Second
+	tick := time.NewTicker(15 * time.Second)
+	defer tick.Stop()
 
-	err := session.EnquireLink(ctx, tick, timeout)
-	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "EnquireLink process ended"
-		logf.Print()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			err := session.EnquireLink(ctx, 15*time.Second, 5*time.Second)
+			if err != nil {
+				logf.Error = err
+				logf.Level = logrus.ErrorLevel
+				logf.Message = "EnquireLink process ended"
+				logf.Print()
+				return
+			}
+		}
 	}
 }
 
@@ -221,7 +183,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		return
 	}
 
-	authed, err := authClient(username, password, h.server.GatewayClients)
+	authed, err := authClient(username, password, h.server.gateway.Clients)
 	if err != nil {
 		logf.Level = logrus.WarnLevel
 		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "unable to authenticate", username, ip)
@@ -248,7 +210,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		h.server.conns[username] = session
 		h.server.mu.Unlock()
 
-		h.server.reconnectChannel <- username
+		//h.server.reconnectChannel <- username
 	} else {
 		logf.Level = logrus.ErrorLevel
 		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "failed to authenticate", username, ip)
@@ -257,17 +219,16 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 }
 
 func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.SubmitSM) {
-	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Routing}
-	/*	logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("Received SubmitSM: From=%s, To=%s", submitSM.SourceAddr, submitSM.DestAddr)
-		logf.Print()*/
+	transId := primitive.NewObjectID().Hex()
+	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Inbound + "_" + LogType.Endpoint}
+	logf.AddField("logID", transId)
 
 	// Find the client associated with this session
 	var client *Client
 	h.server.mu.RLock()
 	for username, conn := range h.server.conns {
 		if conn == session {
-			client = h.server.GatewayClients[username]
+			client = h.server.gateway.Clients[username]
 			break
 		}
 	}
@@ -280,30 +241,33 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}
 
-	logf.AddField("from", submitSM.SourceAddr.String())
-	logf.AddField("to", submitSM.DestAddr.String())
-	logf.AddField("systemID", client.Username)
-
-	route := h.server.findRoute(submitSM.SourceAddr.String(), submitSM.DestAddr.String())
+	/*route := h.server.findRoute(submitSM.SourceAddr.String(), submitSM.DestAddr.String())
 	if route == nil {
 		logf.Level = logrus.WarnLevel
 		logf.Message = fmt.Sprintf("no route found for source %s and destination %s", submitSM.SourceAddr, submitSM.DestAddr)
 		logf.Print()
 		return
+	}*/
+
+	msgQueueItem := MsgQueueItem{
+		To:                submitSM.DestAddr.String(),
+		From:              submitSM.SourceAddr.String(),
+		ReceivedTimestamp: time.Now(),
+		Type:              MsgQueueItemType.SMS,
+		Message:           string(submitSM.Message.Message),
+		SkipNumberCheck:   false,
+		LogID:             transId,
 	}
 
-	// todo route to other smpp endpoints if available
+	logf.AddField("to", msgQueueItem.To)
+	logf.AddField("from", msgQueueItem.From)
+	logf.AddField("systemID", client.Username)
+
+	// send to message queue?
+	h.server.gateway.Router.ClientMsgChan <- msgQueueItem
 	logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf("routing message via carrier: %s", route.Endpoint)
+	logf.Message = fmt.Sprintf("sending to message queue")
 	logf.Print()
-
-	h.server.smsOutboundChannel <- SMSMessage{
-		Source:      submitSM.SourceAddr.String(),
-		Destination: submitSM.DestAddr.String(),
-		Content:     string(submitSM.Message.Message),
-		Client:      client,
-		Route:       route,
-	}
 
 	resp := submitSM.Resp()
 	err := session.Send(resp)
@@ -315,7 +279,8 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}
 }
 
-func (srv *SMPPServer) findRoute(source, destination string) *Route {
+// here
+/*func (srv *SMPPServer) findRoute(source, destination string) *Route {
 	client, _ := srv.findClientByNumber(destination)
 	if client != nil {
 		return &Route{Type: "smpp", Endpoint: client.Username}
@@ -330,31 +295,12 @@ func (srv *SMPPServer) findRoute(source, destination string) *Route {
 		}
 	}
 
-	// Fallback to prefix-based routing if no carrier route found
-	/*for _, route := range srv.routing.Routes {
-		if strings.HasPrefix(destination, route.Prefix) {
-			return route
-		}
-	}*/
-
 	return nil
-}
-
-func (srv *SMPPServer) clientOutboundCarrier(source string) (string, error) {
-	for _, client := range srv.GatewayClients {
-		for _, num := range client.Numbers {
-			if strings.Contains(source, num.Number) {
-				return num.Carrier, nil
-			}
-		}
-	}
-
-	return "", nil
-}
+}*/
 
 func (srv *SMPPServer) clientInboundConn(destination string) (*smpp.Session, error) {
 
-	for _, client := range srv.GatewayClients {
+	for _, client := range srv.gateway.Clients {
 		for _, num := range client.Numbers {
 			//log.Printf("%s", num)
 			if strings.Contains(destination, num.Number) {
@@ -370,7 +316,7 @@ func (h *SimpleHandler) handleDeliverSM(session *smpp.Session, deliverSM *pdu.De
 	logf := LoggingFormat{Type: "handleDeliverSM"}
 	/*
 		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("Received DeliverSM: From=%s, To=%s", deliverSM.SourceAddr, deliverSM.DestAddr)
+		logf.Message = fmt.Sprintf("Received DeliverSM: To=%s, From=%s", deliverSM.SourceAddr, deliverSM.DestAddr)
 		logf.Print()*/
 
 	resp := deliverSM.Resp()
@@ -420,116 +366,36 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 	h.server.mu.Unlock()
 }
 
-// handleInboundSMS handle inbound sms from an SMPP client
-func (srv *SMPPServer) handleInboundSMS() {
-	for msg := range srv.smsOutboundChannel {
-		go func(m *SMSMessage) {
-			transId := primitive.NewObjectID().Hex()
-			logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Inbound + "_" + LogType.Endpoint}
-			logf.AddField("logID", transId)
-			logf.AddField("to", m.Destination)
-			logf.AddField("from", m.Source)
-			logf.AddField("systemID", m.Client.Username)
-
-			sms := SMPPMessage{
-				From:        m.Source,
-				To:          m.Destination,
-				Content:     m.Content,
-				CarrierData: nil,
-				logID:       transId,
-			}
-
-			if m.Route == nil {
-				logf.Level = logrus.WarnLevel
-				logf.Message = fmt.Sprintf("no route found for message: from=%s, to=%s", m.Source, m.Destination)
-				logf.Print()
-				return
-			}
-
-			switch m.Route.Type {
-			case "carrier":
-				logf.Level = logrus.InfoLevel
-				logf.Message = fmt.Sprintf("sending SMS via carrier: %s", m.Route.Endpoint)
-				logf.Print()
-				// Implement carrier-specific logic here
-
-				switch m.Route.Endpoint {
-				case "twilio":
-					sms := SMPPMessage{
-						From:        m.Source,
-						To:          m.Destination,
-						Content:     m.Content,
-						CarrierData: nil,
-						logID:       transId,
-					}
-
-					err := m.Route.Handler.SendSMS(&sms)
-					if err != nil {
-						logf.Level = logrus.ErrorLevel
-						logf.Message = fmt.Sprintf("failed to send SMS")
-						logf.Error = err
-						logf.Print()
-						return
-					}
-				case "telnyx":
-					err := m.Route.Handler.SendSMS(&sms)
-					if err != nil {
-						logf.Level = logrus.ErrorLevel
-						logf.Message = fmt.Sprintf("failed to send SMS")
-						logf.Error = err
-						logf.Print()
-						return
-					}
-				default:
-					logf.Level = logrus.WarnLevel
-					logf.Message = fmt.Sprintf("error sending to carrier")
-					logf.Print()
-				}
-			case "smpp":
-				srv.sendSMPP(sms)
-
-				logf.Level = logrus.InfoLevel
-				logf.Message = fmt.Sprintf("sent SMS as smpp: %s", m.Route.Endpoint)
-				logf.Print()
-				// Implement SMPP client logic here
-			default:
-				logf.Level = logrus.WarnLevel
-				logf.Message = fmt.Sprintf("unknown route type: %s", m.Route.Type)
-				logf.Print()
-			}
-		}(&msg)
-	}
-}
-
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
 // On failure, it notifies via sendFailureChannel and enqueues the message.
-func (srv *SMPPServer) sendSMPP(msg SMPPMessage) {
+func (srv *SMPPServer) sendSMPP(msg MsgQueueItem) error {
 	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Outbound + "_" + LogType.Endpoint}
-	logf.AddField("logID", msg.logID)
+	logf.AddField("logID", msg.LogID)
 
 	// Find the SMPP session associated with the destination number
 	session, err := srv.findSmppSession(msg.To)
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Error finding SMPP session: %v", err)
+		logf.Error = fmt.Errorf("error finding SMPP session: %v", err)
 		logf.Print()
 
+		// todo postgresql queue system?
+
 		// Enqueue the message for later delivery
-		enqueueErr := EnqueueSMS(context.Background(), srv.smsQueueCollection, msg)
+		/*enqueueErr := EnqueueSMS(context.Background(), srv.smsQueueCollection, msg)
 		if enqueueErr != nil {
 			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Failed to enqueue SMS (logID: %s): %v", msg.logID, enqueueErr)
+			logf.Error = fmt.Errorf("failed to enqueue SMS (logID: %s): %v", msg.LogID, enqueueErr)
 			logf.Print()
-		}
+		}*/
 
-		return
+		return logf.Error
 	}
 
 	// Find the client (source systemID) from the destination number
-	source, err := srv.findClientByNumber(msg.To)
+	/*source, err := srv.findClientByNumber(msg.To)
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
-		logf.Message = "Error finding source systemID"
 		logf.Error = err
 		logf.Print()
 
@@ -540,19 +406,19 @@ func (srv *SMPPServer) sendSMPP(msg SMPPMessage) {
 		enqueueErr := EnqueueSMS(context.Background(), srv.smsQueueCollection, msg)
 		if enqueueErr != nil {
 			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Failed to enqueue SMS (logID: %s): %v", msg.logID, enqueueErr)
+			logf.Message = fmt.Sprintf("Failed to enqueue SMS (logID: %s): %v", msg.LogID, enqueueErr)
 			logf.Print()
 		}
 
-		return
-	}
-
-	logf.AddField("systemID", source.Username)
+		return logf.Error
+	}*/
 
 	// Generate the next sequence number for the PDU
 	nextSeq := session.NextSequence
 
-	cleanedContent := ValidateAndCleanSMS(msg.Content)
+	cleanedContent := ValidateAndCleanSMS(msg.Message)
+
+	// todo split messages here?
 
 	// Create the DeliverSM PDU with your specified values
 	submitSM := &pdu.DeliverSM{
@@ -571,107 +437,33 @@ func (srv *SMPPServer) sendSMPP(msg SMPPMessage) {
 	err = session.Send(submitSM)
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Error sending SubmitSM: %v", err)
+		logf.Error = fmt.Errorf("error sending SubmitSM: %v", err)
 		logf.Print()
 
 		// Notify the send failure channel with the client's username
 		// srv.reconnectChannel <- source.Username
 
 		// Enqueue the message for later delivery
-		enqueueErr := EnqueueSMS(context.Background(), srv.smsQueueCollection, msg)
+		/*enqueueErr := EnqueueSMS(context.Background(), srv.smsQueueCollection, msg)
 		if enqueueErr != nil {
 			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Failed to enqueue SMS (logID: %s): %v", msg.logID, enqueueErr)
+			logf.Message = fmt.Sprintf("Failed to enqueue SMS (logID: %s): %v", msg.LogID, enqueueErr)
 			logf.Print()
-		}
-
+		}*/
+		return logf.Error
 	} else {
 		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", source.Username, msg.From, msg.To)
+		logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", "", msg.From, msg.To)
 		logf.Print()
 	}
-}
-
-// handleOutboundSMS to SMPP client (inbound from carrier)
-func (srv *SMPPServer) handleOutboundSMS() {
-	for msg := range srv.smsInboundChannel {
-		go srv.sendSMPP(msg)
-	}
-	/*	select {
-		case msg := <-srv.smsInboundChannel:
-
-		}*/
-	/*for m := range srv.smsInboundChannel {
-		go func(msg *SMPPMessage) {
-			logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Outbound + "_" + LogType.Endpoint}
-			logf.AddField("logID", msg.logID)
-
-			session, err := srv.findSmppSession(msg.To)
-			if err != nil {
-				logf.Level = logrus.ErrorLevel
-				logf.Message = fmt.Sprintf("error finding SMPP session: %v", err)
-				logf.Print()
-				return
-			}
-
-			source, err := srv.findClientByNumber(msg.To)
-			if err != nil {
-				logf.Level = logrus.ErrorLevel
-				logf.Message = fmt.Sprintf("error finding source systemID")
-				logf.Error = err
-			}
-
-			logf.AddField("systemID", source.Username)
-
-			nextSeq := session.NextSequence
-
-			submitSM := &pdu.DeliverSM{
-				SourceAddr:         pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
-				DestAddr:           pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
-				Message:            pdu.ShortMessage{Message: []byte(msg.Content)},
-				RegisteredDelivery: pdu.RegisteredDelivery{MCDeliveryReceipt: 1},
-				Header:             pdu.Header{Sequence: nextSeq()},
-			}
-
-			//cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			//defer cancel()
-
-			err = session.Send(submitSM)
-			if err != nil {
-				logf.Level = logrus.ErrorLevel
-				logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", source.Username, msg.From, msg.To)
-				logf.Print()
-			} else {
-				logf.Level = logrus.InfoLevel
-				logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", source.Username, msg.From, msg.To)
-				// logf.Message = fmt.Sprintf("SMS sent successfully via SMPP - From: %s To: %s", msg.From, msg.To)
-				logf.Print()
-				//log.Printf("%s", resp)
-			}
-		}(&m)
-	}*/
-}
-
-func (srv *SMPPServer) findClientByNumber(number string) (*Client, error) {
-	srv.mu.RLock()
-	defer srv.mu.RUnlock()
-
-	for _, client := range srv.GatewayClients {
-		for _, num := range client.Numbers {
-			if strings.Contains(number, num.Number) {
-				return client, nil
-			}
-		}
-	}
-
-	return nil, fmt.Errorf("no session found for number: %s", number)
+	return nil
 }
 
 func (srv *SMPPServer) findSmppSession(destination string) (*smpp.Session, error) {
 	srv.mu.RLock()
 	defer srv.mu.RUnlock()
 
-	for _, client := range srv.GatewayClients {
+	for _, client := range srv.gateway.Clients {
 		for _, num := range client.Numbers {
 			if strings.Contains(destination, num.Number) {
 				if session, ok := srv.conns[client.Username]; ok {
@@ -689,6 +481,8 @@ func (srv *SMPPServer) GetClientIP(session *smpp.Session) (string, error) {
 	if session == nil {
 		return "", fmt.Errorf("session is nil")
 	}
+
+	// todo add proxy support?
 
 	addr := session.Parent.RemoteAddr()
 	if addr == nil {

@@ -228,12 +228,12 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 		return
 	}
 
-	// Set the appropriate Content-Type header
+	// Set the appropriate Msg-Type header
 	ctx.ContentType(mediaFile.ContentType)
 
-	// Optionally, set Content-Disposition to suggest a filename for download
+	// Optionally, set Msg-Disposition to suggest a filename for download
 	// Uncomment the following line if you want the browser to prompt a download
-	// ctx.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", mediaFile.FileName))
+	// ctx.Header("Msg-Disposition", fmt.Sprintf("attachment; filename=%s", mediaFile.FileName))
 
 	// Send the file bytes as the response
 	ctx.Write(fileBytes)
@@ -244,7 +244,7 @@ func (gateway *Gateway) webReloadClients(ctx iris.Context) {
 	logf := LoggingFormat{
 		Type:    "reload_clients",
 		Level:   logrus.InfoLevel,
-		Message: "Reload Clients route accessed successfully",
+		Message: "Reload connectedClients route accessed successfully",
 	}
 	logf.AddField("client_ip", ctx.RemoteAddr())
 	logf.Print()
@@ -262,7 +262,7 @@ func (gateway *Gateway) webReloadClients(ctx iris.Context) {
 	}
 
 	gateway.MM4Server.GatewayClients = clientMap
-	gateway.SMPPServer.GatewayClients = clientMap
+	//gateway.SMPPServer.connectedClients = clientMap
 
 	// Respond with 200 OK and a message
 	ctx.StatusCode(http.StatusOK)

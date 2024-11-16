@@ -21,7 +21,7 @@ func main() {
 
 	app := iris.New()
 
-	gateway, err := NewGateway(os.Getenv("MONGODB_URI"))
+	gateway, err := NewGateway()
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
 		logf.Error = err
@@ -30,18 +30,52 @@ func main() {
 		os.Exit(1)
 	}
 
-	err = loadCarriers(gateway)
-	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = err
-		logf.Message = "failed to load carriers"
-		logf.Print()
-		os.Exit(1)
+	// Create a new RabbitMQ connection.
+	// Define RabbitMQ server URL.
+	amqpServerURL := os.Getenv("AMQP_SERVER_URL")
+	addr := amqpServerURL
+	// we don't need a from client because we directly place it in the to_carrier one
+	queues := []string{"carrier", "client"}
+
+	ampqClient := NewMsgQueueClient(addr, queues)
+	defer func(client *AMPQClient) {
+		err := client.Close()
+		if err != nil {
+			panic(err)
+		}
+	}(ampqClient)
+
+	gateway.AMPQClient = ampqClient
+
+	go gateway.Router.ClientRouter()
+	go gateway.Router.ClientMsgConsumer()
+	//go gateway.Router.CarrierMsgConsumer()
+
+	// todo start router
+
+	// Start consumers for inbound queues
+	/*go GenericConsumerHandler(client, "outbound_to_carrier")
+	go GenericConsumerHandler(client, "outbound_to_client")*/
+
+	// Simulate publishing messages
+	/*queueItem := MsgQueueItem{
+		To:                "17789070844", // support e.164??
+		From:              "12509796725", // support e.164??
+		ReceivedTimestamp: time.Now(),
+		QueuedTimestamp:   time.Now(),
+		Type:              "sms",
+		Files:             nil,
+		Message:           "Hello World!",
 	}
 
-	for _, c := range gateway.Carriers {
-		gateway.Routing.AddRoute("carrier", c.Name(), c)
-	}
+	testMessage, _ := json.Marshal(queueItem)
+
+	go func() {
+		for {
+			ampqClient.Publish("client", testMessage)
+			time.Sleep(15 * time.Second)
+		}
+	}()*/
 
 	go func() {
 		smppServer, err := initSmppServer()
@@ -52,8 +86,8 @@ func main() {
 			logf.Print()
 			os.Exit(1)
 		}
-		smppServer.routing = gateway.Routing
 		gateway.SMPPServer = smppServer
+		smppServer.gateway = gateway
 
 		smppServer.Start(gateway)
 	}()
@@ -62,9 +96,10 @@ func main() {
 		mm4Server := &MM4Server{
 			Addr:    os.Getenv("MM4_LISTEN"),
 			mongo:   gateway.MongoClient,
-			routing: gateway.Routing,
+			routing: gateway.Router,
 		}
 		gateway.MM4Server = mm4Server
+		mm4Server.gateway = gateway
 
 		err := mm4Server.Start()
 		if err != nil {

@@ -62,18 +62,17 @@ func (e *MetricExporter) Collect(ch chan<- prometheus.Metric) {
 
 // collectConnectedClients collects the count of connected clients for both SMPP and MM4.
 func (e *MetricExporter) collectConnectedClients(ch chan<- prometheus.Metric) {
-	connectedClientsSMPP := len(e.gateway.SMPPServer.GatewayClients)
-	connectedClientsMM4 := len(e.gateway.MM4Server.connectedClients)
+	connectedClientsSMPP := len(e.gateway.SMPPServer.conns)
 
 	ch <- prometheus.MustNewConstMetric(e.desc["connected_clients"], prometheus.GaugeValue, float64(connectedClientsSMPP), "SMPP")
-	ch <- prometheus.MustNewConstMetric(e.desc["connected_clients"], prometheus.GaugeValue, float64(connectedClientsMM4), "MM4")
+	/*ch <- prometheus.MustNewConstMetric(e.desc["connected_clients"], prometheus.GaugeValue, float64(connectedClientsMM4), "MM4")*/
 }
 
 // collectClientStats collects stats related to the clients and numbers for both SMPP and MM4.
 func (e *MetricExporter) collectClientStats(ch chan<- prometheus.Metric) {
-	totalClientsSMPP := len(e.gateway.SMPPServer.GatewayClients)
+	totalClientsSMPP := len(e.gateway.SMPPServer.conns)
 	totalNumbersSMPP := 0
-	for _, client := range e.gateway.SMPPServer.GatewayClients {
+	for _, client := range e.gateway.Clients {
 		totalNumbersSMPP += len(client.Numbers)
 	}
 

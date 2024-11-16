@@ -1,5 +1,7 @@
 package main
 
+/*
+
 import (
 	"context"
 	"fmt"
@@ -44,8 +46,8 @@ func EnqueueSMS(ctx context.Context, collection *mongo.Collection, sms SMPPMessa
 		From:        sms.From,
 		To:          sms.To,
 		Content:     sms.Content,
-		Client:      sms.CarrierData["Client"], // Assuming CarrierData includes "Client"
-		Route:       sms.CarrierData["Route"],  // Assuming CarrierData includes "Route"
+		Client:      sms.CarrierData["AMPQClient"], // Assuming CarrierData includes "AMPQClient"
+		Route:       sms.CarrierData["Route"],      // Assuming CarrierData includes "Route"
 		LogID:       sms.logID,
 		Gateway:     os.Getenv("SERVER_ID"),
 		CreatedAt:   time.Now().UTC(),
@@ -118,7 +120,7 @@ func (srv *SMPPServer) processQueuedMessagesForUser(username string) {
 	defer cancel()
 
 	// Retrieve the client's destination numbers
-	client, exists := srv.GatewayClients[username]
+	client, exists := srv.connectedClients[username]
 	if !exists {
 		log.Printf("No client found with username: %s", username)
 		return
@@ -190,8 +192,8 @@ func (srv *SMPPServer) processQueuedMessagesForUser(username string) {
 			To:      smsItem.To,
 			Content: smsItem.Content,
 			CarrierData: map[string]string{
-				"Client": smsItem.Client,
-				"Route":  smsItem.Route,
+				"AMPQClient": smsItem.Client,
+				"Route":      smsItem.Route,
 			},
 			logID: smsItem.LogID,
 		}
@@ -208,3 +210,4 @@ func (srv *SMPPServer) processQueuedMessagesForUser(username string) {
 		log.Printf("Successfully sent and removed queued SMS (LogID: %s) for user %s", smsItem.LogID, username)
 	}
 }
+*/

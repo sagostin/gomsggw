@@ -1,15 +1,43 @@
 [
   {
     "username": "tops_zultys_test",
-    "password": "tops_zultys_test",
+    "password": "T0ps8677_testing",
     "address": "108.165.150.61",
+    "name": "TOPS Telecommunications Inc. - Test System",
+    "log_privacy": false,
     "numbers": [
       {
-      "number": "17786538344",
-      "carrier": "twilio"
+        "number": "17786538344",
+        "carrier": "twilio"
       },
       {
         "number": "17789070844",
+        "carrier": "telnyx"
+      }
+    ]
+  },
+  {
+    "username": "tops_doak_test",
+    "password": "tops_doak8677",
+    "address": "72.142.150.55",
+    "name": "Doak Sheriff Lawyers",
+    "log_privacy": false,
+    "numbers": [
+      {
+        "number": "17787674857",
+        "carrier": "telnyx"
+      }
+    ]
+  },
+  {
+    "username": "planbcontractors",
+    "password": "pl4nBc0nTracT0rs",
+    "address": "216.138.253.127",
+    "name": "Plan B contractors",
+    "log_privacy": false,
+    "numbers": [
+      {
+        "number": "17787199887",
         "carrier": "telnyx"
       }
     ]

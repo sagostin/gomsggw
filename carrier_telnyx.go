@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 )
 
 // TelnyxHandler implements CarrierHandler for Telnyx
@@ -94,7 +95,7 @@ func (h *TelnyxHandler) Inbound(c iris.Context, gateway *Gateway) error {
 
 	numMedia := len(webhookPayload.Data.Payload.Media)
 
-	var files []File
+	var files []MM4File
 	if numMedia > 0 {
 		files, _ = fetchTelnyxMediaFiles(webhookPayload.Data.Payload.Media, messageID, logf)
 	}
@@ -103,17 +104,26 @@ func (h *TelnyxHandler) Inbound(c iris.Context, gateway *Gateway) error {
 	if numMedia > 0 && len(files) > 0 {
 		mm4Message := createMM4Message(from, to, body, messageID, files)
 		logMMSReceived(logf, from, to, "", messageID, len(files))
-		mm4Message.logID = transId
-		h.gateway.MM4Server.inboundMessageCh <- mm4Message
+		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
 	}
 
 	// Handle SMS if body is present
 	if strings.TrimSpace(body) != "" {
 		smsMessages := splitSMS(body, 140)
 		for _, smsBody := range smsMessages {
-			sms := createSMSMessage(from, to, smsBody, messageID, "", transId)
-			logSMSReceived(logf, from, to, "", messageID, len(sms.Content))
-			h.gateway.SMPPServer.smsInboundChannel <- sms
+			sms := MsgQueueItem{
+				To:                to,
+				From:              from,
+				ReceivedTimestamp: time.Now(),
+				QueuedTimestamp:   time.Time{},
+				Type:              MsgQueueItemType.SMS,
+				Files:             nil,
+				Message:           smsBody,
+				SkipNumberCheck:   false,
+				LogID:             transId,
+			}
+			logSMSReceived(logf, from, to, "", messageID, len(sms.Message))
+			//h.gateway.SMPPServer.msgToClientChannel <- sms
 		}
 	}
 
@@ -158,8 +168,8 @@ type TelnyxMedia struct {
 }
 
 // fetchTelnyxMediaFiles retrieves media files from Telnyx webhook payload
-func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFormat) ([]File, error) {
-	var files []File
+func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFormat) ([]MM4File, error) {
+	var files []MM4File
 	for i, m := range media {
 		contentType := m.ContentType
 		mediaURL := m.URL
@@ -186,8 +196,8 @@ func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFo
 			continue
 		}
 
-		// Create the File struct
-		file := File{
+		// Create the MM4File struct
+		file := MM4File{
 			Filename:    filename,
 			ContentType: contentType,
 			Content:     contentBytes,
@@ -207,7 +217,7 @@ func fetchMediaContentTelnyx(mediaURL string) ([]byte, error) {
 	// Telnyx may require Bearer token for media retrieval
 	/*apiKey := os.Getenv("TELNYX_API_KEY")
 	if apiKey == "" {
-		return nil, errors.New("TELNYX_API_KEY not set")
+		return nil, errors.NewMsgQueueClient("TELNYX_API_KEY not set")
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)*/
 
@@ -231,19 +241,19 @@ func fetchMediaContentTelnyx(mediaURL string) ([]byte, error) {
 }
 
 // SendSMS sends an SMS message via Telnyx API
-func (h *TelnyxHandler) SendSMS(sms *SMPPMessage) error {
+func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 	logf := LoggingFormat{
 		Type: LogType.Carrier + "_" + LogType.Outbound,
 	}
 	logf.AddField("carrier", "telnyx")
 	logf.AddField("type", "sms")
-	logf.AddField("logID", sms.logID)
+	logf.AddField("logID", sms.LogID)
 
 	// Construct the TelnyxMessage payload
 	message := TelnyxMessage{
 		From: sms.From,
 		To:   sms.To,
-		Text: sms.Content,
+		Text: sms.Message,
 		// MessagingProfileID: os.Getenv("TELNYX_MESSAGING_PROFILE_ID"), // If needed
 		// WebhookURL: "https://yourwebhook.url", // Optional
 	}
@@ -335,7 +345,7 @@ func (h *TelnyxHandler) SendMMS(mms *MM4Message) error {
 	message := TelnyxMessage{
 		From: mms.From,
 		To:   mms.To,
-		Text:/*string(mms.Content)*/ "",
+		Text:/*string(mms.Msg)*/ "",
 		Subject:   "Picture", // Or derive from your context
 		MediaUrls: []string{},
 	}
@@ -439,7 +449,7 @@ func (h *TelnyxHandler) SendMMS(mms *MM4Message) error {
 }
 
 // uploadMediaAndGetURL uploads media to your server and returns a publicly accessible URL
-func (h *TelnyxHandler) uploadMediaAndGetURL(file File) (string, error) {
+func (h *TelnyxHandler) uploadMediaAndGetURL(file MM4File) (string, error) {
 	// Implement the logic to save the file to your storage (e.g., MongoDB, AWS S3)
 	// and return the accessible URL.
 

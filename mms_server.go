@@ -3,15 +3,17 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/pires/go-proxyproto"
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
+
 	"io"
+	"log"
 	"math/rand"
 	"mime"
 	"mime/multipart"
@@ -24,8 +26,8 @@ import (
 	"time"
 )
 
-// File represents an individual file extracted from the MIME multipart message.
-type File struct {
+// MM4File represents an individual file extracted from the MIME multipart message.
+type MM4File struct {
 	Filename    string
 	ContentType string
 	Content     []byte
@@ -39,29 +41,22 @@ type MM4Message struct {
 	Client        *Client
 	Route         *Route
 	MessageID     string
-	Files         []File
-	logID         string
+	Files         []MM4File
 	TransactionID string
 }
 
 // MM4Server represents the SMTP server.
 type MM4Server struct {
-	Addr              string
-	GatewayClients    map[string]*Client // Map of IP to Client
-	routing           *Routing
-	mu                sync.RWMutex
-	listener          net.Listener
-	inboundMessageCh  chan *MM4Message
-	outboundMessageCh chan *MM4Message
-	mongo             *mongo.Client
-	connectedClients  map[string]time.Time
-
-	mm4QueueCollection *mongo.Collection
-	mm4QueueChannel    chan *MM4Message
+	Addr             string
+	routing          *Router
+	mu               sync.RWMutex
+	listener         net.Listener
+	mongo            *mongo.Client
+	connectedClients map[string]time.Time
+	gateway          *Gateway
 }
 
-// mm4_server.go
-func (s *MM4Server) processMM4Queue() {
+/*func (s *MM4Server) processMM4Queue() {
 	ticker := time.NewTicker(1 * time.Minute) // Adjust the interval as needed
 	defer ticker.Stop()
 
@@ -72,8 +67,8 @@ func (s *MM4Server) processMM4Queue() {
 		}
 	}
 }
-
-func (s *MM4Server) dequeueAndProcessMM4Messages() {
+*/
+/*func (s *MM4Server) dequeueAndProcessMM4Messages() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -116,60 +111,68 @@ func (s *MM4Server) dequeueAndProcessMM4Messages() {
 		}
 	}
 }
+*/
 
 // Start begins listening for incoming SMTP connections.
 func (s *MM4Server) Start() error {
 	logf := LoggingFormat{Type: LogType.MM4 + "_" + LogType.Startup}
 
-	clients, err := loadClients()
-	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = err
-		logf.Message = "failed to load clients"
-		return logf.ToError()
-	}
-
-	clientMap := make(map[string]*Client)
-	for i := range clients {
-		clientMap[clients[i].Username] = &clients[i]
-	}
-
-	s.GatewayClients = clientMap
-
-	s.inboundMessageCh = make(chan *MM4Message)
-	s.outboundMessageCh = make(chan *MM4Message)
 	s.connectedClients = make(map[string]time.Time)
 
-	// Initialize MM4 queue collection
-	s.mm4QueueCollection = s.mongo.Database(MM4QueueDBName).Collection(MM4QueueCollectionName)
-	// Initialize MM4 queue channel
-	s.mm4QueueChannel = make(chan *MM4Message, 1000) // Adjust buffer size as needed
-	// Start MM4 queue processor
-	go s.processMM4Queue()
-
-	listener, err := net.Listen("tcp", s.Addr)
+	listen, err := net.Listen("tcp", s.Addr)
 	if err != nil {
 		logf.Level = logrus.ErrorLevel
 		logf.Error = err
 		logf.Message = fmt.Sprintf("failed to start MM4 on %s", s.Addr)
 		return logf.ToError()
 	}
-	s.listener = listener
-	defer listener.Close()
+	//s.listener = listen
+	defer listen.Close()
+
+	var proxyListener net.Listener
+
+	if os.Getenv("HAPROXY_PROXY_PROTOCOL") == "true" {
+		proxyListener = &proxyproto.Listener{Listener: listen}
+		defer proxyListener.Close()
+
+		// Wait for a connection and accept it
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return err
+		}
+
+		defer func(conn net.Conn) {
+			err := conn.Close()
+			if err != nil {
+				log.Fatal("couldn't close proxy connection")
+			}
+		}(conn)
+
+		// Print connection details
+		if conn.LocalAddr() == nil {
+			log.Fatal("couldn't retrieve local address")
+		}
+		log.Printf("local address: %q", conn.LocalAddr().String())
+
+		if conn.RemoteAddr() == nil {
+			log.Fatal("couldn't retrieve remote address")
+		}
+		log.Printf("remote address: %q", conn.RemoteAddr().String())
+	} else {
+		proxyListener = listen
+	}
+
+	s.listener = proxyListener
 
 	logf.Level = logrus.InfoLevel
 	logf.Message = fmt.Sprintf("starting MM4 server on %s", s.Addr)
 	logf.Print()
 
-	// Start background handlers
-	go s.handleInboundMessages()
-	go s.handleOutboundMessages()
-
 	// Start the cleanup goroutine
 	go s.cleanupInactiveClients(2*time.Minute, 1*time.Minute)
 
 	for {
-		conn, err := listener.Accept()
+		conn, err := proxyListener.Accept()
 		if err != nil {
 			logf.Level = logrus.ErrorLevel
 			logf.Error = err
@@ -251,7 +254,7 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 	s.mu.RUnlock()
 
 	if !exists {
-		// New connection
+		// NewMsgQueueClient connection
 		logf.Level = logrus.InfoLevel // server (mm4/smpp), success/failed (err), userid, ip
 		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "success", client.Username, ip)
 		logf.Print()
@@ -304,7 +307,7 @@ func (s *MM4Server) getClientByIP(ip string) *Client {
 	defer s.mu.RUnlock()
 
 	// Loop through the clients to find a matching IP address
-	for _, client := range s.GatewayClients {
+	for _, client := range s.gateway.Clients {
 		if client.Address == ip {
 			//log.Printf(ip, " ", client.Address)
 			return client
@@ -335,7 +338,7 @@ type Session struct {
 	IPHash     string
 	ClientIP   string
 	RemoteAddr string
-	Files      []File
+	Files      []MM4File
 	mongo      *mongo.Client
 }
 
@@ -346,7 +349,7 @@ func (s *Session) handleSession(srv *MM4Server) error {
 		line, err := s.Reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				return nil // Client closed the connection
+				return nil // AMPQClient closed the connection
 			}
 			return err
 		}
@@ -466,8 +469,8 @@ func (s *Session) handleMM4Message() error {
 		"X-Mms-Message-ID",
 		"X-Mms-Transaction-ID",
 		/*"Text-Type",*/
-		"To",
 		"From",
+		"To",
 	}
 	for _, header := range requiredHeaders {
 		if s.Headers.Get(header) == "" {
@@ -482,13 +485,12 @@ func (s *Session) handleMM4Message() error {
 	transId := primitive.NewObjectID().Hex()
 
 	mm4Message := &MM4Message{
-		From:          s.Headers.Get("From"),
-		To:            s.Headers.Get("To"),
+		From:          s.Headers.Get("To"),
+		To:            s.Headers.Get("From"),
 		Content:       s.Data,
 		Headers:       s.Headers,
 		Client:        s.Client,
 		TransactionID: transactionID,
-		logID:         transId,
 		MessageID:     messageID,
 	}
 	// Existing header checks..
@@ -499,26 +501,35 @@ func (s *Session) handleMM4Message() error {
 	}
 
 	// Save files to disk or process them as needed
-	if err := mm4Message.saveFiles(s.mongo); err != nil {
+	/*if err := mm4Message.saveFiles(s.mongo); err != nil {
 		logrus.Errorf("Failed to save files: %v", err)
+	}*/
+
+	msgItem := MsgQueueItem{
+		To:                mm4Message.To,
+		From:              mm4Message.From,
+		ReceivedTimestamp: time.Now(),
+		Type:              MsgQueueItemType.MMS,
+		Files:             make([]MediaFile, 0),
+		LogID:             transId,
 	}
 
-	// Enqueue the MM4 message for processing
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := EnqueueMM4Message(ctx, s.Server.mm4QueueCollection, *mm4Message)
-	if err != nil {
-		logrus.Errorf("Failed to enqueue MM4 message (LogID: %s): %v", mm4Message.logID, err)
-		return fmt.Errorf("failed to enqueue message")
+	for _, file := range mm4Message.Files {
+		// Create the document with base64 data and expiration date
+		msgItem.Files = append(msgItem.Files, MediaFile{
+			FileName:    file.Filename,
+			ContentType: file.ContentType,
+			Base64Data:  string(file.Content),
+		})
 	}
 
-	logrus.Infof("Enqueued MM4 message (LogID: %s) for processing", mm4Message.logID)
+	s.Server.gateway.Router.ClientMsgChan <- msgItem
+
 	writeResponse(s.Writer, "250 Message queued for processing")
 
 	/*switch msgType {
 	case "MM4_forward.REQ":
-		s.Server.inboundMessageCh <- mm4Message
+		s.Server.msgToClientChannel <- mm4Message
 	case "MM4_forward.RES":
 		// Handle MM4_forward.RES if necessary
 		// log.Println("Received MM4_forward.RES")
@@ -535,11 +546,11 @@ func (s *Session) handleMM4Message() error {
 }
 
 // mm4_server.go
-func (s *MM4Server) sendMM4Message(mm4Message *MM4Message) error {
+/*func (s *MM4Server) sendMM4Message(mm4Message *MM4Message) error {
 	// Determine the route based on MM4Message.Route
 	route := mm4Message.Route
 	if route == nil {
-		return fmt.Errorf("no route defined for MM4 message (LogID: %s)", mm4Message.logID)
+		return fmt.Errorf("no route defined for MM4 message (LogID:)")
 	}
 
 	switch route.Type {
@@ -551,7 +562,7 @@ func (s *MM4Server) sendMM4Message(mm4Message *MM4Message) error {
 		}
 	case "mm4":
 		// Send MM4 to another MM4 client
-		err := s.sendMM4ToClient(route.Endpoint, mm4Message)
+		err := s.sendMM4(route.Endpoint, mm4Message)
 		if err != nil {
 			return fmt.Errorf("failed to send MM4 message to client: %v", err)
 		}
@@ -561,24 +572,24 @@ func (s *MM4Server) sendMM4Message(mm4Message *MM4Message) error {
 
 	return nil
 }
-
+*/
 // parseMIMEParts parses the MIME multipart content to extract files.
 func (m *MM4Message) parseMIMEParts() error {
-	// Use the Headers to get the Content-Type
-	contentType := m.Headers.Get("Content-Type")
+	// Use the Headers to get the Msg-Type
+	contentType := m.Headers.Get("Msg-Type")
 	if contentType == "" {
-		return fmt.Errorf("missing Content-Type header")
+		return fmt.Errorf("missing Msg-Type header")
 	}
 
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return fmt.Errorf("failed to parse Content-Type: %v", err)
+		return fmt.Errorf("failed to parse Msg-Type: %v", err)
 	}
 
 	if strings.HasPrefix(mediaType, "multipart/") {
 		boundary := params["boundary"]
 		if boundary == "" {
-			return fmt.Errorf("no boundary parameter in Content-Type")
+			return fmt.Errorf("no boundary parameter in Msg-Type")
 		}
 
 		// Create a multipart reader
@@ -598,10 +609,10 @@ func (m *MM4Message) parseMIMEParts() error {
 				return fmt.Errorf("failed to read part content: %v", err)
 			}
 
-			// Create a File struct
-			file := File{
+			// Create a MM4File struct
+			file := MM4File{
 				Filename:    part.FileName(),
-				ContentType: part.Header.Get("Content-Type"),
+				ContentType: part.Header.Get("Msg-Type"),
 				Content:     buf.Bytes(),
 			}
 			m.Files = append(m.Files, file)
@@ -609,7 +620,7 @@ func (m *MM4Message) parseMIMEParts() error {
 	} else {
 		// Not a multipart message
 		// Handle as a single part
-		file := File{
+		file := MM4File{
 			Filename:    "",
 			ContentType: mediaType,
 			Content:     m.Content,
@@ -623,6 +634,7 @@ func (m *MM4Message) parseMIMEParts() error {
 // saveFiles saves each extracted file to disk.
 func (m *MM4Message) saveFiles(client *mongo.Client) error {
 	for _, file := range m.Files {
+		// Create the document with base64 data and expiration date
 		_, err := saveBase64ToMongoDB(client, file.Filename, string(file.Content), file.ContentType)
 		if err != nil {
 			return err
@@ -631,11 +643,10 @@ func (m *MM4Message) saveFiles(client *mongo.Client) error {
 	return nil
 }
 
-// handleInboundMessages processes inbound MM4 messages from MM4 clients
-func (s *MM4Server) handleInboundMessages() {
+// handleMsgToClient processes inbound MM4 messages from MM4 clients
+/*func (s *MM4Server) handleMsgToClient() {
 	logf := LoggingFormat{Type: LogType.MM4 + "_" + LogType.Routing}
-
-	for msg := range s.inboundMessageCh {
+	for msg := range s.msgToClientChannel {
 		go func(m *MM4Message) {
 			m.To = strings.Split(m.To, "/")[0]
 			m.From = strings.Split(m.From, "/")[0]
@@ -648,7 +659,7 @@ func (s *MM4Server) handleInboundMessages() {
 			route := s.findRoute(m.From, m.To)
 			if route == nil {
 				logf.Level = logrus.WarnLevel
-				logf.Message = fmt.Sprintf("no route found for message: From=%s, To=%s", m.From, m.To)
+				logf.Message = fmt.Sprintf("no route found for message: To=%s, From=%s", m.From, m.To)
 				logf.Print()
 				return
 			}
@@ -668,13 +679,7 @@ func (s *MM4Server) handleInboundMessages() {
 					logf.Print()
 				}
 			case "mm4":
-				err := s.sendMM4ToClient(route.Endpoint, m)
-				if err != nil {
-					logf.Level = logrus.ErrorLevel
-					logf.Error = err
-					logf.Message = fmt.Sprintf("error sending MM4 message")
-					logf.Print()
-				}
+
 			default:
 				logf.Level = logrus.WarnLevel
 				logf.Message = fmt.Sprintf("unknown route type: %s", route.Type)
@@ -682,15 +687,15 @@ func (s *MM4Server) handleInboundMessages() {
 			}
 		}(msg)
 	}
-}
+}*/
 
-// handleOutboundMessages processes outbound MM4 messages to clients. todo
-func (s *MM4Server) handleOutboundMessages() {
-	for msg := range s.outboundMessageCh {
+// handleMsgFromClient processes outbound MM4 messages to clients. todo
+/*func (s *MM4Server) handleMsgFromClient() {
+	for msg := range s.msgFromClientChannel {
 		go func(m *MM4Message) {
 			logf := LoggingFormat{Type: LogType.MM4 + "_" + LogType.Outbound + "_" + LogType.Endpoint}
 
-			client := s.getClientByNumber(m.To)
+			client := s.getClient(m.To)
 			if client == nil {
 				logf.Level = logrus.WarnLevel
 				logf.Message = fmt.Sprintf("no client found for destination number: %s", m.To)
@@ -705,47 +710,19 @@ func (s *MM4Server) handleOutboundMessages() {
 			//client.InboundCh <- m
 		}(msg)
 	}
-}
+}*/
 
-// findRoute determines the appropriate route for a message.
-func (s *MM4Server) findRoute(source, destination string) *Route {
-	// First, try to find a route based on the carrier
-
-	// check by destination before assuming it needs to be sent to the carrier
-	destinationAddress := s.getIPByRecipient(destination)
-	if destinationAddress != "" {
-		return &Route{ /*Prefix: "0", */ Type: "mm4", Endpoint: destinationAddress}
-	} else {
-		carrier, err := s.getCarrierByNumber(source)
-		if err == nil && carrier != "" {
-			for _, route := range s.routing.Routes {
-				if route.Type == "carrier" && route.Endpoint == carrier {
-					return route
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
-// sendMM4ToClient sends an MM4 message to a client over plain TCP with base64-encoded media.
-func (s *MM4Server) sendMM4ToClient(destinationIP string, mm4Message *MM4Message) error {
+// sendMM4 sends an MM4 message to a client over plain TCP with base64-encoded media.
+func (s *MM4Server) sendMM4(item MsgQueueItem) error {
 	logf := LoggingFormat{Type: LogType.MM4 + "_" + LogType.Outbound}
 
-	logf.AddField("logID", mm4Message.logID)
+	logf.AddField("logID", item.LogID)
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	// Find the client by destination IP
-	var client *Client
-	for _, c := range s.GatewayClients {
-		if c.Address == destinationIP {
-			client = c
-			break
-		}
-	}
+	client := s.gateway.getClient(item.To)
 
 	if client == nil {
 		return fmt.Errorf("no client found for destination number: %s", destinationIP)
@@ -754,7 +731,7 @@ func (s *MM4Server) sendMM4ToClient(destinationIP string, mm4Message *MM4Message
 	logf.AddField("systemID", client.Username)
 
 	// Use default MM4 port if not specified
-	port := "25" // Default SMTP port
+	port := "25" // Default SMTP port todo
 
 	// Combine address and port
 	address := net.JoinHostPort(client.Address, port)
@@ -771,6 +748,8 @@ func (s *MM4Server) sendMM4ToClient(destinationIP string, mm4Message *MM4Message
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
+
+	mm4Message := s.createMM4Message(item)
 
 	session := &Session{
 		Conn:    conn,
@@ -830,6 +809,47 @@ func (s *MM4Server) sendMM4ToClient(destinationIP string, mm4Message *MM4Message
 	return nil
 }
 
+// createMM4Message constructs an MM4Message with the provided media files.
+func (s *MM4Server) createMM4Message(msgItem MsgQueueItem) *MM4Message {
+	headers := textproto.MIMEHeader{}
+	headers.Set("To", fmt.Sprintf("%s/TYPE=PLMN", msgItem.To))
+	headers.Set("From", fmt.Sprintf("%s/TYPE=PLMN", msgItem.From))
+	headers.Set("MIME-Version", "1.0")
+	headers.Set("X-Mms-3GPP-Mms-Version", "6.10.0")
+	headers.Set("X-Mms-Message-Type", "MM4_forward.REQ")
+	headers.Set("X-Mms-Message-Id", fmt.Sprintf("<%s@%s>", msgItem.LogID, os.Getenv("MM4_MSG_ID_HOST"))) // todo Replace 'yourdomain.com' appropriately
+	headers.Set("X-Mms-Transaction-Id", msgItem.LogID)
+	headers.Set("X-Mms-Ack-Request", "Yes")
+
+	originatorSystem := os.Getenv("MM4_ORIGINATOR_SYSTEM") // e.g., "system@108.165.150.61"
+	if originatorSystem == "" {
+		originatorSystem = "system@yourdomain.com" // Fallback or default value
+	}
+	headers.Set("X-Mms-Originator-System", originatorSystem)
+	headers.Set("Date", time.Now().UTC().Format(time.RFC1123Z))
+	// Msg-Type will be set in sendMM4Message based on whether SMIL is included or not
+
+	files := make([]MM4File, 0)
+
+	for _, f := range msgItem.Files {
+		files = append(files, MM4File{
+			Filename:    f.FileName,
+			ContentType: f.ContentType,
+			Content:     []byte(f.Base64Data),
+		})
+	}
+
+	return &MM4Message{
+		From:          msgItem.From,
+		To:            msgItem.To,
+		Content:       []byte(msgItem.Message),
+		Headers:       headers,
+		TransactionID: msgItem.LogID,
+		MessageID:     msgItem.LogID,
+		Files:         files,
+	}
+}
+
 // sendCommand sends a command to the SMTP/MM4 server.
 func (s *Session) sendCommand(cmd string) error {
 	logf := LoggingFormat{Type: LogType.MM4}
@@ -885,7 +905,7 @@ func (s *Session) readResponse() (string, error) {
 	return response, nil
 }
 
-// generateContentID creates a unique Content-ID.
+// generateContentID creates a unique Msg-ID.
 func generateContentID() string {
 	rand.Seed(time.Now().UnixNano())
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
@@ -897,7 +917,7 @@ func generateContentID() string {
 }
 
 // generateSMIL generates a SMIL content that references the provided media files.
-func generateSMIL(files []File) ([]byte, error) {
+func generateSMIL(files []MM4File) ([]byte, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no media files to include in SMIL")
 	}
@@ -995,17 +1015,17 @@ func (s *Session) sendMM4Message() error {
 	// Step 4.1: Generate a Unique Boundary
 	boundary := generateBoundary()
 
-	// Step 4.2: Construct the Content-Type Header
+	// Step 4.2: Construct the Msg-Type Header
 	reconstructedContentType := fmt.Sprintf("multipart/related; Start=0.smil; Type=\"application/smil\"; boundary=\"%s\"", boundary)
-	messageBuffer.WriteString(fmt.Sprintf("From: %s\r\n", s.From))
-	messageBuffer.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(s.To, ", ")))
-	messageBuffer.WriteString(fmt.Sprintf("Content-Type: %s\r\n", reconstructedContentType))
+	messageBuffer.WriteString(fmt.Sprintf("To: %s\r\n", s.From))
+	messageBuffer.WriteString(fmt.Sprintf("From: %s\r\n", strings.Join(s.To, ", ")))
+	messageBuffer.WriteString(fmt.Sprintf("Msg-Type: %s\r\n", reconstructedContentType))
 	messageBuffer.WriteString(fmt.Sprintf("MIME-Version: 1.0\r\n"))
 
 	// Step 4.3: Add Additional Headers
 	// Define headers to exclude to avoid duplication
 	headerKeysToExclude := map[string]bool{
-		"Content-Type":            true,
+		"Msg-Type":                true,
 		"MIME-Version":            true,
 		"X-Mms-3GPP-Mms-Version":  true,
 		"X-Mms-Message-Type":      true,
@@ -1014,8 +1034,8 @@ func (s *Session) sendMM4Message() error {
 		"X-Mms-Ack-Request":       true,
 		"X-Mms-Originator-System": true,
 		"Date":                    true,
-		"From":                    true,
 		"To":                      true,
+		"From":                    true,
 		"Subject":                 true,
 		"Message-ID":              true,
 	}
@@ -1059,7 +1079,7 @@ func (s *Session) sendMM4Message() error {
 			return logf.ToError()
 		}
 
-		smilFile := File{
+		smilFile := MM4File{
 			Filename:    "0.smil",
 			ContentType: "application/smil",
 			Content:     smilContent,
@@ -1067,8 +1087,8 @@ func (s *Session) sendMM4Message() error {
 
 		// Start boundary for SMIL
 		messageBuffer.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-		messageBuffer.WriteString("Content-Id: <0.smil>\r\n")
-		messageBuffer.WriteString(fmt.Sprintf("Content-Type: %s; name=\"%s\"\r\n", smilFile.ContentType, smilFile.Filename))
+		messageBuffer.WriteString("Msg-Id: <0.smil>\r\n")
+		messageBuffer.WriteString(fmt.Sprintf("Msg-Type: %s; name=\"%s\"\r\n", smilFile.ContentType, smilFile.Filename))
 		messageBuffer.WriteString("\r\n")
 		messageBuffer.Write(smilFile.Content)
 		messageBuffer.WriteString("\r\n")
@@ -1084,14 +1104,14 @@ func (s *Session) sendMM4Message() error {
 		// Start boundary
 		messageBuffer.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 
-		// Assign a unique Content-ID
+		// Assign a unique Msg-ID
 		contentID := generateContentID()
 
-		messageBuffer.WriteString(fmt.Sprintf("Content-Id: <%s>\r\n", contentID))
-		messageBuffer.WriteString(fmt.Sprintf("Content-Type: %s; name=\"%s\"\r\n", file.ContentType, file.Filename))
-		messageBuffer.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", file.Filename))
-		messageBuffer.WriteString(fmt.Sprintf("Content-Location: %s\r\n", file.Filename))
-		messageBuffer.WriteString("Content-Transfer-Encoding: base64\r\n")
+		messageBuffer.WriteString(fmt.Sprintf("Msg-Id: <%s>\r\n", contentID))
+		messageBuffer.WriteString(fmt.Sprintf("Msg-Type: %s; name=\"%s\"\r\n", file.ContentType, file.Filename))
+		messageBuffer.WriteString(fmt.Sprintf("Msg-Disposition: attachment; filename=\"%s\"\r\n", file.Filename))
+		messageBuffer.WriteString(fmt.Sprintf("Msg-Location: %s\r\n", file.Filename))
+		messageBuffer.WriteString("Msg-Transfer-Encoding: base64\r\n")
 		messageBuffer.WriteString("\r\n")
 
 		// Encode the media content in base64 with line breaks every 76 characters as per RFC 2045
@@ -1159,49 +1179,6 @@ func randomString(length int) string {
 // generateBoundary creates a unique boundary string.
 func generateBoundary() string {
 	return fmt.Sprintf("===============%s", randomString(16))
-}
-
-// Helper function to get the client's IP by recipient address
-func (s *MM4Server) getIPByRecipient(recipient string) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, client := range s.GatewayClients {
-		for _, num := range client.Numbers {
-
-			if strings.Contains(recipient, num.Number) {
-				return client.Address
-			}
-		}
-	}
-	return ""
-}
-
-// getCarrierByNumber returns the carrier associated with a phone number.
-func (s *MM4Server) getCarrierByNumber(number string) (string, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, client := range s.GatewayClients {
-		for _, num := range client.Numbers {
-			if strings.Contains(number, num.Number) {
-				return num.Carrier, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("no carrier found for number: %s", number)
-}
-
-// getClientByNumber returns the client associated with a phone number.
-func (s *MM4Server) getClientByNumber(number string) *Client {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	for _, client := range s.GatewayClients {
-		for _, num := range client.Numbers {
-			if num.Number == number {
-				return client
-			}
-		}
-	}
-	return nil
 }
 
 // writeResponse sends a response to the client.

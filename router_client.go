@@ -126,6 +126,12 @@ func (router *Router) ClientRouter() {
 					// todo maybe to add to queue via postgres?
 					continue
 				}
+				if msg.Delivery != nil {
+					err := msg.Delivery.Ack(false)
+					if err != nil {
+						continue
+					}
+				}
 				continue
 			}
 
@@ -135,6 +141,12 @@ func (router *Router) ClientRouter() {
 				if err != nil {
 					// todo
 					continue
+				}
+				if msg.Delivery != nil {
+					err := msg.Delivery.Ack(false)
+					if err != nil {
+						continue
+					}
 				}
 				// add to outbound carrier queue
 				err = router.gateway.AMPQClient.Publish("carrier", marshal)

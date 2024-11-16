@@ -139,6 +139,13 @@ func (router *Router) CarrierRouter() {
 					// todo maybe to add to queue via postgres?
 					continue
 				}
+				if msg.Delivery != nil {
+					err := msg.Delivery.Ack(false)
+					if err != nil {
+						continue
+					}
+				}
+				continue
 			}
 
 			carrier, _ := router.gateway.getClientCarrier(msg.From)
@@ -171,6 +178,7 @@ func (router *Router) CarrierRouter() {
 			// throw error?
 			logf.Error = fmt.Errorf("unable to send")
 			logf.Print()
+			continue
 		}
 	}
 }

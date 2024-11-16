@@ -26,13 +26,6 @@ import (
 	"time"
 )
 
-// MM4File represents an individual file extracted from the MIME multipart message.
-type MM4File struct {
-	Filename    string
-	ContentType string
-	Content     []byte
-}
-
 type MM4Message struct {
 	From          string
 	To            string
@@ -41,7 +34,7 @@ type MM4Message struct {
 	Client        *Client
 	Route         *Route
 	MessageID     string
-	Files         []MM4File
+	Files         []MsgFile
 	TransactionID string
 }
 
@@ -254,7 +247,7 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 	s.mu.RUnlock()
 
 	if !exists {
-		// NewMsgQueueClient connection
+		// New connection
 		logf.Level = logrus.InfoLevel // server (mm4/smpp), success/failed (err), userid, ip
 		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "success", client.Username, ip)
 		logf.Print()
@@ -338,7 +331,7 @@ type Session struct {
 	IPHash     string
 	ClientIP   string
 	RemoteAddr string
-	Files      []MM4File
+	Files      []MsgFile
 	mongo      *mongo.Client
 }
 
@@ -485,8 +478,8 @@ func (s *Session) handleMM4Message() error {
 	transId := primitive.NewObjectID().Hex()
 
 	mm4Message := &MM4Message{
-		From:          s.Headers.Get("To"),
-		To:            s.Headers.Get("From"),
+		From:          s.Headers.Get("From"),
+		To:            s.Headers.Get("To"),
 		Content:       s.Data,
 		Headers:       s.Headers,
 		Client:        s.Client,
@@ -510,18 +503,18 @@ func (s *Session) handleMM4Message() error {
 		From:              mm4Message.From,
 		ReceivedTimestamp: time.Now(),
 		Type:              MsgQueueItemType.MMS,
-		Files:             make([]MediaFile, 0),
+		Files:             mm4Message.Files,
 		LogID:             transId,
 	}
 
-	for _, file := range mm4Message.Files {
+	/*for _, file := range mm4Message.Files {
 		// Create the document with base64 data and expiration date
 		msgItem.Files = append(msgItem.Files, MediaFile{
-			FileName:    file.Filename,
+			F:    file.Filename,
 			ContentType: file.ContentType,
 			Base64Data:  string(file.Content),
 		})
-	}
+	}*/
 
 	s.Server.gateway.Router.ClientMsgChan <- msgItem
 
@@ -576,9 +569,9 @@ func (s *Session) handleMM4Message() error {
 // parseMIMEParts parses the MIME multipart content to extract files.
 func (m *MM4Message) parseMIMEParts() error {
 	// Use the Headers to get the Msg-Type
-	contentType := m.Headers.Get("Msg-Type")
+	contentType := m.Headers.Get("Content-Type")
 	if contentType == "" {
-		return fmt.Errorf("missing Msg-Type header")
+		return fmt.Errorf("missing Content-Type header")
 	}
 
 	mediaType, params, err := mime.ParseMediaType(contentType)
@@ -609,10 +602,10 @@ func (m *MM4Message) parseMIMEParts() error {
 				return fmt.Errorf("failed to read part content: %v", err)
 			}
 
-			// Create a MM4File struct
-			file := MM4File{
+			// Create a MsgFile struct
+			file := MsgFile{
 				Filename:    part.FileName(),
-				ContentType: part.Header.Get("Msg-Type"),
+				ContentType: part.Header.Get("Content-Type"),
 				Content:     buf.Bytes(),
 			}
 			m.Files = append(m.Files, file)
@@ -620,7 +613,7 @@ func (m *MM4Message) parseMIMEParts() error {
 	} else {
 		// Not a multipart message
 		// Handle as a single part
-		file := MM4File{
+		file := MsgFile{
 			Filename:    "",
 			ContentType: mediaType,
 			Content:     m.Content,
@@ -631,7 +624,7 @@ func (m *MM4Message) parseMIMEParts() error {
 	return nil
 }
 
-// saveFiles saves each extracted file to disk.
+/*// saveFiles saves each extracted file to disk.
 func (m *MM4Message) saveFiles(client *mongo.Client) error {
 	for _, file := range m.Files {
 		// Create the document with base64 data and expiration date
@@ -641,7 +634,7 @@ func (m *MM4Message) saveFiles(client *mongo.Client) error {
 		}
 	}
 	return nil
-}
+}*/
 
 // handleMsgToClient processes inbound MM4 messages from MM4 clients
 /*func (s *MM4Server) handleMsgToClient() {
@@ -718,14 +711,20 @@ func (s *MM4Server) sendMM4(item MsgQueueItem) error {
 
 	logf.AddField("logID", item.LogID)
 
+	if item.Files == nil {
+		return fmt.Errorf("files are nil")
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	newStr := strings.Replace(item.To, "+", "", -1)
+
 	// Find the client by destination IP
-	client := s.gateway.getClient(item.To)
+	client := s.gateway.getClient(newStr)
 
 	if client == nil {
-		return fmt.Errorf("no client found for destination number: %s", destinationIP)
+		return fmt.Errorf("no client found for destination number: %s", item.To)
 	}
 
 	logf.AddField("systemID", client.Username)
@@ -829,13 +828,13 @@ func (s *MM4Server) createMM4Message(msgItem MsgQueueItem) *MM4Message {
 	headers.Set("Date", time.Now().UTC().Format(time.RFC1123Z))
 	// Msg-Type will be set in sendMM4Message based on whether SMIL is included or not
 
-	files := make([]MM4File, 0)
+	files := make([]MsgFile, 0)
 
 	for _, f := range msgItem.Files {
-		files = append(files, MM4File{
-			Filename:    f.FileName,
+		files = append(files, MsgFile{
+			Filename:    f.Filename,
 			ContentType: f.ContentType,
-			Content:     []byte(f.Base64Data),
+			Content:     f.Content,
 		})
 	}
 
@@ -917,7 +916,7 @@ func generateContentID() string {
 }
 
 // generateSMIL generates a SMIL content that references the provided media files.
-func generateSMIL(files []MM4File) ([]byte, error) {
+func generateSMIL(files []MsgFile) ([]byte, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no media files to include in SMIL")
 	}
@@ -946,10 +945,12 @@ func generateSMIL(files []MM4File) ([]byte, error) {
 	return smilBuffer.Bytes(), nil
 }
 
-// sendMM4Message sends the MAIL FROM, RCPT TO, DATA commands, constructs message headers,
-// includes the SMIL and media files, and terminates with a dot.
 func (s *Session) sendMM4Message() error {
 	logf := LoggingFormat{Type: LogType.MM4 + "_" + LogType.Outbound + "_" + LogType.Endpoint}
+
+	if len(s.Files) <= 0 {
+		return fmt.Errorf("no files found")
+	}
 
 	// Step 1: MAIL FROM Command
 	mailFromCmd := fmt.Sprintf("MAIL FROM:<%s>", s.From)
@@ -1015,42 +1016,13 @@ func (s *Session) sendMM4Message() error {
 	// Step 4.1: Generate a Unique Boundary
 	boundary := generateBoundary()
 
-	// Step 4.2: Construct the Msg-Type Header
-	reconstructedContentType := fmt.Sprintf("multipart/related; Start=0.smil; Type=\"application/smil\"; boundary=\"%s\"", boundary)
-	messageBuffer.WriteString(fmt.Sprintf("To: %s\r\n", s.From))
-	messageBuffer.WriteString(fmt.Sprintf("From: %s\r\n", strings.Join(s.To, ", ")))
-	messageBuffer.WriteString(fmt.Sprintf("Msg-Type: %s\r\n", reconstructedContentType))
-	messageBuffer.WriteString(fmt.Sprintf("MIME-Version: 1.0\r\n"))
+	// Step 4.2: Construct the Headers
+	messageBuffer.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(s.To, ", ")))
+	messageBuffer.WriteString(fmt.Sprintf("From: %s\r\n", s.From))
+	messageBuffer.WriteString(fmt.Sprintf("Content-Type: multipart/related; boundary=\"%s\"\r\n", boundary))
+	messageBuffer.WriteString("MIME-Version: 1.0\r\n")
 
 	// Step 4.3: Add Additional Headers
-	// Define headers to exclude to avoid duplication
-	headerKeysToExclude := map[string]bool{
-		"Msg-Type":                true,
-		"MIME-Version":            true,
-		"X-Mms-3GPP-Mms-Version":  true,
-		"X-Mms-Message-Type":      true,
-		"X-Mms-Message-Id":        true,
-		"X-Mms-Transaction-Id":    true,
-		"X-Mms-Ack-Request":       true,
-		"X-Mms-Originator-System": true,
-		"Date":                    true,
-		"To":                      true,
-		"From":                    true,
-		"Subject":                 true,
-		"Message-ID":              true,
-	}
-
-	// Add headers excluding the ones defined above
-	for key, values := range s.Headers {
-		if _, exists := headerKeysToExclude[key]; exists {
-			continue
-		}
-		for _, value := range values {
-			messageBuffer.WriteString(fmt.Sprintf("%s: %s\r\n", key, value))
-		}
-	}
-
-	// Re-add essential headers
 	essentialHeaders := []string{
 		"X-Mms-3GPP-Mms-Version",
 		"X-Mms-Message-Type",
@@ -1079,42 +1051,33 @@ func (s *Session) sendMM4Message() error {
 			return logf.ToError()
 		}
 
-		smilFile := MM4File{
-			Filename:    "0.smil",
-			ContentType: "application/smil",
-			Content:     smilContent,
-		}
-
-		// Start boundary for SMIL
+		// Add SMIL part
 		messageBuffer.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-		messageBuffer.WriteString("Msg-Id: <0.smil>\r\n")
-		messageBuffer.WriteString(fmt.Sprintf("Msg-Type: %s; name=\"%s\"\r\n", smilFile.ContentType, smilFile.Filename))
+		messageBuffer.WriteString("Content-Id: <0.smil>\r\n")
+		messageBuffer.WriteString("Content-Type: application/smil; name=\"0.smil\"\r\n")
 		messageBuffer.WriteString("\r\n")
-		messageBuffer.Write(smilFile.Content)
+		messageBuffer.Write(smilContent)
 		messageBuffer.WriteString("\r\n")
 	}
 
-	// Step 4.5: Add Media Files as Subsequent MIME Parts
+	// Step 4.5: Add Media Files as MIME Parts
 	for _, file := range s.Files {
-		// Skip adding the SMIL file again if it's already added
-		if file.ContentType == "application/smil" /*&& file.Filename == "0.smil" */ {
-			continue
+		if file.ContentType == "application/smil" {
+			continue // Skip the SMIL file if already added
 		}
 
-		// Start boundary
-		messageBuffer.WriteString(fmt.Sprintf("--%s\r\n", boundary))
-
-		// Assign a unique Msg-ID
+		// Add media file as MIME part
 		contentID := generateContentID()
 
-		messageBuffer.WriteString(fmt.Sprintf("Msg-Id: <%s>\r\n", contentID))
-		messageBuffer.WriteString(fmt.Sprintf("Msg-Type: %s; name=\"%s\"\r\n", file.ContentType, file.Filename))
-		messageBuffer.WriteString(fmt.Sprintf("Msg-Disposition: attachment; filename=\"%s\"\r\n", file.Filename))
-		messageBuffer.WriteString(fmt.Sprintf("Msg-Location: %s\r\n", file.Filename))
-		messageBuffer.WriteString("Msg-Transfer-Encoding: base64\r\n")
+		messageBuffer.WriteString(fmt.Sprintf("--%s\r\n", boundary))
+		messageBuffer.WriteString(fmt.Sprintf("Content-Id: <%s>\r\n", contentID))
+		messageBuffer.WriteString(fmt.Sprintf("Content-Type: %s; name=\"%s\"\r\n", file.ContentType, file.Filename))
+		messageBuffer.WriteString(fmt.Sprintf("Content-Disposition: attachment; filename=\"%s\"\r\n", file.Filename))
+		messageBuffer.WriteString(fmt.Sprintf("Content-Location: %s\r\n", file.Filename))
+		messageBuffer.WriteString("Content-Transfer-Encoding: base64\r\n")
 		messageBuffer.WriteString("\r\n")
 
-		// Encode the media content in base64 with line breaks every 76 characters as per RFC 2045
+		// Encode the file content in base64 with line breaks every 76 characters
 		encoded := base64.StdEncoding.EncodeToString(file.Content)
 		for i := 0; i < len(encoded); i += 76 {
 			end := i + 76
@@ -1133,7 +1096,6 @@ func (s *Session) sendMM4Message() error {
 
 	// Step 5: Send the message data
 	msgData := messageBuffer.String()
-	//log.Printf("C: [DATA]\n%s", msgData) todo / don't include full message data
 	_, err = s.Writer.WriteString(msgData)
 	if err != nil {
 		logf.Message = fmt.Sprintf("failed to send message data: %v", err)

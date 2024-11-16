@@ -45,16 +45,24 @@ func (router *Router) ClientRouter() {
 				if session != nil {
 					err := router.gateway.SMPPServer.sendSMPP(msg)
 					if err != nil {
-						marshal, err := json.Marshal(msg)
-						if err != nil {
-							// todo
+						if msg.Delivery != nil {
+							err := msg.Delivery.Reject(true)
+							if err != nil {
+								continue
+							}
+							continue
+						} else {
+							marshal, err := json.Marshal(msg)
+							if err != nil {
+								// todo
+								continue
+							}
+							err = router.gateway.AMPQClient.Publish("client", marshal)
 							continue
 						}
-						err = router.gateway.AMPQClient.Publish("client", marshal)
-						continue
 					} else {
 						if msg.Delivery != nil {
-							err := msg.Delivery.Ack(true)
+							err := msg.Delivery.Ack(false)
 							if err != nil {
 								continue
 							}
@@ -91,41 +99,71 @@ func (router *Router) ClientRouter() {
 			logf.Error = fmt.Errorf("unable to send")
 			logf.Print()
 		case MsgQueueItemType.MMS:
-			// check by destination before assuming it needs to be sent to the carrier
-			destinationAddress := router.gateway.MM4Server.getIPByRecipient(msg.To)
-			if destinationAddress != "" {
-				// destinationAddress not found for MM4 client, so we will skip, and grab carrier info
-				// we will also try sending to the mm4 server if we can?
-				/*err := router.gateway.MM4Server.sendMM4(destinationAddress, msg)
+			client, _ := router.findClientByNumber(msg.To)
+			if client != nil {
+				err := router.gateway.MM4Server.sendMM4(msg)
 				if err != nil {
+					if msg.Delivery != nil {
+						logf.Level = logrus.WarnLevel
+						logf.Error = fmt.Errorf("unable to send to mm4 client")
+						logf.Print()
+						err := msg.Delivery.Reject(true)
+						if err != nil {
+							continue
+						}
+					} else {
+						marshal, err := json.Marshal(msg)
+						if err != nil {
+							// todo
+							continue
+						}
+						err = router.gateway.AMPQClient.Publish("client", marshal)
+						continue
+					}
 					logf.Level = logrus.ErrorLevel
-					logf.Error = err
-					logf.Message = fmt.Sprintf("error sending MM4 message")
+					logf.Error = fmt.Errorf("error finding SMPP session, adding to queue: %v", err)
 					logf.Print()
-				}*/
-				continue
-			} else {
-				carrier, _ := router.gateway.getClientCarrier(msg.From)
-				if carrier != "" {
-					marshal, err := json.Marshal(msg)
-					if err != nil {
-						// todo
-						continue
-					}
-					// add to outbound carrier queue
-					err = router.gateway.AMPQClient.Publish("carrier", marshal)
-					if err != nil {
-						// todo
-						continue
-					}
+					// todo maybe to add to queue via postgres?
 					continue
 				}
-				// throw error?
-				logf.Error = fmt.Errorf("unable to send")
-				logf.Print()
+				continue
 			}
-			println("todo: mms queue item")
 
+			carrier, _ := router.gateway.getClientCarrier(msg.From)
+			if carrier != "" {
+				marshal, err := json.Marshal(msg)
+				if err != nil {
+					// todo
+					continue
+				}
+				// add to outbound carrier queue
+				err = router.gateway.AMPQClient.Publish("carrier", marshal)
+				if err != nil {
+					// todo
+					continue
+				}
+				continue
+			}
+			// throw error?
+			logf.Error = fmt.Errorf("unable to send")
+			logf.Print()
+			if msg.Delivery != nil {
+				logf.Level = logrus.WarnLevel
+				logf.Error = fmt.Errorf("unable to send to mm4 client")
+				logf.Print()
+				err := msg.Delivery.Reject(true)
+				if err != nil {
+					continue
+				}
+			} else {
+				marshal, err := json.Marshal(msg)
+				if err != nil {
+					// todo
+					continue
+				}
+				err = router.gateway.AMPQClient.Publish("client", marshal)
+				continue
+			}
 		}
 	}
 }

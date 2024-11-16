@@ -95,16 +95,25 @@ func (h *TelnyxHandler) Inbound(c iris.Context, gateway *Gateway) error {
 
 	numMedia := len(webhookPayload.Data.Payload.Media)
 
-	var files []MM4File
+	var files []MsgFile
 	if numMedia > 0 {
 		files, _ = fetchTelnyxMediaFiles(webhookPayload.Data.Payload.Media, messageID, logf)
 	}
 
 	// Handle MMS if media files are present
 	if numMedia > 0 && len(files) > 0 {
-		mm4Message := createMM4Message(from, to, body, messageID, files)
+		msg := MsgQueueItem{
+			To:                to,
+			From:              from,
+			ReceivedTimestamp: time.Now(),
+			Type:              MsgQueueItemType.MMS,
+			Files:             files,
+			SkipNumberCheck:   false,
+			LogID:             transId,
+		}
 		logMMSReceived(logf, from, to, "", messageID, len(files))
 		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
+		h.gateway.Router.CarrierMsgChan <- msg
 	}
 
 	// Handle SMS if body is present
@@ -115,15 +124,12 @@ func (h *TelnyxHandler) Inbound(c iris.Context, gateway *Gateway) error {
 				To:                to,
 				From:              from,
 				ReceivedTimestamp: time.Now(),
-				QueuedTimestamp:   time.Time{},
 				Type:              MsgQueueItemType.SMS,
-				Files:             nil,
 				Message:           smsBody,
-				SkipNumberCheck:   false,
 				LogID:             transId,
 			}
 			logSMSReceived(logf, from, to, "", messageID, len(sms.Message))
-			//h.gateway.SMPPServer.msgToClientChannel <- sms
+			h.gateway.Router.CarrierMsgChan <- sms
 		}
 	}
 
@@ -168,8 +174,8 @@ type TelnyxMedia struct {
 }
 
 // fetchTelnyxMediaFiles retrieves media files from Telnyx webhook payload
-func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFormat) ([]MM4File, error) {
-	var files []MM4File
+func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFormat) ([]MsgFile, error) {
+	var files []MsgFile
 	for i, m := range media {
 		contentType := m.ContentType
 		mediaURL := m.URL
@@ -196,8 +202,8 @@ func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFo
 			continue
 		}
 
-		// Create the MM4File struct
-		file := MM4File{
+		// Create the MsgFile struct
+		file := MsgFile{
 			Filename:    filename,
 			ContentType: contentType,
 			Content:     contentBytes,
@@ -332,14 +338,14 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 }
 
 // SendMMS sends an MMS message via Telnyx API
-func (h *TelnyxHandler) SendMMS(mms *MM4Message) error {
+func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 	logf := LoggingFormat{
 		Type: LogType.Carrier + "_" + LogType.Outbound,
 	}
 
 	logf.AddField("carrier", "telnyx")
 	logf.AddField("type", "mms")
-	logf.AddField("logID", mms.logID)
+	logf.AddField("logID", mms.LogID)
 
 	// Construct the TelnyxMessage payload
 	message := TelnyxMessage{
@@ -449,12 +455,14 @@ func (h *TelnyxHandler) SendMMS(mms *MM4Message) error {
 }
 
 // uploadMediaAndGetURL uploads media to your server and returns a publicly accessible URL
-func (h *TelnyxHandler) uploadMediaAndGetURL(file MM4File) (string, error) {
+func (h *TelnyxHandler) uploadMediaAndGetURL(file MsgFile) (string, error) {
 	// Implement the logic to save the file to your storage (e.g., MongoDB, AWS S3)
 	// and return the accessible URL.
 
+	// todo readd this??
+
 	// Example using a hypothetical function saveBase64ToMongoDB
-	id, err := saveBase64ToMongoDB(h.gateway.MongoClient, file.Filename, string(file.Content), file.ContentType)
+	id, err := saveBase64ToMongoDB(h.gateway.MongoClient, file)
 	if err != nil {
 		return "", err
 	}

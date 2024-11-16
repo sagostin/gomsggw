@@ -82,6 +82,15 @@ func (router *Router) AddRoute(routeType, endpoint string, handler CarrierHandle
 	router.Routes = append(router.Routes, &Route{Type: routeType, Endpoint: endpoint, Handler: handler})
 }
 
+func (router *Router) findRouteByName(routeType, routeName string) *Route {
+	for _, route := range router.Routes {
+		if route.Type == routeType && route.Endpoint == routeName {
+			return route
+		}
+	}
+	return nil
+}
+
 func (router *Router) findClientByNumber(number string) (*Client, error) {
 	for _, client := range router.gateway.Clients {
 		for _, num := range client.Numbers {

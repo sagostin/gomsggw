@@ -29,11 +29,18 @@ type MsgQueueItem struct {
 	ReceivedTimestamp time.Time    `json:"received_timestamp"`
 	QueuedTimestamp   time.Time    `json:"queued_timestamp"`
 	Type              MsgQueueType `json:"type"`  // mms or sms
-	Files             []MediaFile  `json:"files"` // urls or encoded base64 strings
+	Files             []MsgFile    `json:"files"` // urls or encoded base64 strings
 	Message           string       `json:"message"`
 	SkipNumberCheck   bool
 	LogID             string `json:"log_id"`
 	Delivery          *amqp.Delivery
+}
+
+// MsgFile represents an individual file extracted from the MIME multipart message.
+type MsgFile struct {
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Content     []byte `json:"content,omitempty"`
 }
 
 // AMPQClient is the base struct for handling connection recovery, consumption, and publishing.

@@ -28,7 +28,7 @@ type BaseCarrierHandler struct {
 type CarrierHandler interface {
 	Inbound(c iris.Context, gateway *Gateway) error
 	SendSMS(sms *MsgQueueItem) error
-	SendMMS(sms *MM4Message) error
+	SendMMS(sms *MsgQueueItem) error
 	Name() string
 }
 

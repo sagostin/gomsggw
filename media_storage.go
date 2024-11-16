@@ -26,14 +26,14 @@ type MediaFile struct {
 }
 
 // SaveBase64ToMongoDB stores base64-encoded data as a document with a 7-day expiration
-func saveBase64ToMongoDB(client *mongo.Client, fileName string, base64Data string, contentType string) (string, error) {
+func saveBase64ToMongoDB(client *mongo.Client, file MsgFile) (string, error) {
 	collection := client.Database(DBName).Collection(CollectionName)
 
 	// Create the document with base64 data and expiration date
 	mediaFile := MediaFile{
-		FileName:    fileName,
-		ContentType: contentType,
-		Base64Data:  base64Data,
+		FileName:    file.Filename,
+		ContentType: file.ContentType,
+		Base64Data:  string(file.Content),
 		UploadAt:    time.Now(),
 		ExpiresAt:   time.Now().Add(TTLDuration), // Set expiration 7 days from now
 	}
@@ -41,7 +41,7 @@ func saveBase64ToMongoDB(client *mongo.Client, fileName string, base64Data strin
 	// Insert the document into the collection
 	result, err := collection.InsertOne(context.Background(), mediaFile)
 	if err != nil {
-		return "", fmt.Errorf("failed to insert media file to db: %s", fileName)
+		return "", fmt.Errorf("failed to insert media file to db: %s", file.Filename)
 	}
 
 	// Type assert the InsertedID to primitive.TransactionID
@@ -70,6 +70,30 @@ func getMediaFromMongoDB(client *mongo.Client, fileID string) (*MediaFile, error
 	}
 
 	return &mediaFile, nil
+}
+
+// GetMediaFromMongoDB retrieves a media file document from MongoDB
+func getMsgFileFromMongoDB(client *mongo.Client, fileID string) (*MsgFile, error) {
+	collection := client.Database(DBName).Collection(CollectionName)
+
+	hex, err := primitive.ObjectIDFromHex(fileID)
+	if err != nil {
+		return nil, err
+	}
+
+	var mediaFile MediaFile
+	err = collection.FindOne(context.Background(), bson.M{"_id": hex}).Decode(&mediaFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve media file: %s", fileID)
+	}
+
+	msgFile := MsgFile{
+		Filename:    mediaFile.FileName,
+		ContentType: mediaFile.ContentType,
+		Content:     []byte(mediaFile.Base64Data),
+	}
+
+	return &msgFile, nil
 }
 
 // DecodeBase64Media decodes the base64 media content into raw binary data

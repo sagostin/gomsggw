@@ -261,7 +261,7 @@ func (gateway *Gateway) webReloadClients(ctx iris.Context) {
 		clientMap[clients[i].Username] = &clients[i]
 	}
 
-	gateway.MM4Server.GatewayClients = clientMap
+	gateway.Clients = clientMap
 	//gateway.SMPPServer.connectedClients = clientMap
 
 	// Respond with 200 OK and a message

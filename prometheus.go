@@ -76,16 +76,17 @@ func (e *MetricExporter) collectClientStats(ch chan<- prometheus.Metric) {
 		totalNumbersSMPP += len(client.Numbers)
 	}
 
-	totalClientsMM4 := len(e.gateway.MM4Server.GatewayClients)
+	/*totalClientsMM4 := len(e.gateway.MM4Server.GatewayClients)
 	totalNumbersMM4 := 0
 	for _, client := range e.gateway.MM4Server.GatewayClients {
 		totalNumbersMM4 += len(client.Numbers)
-	}
+	}*/
 
 	ch <- prometheus.MustNewConstMetric(e.desc["client_stats"], prometheus.GaugeValue, float64(totalClientsSMPP), "SMPP", "total_clients")
 	ch <- prometheus.MustNewConstMetric(e.desc["client_stats"], prometheus.GaugeValue, float64(totalNumbersSMPP), "SMPP", "total_numbers")
-	ch <- prometheus.MustNewConstMetric(e.desc["client_stats"], prometheus.GaugeValue, float64(totalClientsMM4), "MM4", "total_clients")
+	/*ch <- prometheus.MustNewConstMetric(e.desc["client_stats"], prometheus.GaugeValue, float64(totalClientsMM4), "MM4", "total_clients")
 	ch <- prometheus.MustNewConstMetric(e.desc["client_stats"], prometheus.GaugeValue, float64(totalNumbersMM4), "MM4", "total_numbers")
+	*/
 }
 
 // collectMessageMetrics gathers retry and message sent metrics for both SMPP and MM4.

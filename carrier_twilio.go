@@ -52,8 +52,8 @@ func (h *TwilioHandler) Inbound(c iris.Context, gateway *Gateway) error {
 	}
 
 	// Common parameters
-	from := c.FormValue("To")
-	to := c.FormValue("From")
+	from := c.FormValue("From")
+	to := c.FormValue("To")
 	body := c.FormValue("Body")
 	messageSid := c.FormValue("MessageSid")
 	accountSid := c.FormValue("AccountSid")
@@ -61,7 +61,7 @@ func (h *TwilioHandler) Inbound(c iris.Context, gateway *Gateway) error {
 	logf.AddField("messageSid", messageSid)
 	logf.AddField("accountSid", accountSid)
 
-	var files []MM4File
+	var files []MsgFile
 
 	// Fetch media files if present
 	if numMedia > 0 {
@@ -74,10 +74,35 @@ func (h *TwilioHandler) Inbound(c iris.Context, gateway *Gateway) error {
 
 	// Handle MMS if media files are present
 	if numMedia > 0 && len(files) > 0 {
-		mm4Message := createMM4Message(from, to, body, messageSid, files)
-		logMMSReceived(logf, from, to, accountSid, messageSid, len(files))
-		mm4Message.logID = transId
-		//gateway.MM4Server.msgToClientChannel <- mm4Message
+		msg := MsgQueueItem{
+			To:                to,
+			From:              from,
+			ReceivedTimestamp: time.Now(),
+			Type:              MsgQueueItemType.MMS,
+			Files:             files,
+			SkipNumberCheck:   false,
+			LogID:             transId,
+		}
+		logMMSReceived(logf, from, to, "", messageSid, len(files))
+		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
+		h.gateway.Router.CarrierMsgChan <- msg
+	}
+
+	// Handle SMS if body is present
+	if strings.TrimSpace(body) != "" {
+		smsMessages := splitSMS(body, 140)
+		for _, smsBody := range smsMessages {
+			sms := MsgQueueItem{
+				To:                to,
+				From:              from,
+				ReceivedTimestamp: time.Now(),
+				Type:              MsgQueueItemType.SMS,
+				Message:           smsBody,
+				LogID:             transId,
+			}
+			logSMSReceived(logf, from, to, "", messageSid, len(sms.Message))
+			h.gateway.Router.CarrierMsgChan <- sms
+		}
 	}
 
 	// Handle SMS if body is present
@@ -116,9 +141,9 @@ func (h *TwilioHandler) Inbound(c iris.Context, gateway *Gateway) error {
 	return err
 }
 
-// fetchMediaFiles retrieves media files from Twilio and returns a slice of MM4File structs.
-func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string, logf LoggingFormat) ([]MM4File, error) {
-	var files []MM4File
+// fetchMediaFiles retrieves media files from Twilio and returns a slice of MsgFile structs.
+func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string, logf LoggingFormat) ([]MsgFile, error) {
+	var files []MsgFile
 
 	for i := 0; i < numMedia; i++ {
 		mediaURL := c.FormValue(fmt.Sprintf("MediaUrl%d", i))
@@ -186,8 +211,8 @@ func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string
 			continue
 		}
 
-		// Create the MM4File struct
-		file := MM4File{
+		// Create the MsgFile struct
+		file := MsgFile{
 			Filename:    filename,
 			ContentType: contentType,
 			Content:     contentBytes,
@@ -290,14 +315,14 @@ func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) error {
 	return nil
 }
 
-func (h *TwilioHandler) SendMMS(mms *MM4Message) error {
+func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 	logf := LoggingFormat{
 		Type: LogType.Carrier + "_" + LogType.Outbound,
 	}
 
 	logf.AddField("carrier", "twilio")
 	logf.AddField("type", "mms")
-	logf.AddField("logID", mms.logID)
+	logf.AddField("logID", mms.LogID)
 
 	params := &twilioApi.CreateMessageParams{}
 	// clean to & from
@@ -314,7 +339,7 @@ func (h *TwilioHandler) SendMMS(mms *MM4Message) error {
 				continue
 			}
 
-			id, err := saveBase64ToMongoDB(h.gateway.MongoClient, i.Filename, string(i.Content), i.ContentType)
+			id, err := saveBase64ToMongoDB(h.gateway.MongoClient, i)
 			if err != nil {
 				logf.Error = err
 				logf.Level = logrus.ErrorLevel

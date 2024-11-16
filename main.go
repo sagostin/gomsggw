@@ -47,9 +47,23 @@ func main() {
 
 	gateway.AMPQClient = ampqClient
 
+	err = loadCarriers(gateway)
+	if err != nil {
+		logf.Level = logrus.ErrorLevel
+		logf.Error = err
+		logf.Message = "failed to load carriers"
+		logf.Print()
+		os.Exit(1)
+	}
+
+	for _, c := range gateway.Carriers {
+		gateway.Router.AddRoute("carrier", c.Name(), c)
+	}
+
 	go gateway.Router.ClientRouter()
+	go gateway.Router.CarrierRouter()
 	go gateway.Router.ClientMsgConsumer()
-	//go gateway.Router.CarrierMsgConsumer()
+	go gateway.Router.CarrierMsgConsumer()
 
 	// todo start router
 

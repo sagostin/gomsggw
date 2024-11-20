@@ -1,106 +1,72 @@
 package main
 
 import (
-	"context"
-	"encoding/base64"
+	"errors"
 	"fmt"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
+	"gorm.io/gorm"
 	"time"
 )
 
 const (
-	DBName         = "gateway_data"
-	CollectionName = "media_files"
-	TTLDuration    = 7 * 24 * time.Hour // 7-day expiration
+	TTLDuration = 7 * 24 * time.Hour // 7-day expiration
 )
 
 type MediaFile struct {
-	ID          string    `json:"id,omitempty" bson:"_id,omitempty"`
-	FileName    string    `json:"file_name" bson:"file_name"`
-	ContentType string    `json:"content_type" bson:"content_type"`
-	Base64Data  string    `json:"base64_data" bson:"base64_data"`
-	UploadAt    time.Time `json:"upload_at" bson:"upload_at"`
-	ExpiresAt   time.Time `json:"expires_at" bson:"expires_at"` // TTL expiration field
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	FileName    string    `json:"file_name"`
+	ContentType string    `json:"content_type"`
+	Base64Data  string    `json:"base64_data"`
+	UploadAt    time.Time `json:"upload_at"`
+	ExpiresAt   time.Time `gorm:"index" json:"expires_at"`
 }
 
-// SaveBase64ToMongoDB stores base64-encoded data as a document with a 7-day expiration
-func saveBase64ToMongoDB(client *mongo.Client, file MsgFile) (string, error) {
-	collection := client.Database(DBName).Collection(CollectionName)
+func (gateway *Gateway) cleanUpExpiredMediaFiles() {
+	ticker := time.NewTicker(24 * time.Hour) // Adjust the interval as needed
+	defer ticker.Stop()
 
-	// Create the document with base64 data and expiration date
+	for {
+		select {
+		case <-ticker.C:
+			err := gateway.DB.Where("expires_at < ?", time.Now()).Delete(&MediaFile{}).Error
+			if err != nil {
+				// Log the error
+				fmt.Printf("Failed to clean up expired media files: %v\n", err)
+			}
+		}
+	}
+}
+
+func (gateway *Gateway) saveMsgFileMedia(file MsgFile) (uint, error) {
 	mediaFile := MediaFile{
 		FileName:    file.Filename,
 		ContentType: file.ContentType,
 		Base64Data:  string(file.Content),
 		UploadAt:    time.Now(),
-		ExpiresAt:   time.Now().Add(TTLDuration), // Set expiration 7 days from now
+		ExpiresAt:   time.Now().Add(TTLDuration),
 	}
 
-	// Insert the document into the collection
-	result, err := collection.InsertOne(context.Background(), mediaFile)
-	if err != nil {
-		return "", fmt.Errorf("failed to insert media file to db: %s", file.Filename)
+	if err := gateway.DB.Create(&mediaFile).Error; err != nil {
+		return 0, fmt.Errorf("failed to insert media file to db: %v", err)
 	}
 
-	// Type assert the InsertedID to primitive.TransactionID
-	insertedID, ok := result.InsertedID.(primitive.ObjectID)
-	if !ok {
-		return "", fmt.Errorf("failed to convert inserted id: %s", insertedID)
-	}
-
-	// Get the hexadecimal string representation of the TransactionID
-	return insertedID.Hex(), nil
+	return mediaFile.ID, nil
 }
 
-// GetMediaFromMongoDB retrieves a media file document from MongoDB
-func getMediaFromMongoDB(client *mongo.Client, fileID string) (*MediaFile, error) {
-	collection := client.Database(DBName).Collection(CollectionName)
-
-	hex, err := primitive.ObjectIDFromHex(fileID)
-	if err != nil {
-		return nil, err
+func (gateway *Gateway) getMediaFile(fileID uint) (*MediaFile, error) {
+	var mediaFile MediaFile
+	if err := gateway.DB.First(&mediaFile, fileID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, fmt.Errorf("media file not found: %d", fileID)
+		}
+		return nil, fmt.Errorf("failed to retrieve media file: %v", err)
 	}
 
-	var mediaFile MediaFile
-	err = collection.FindOne(context.Background(), bson.M{"_id": hex}).Decode(&mediaFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve media file: %s", fileID)
+	// Check if the media file has expired
+	if time.Now().After(mediaFile.ExpiresAt) {
+		// Optionally delete the expired media file
+		gateway.DB.Delete(&mediaFile)
+		return nil, fmt.Errorf("media file has expired: %d", fileID)
 	}
 
 	return &mediaFile, nil
-}
-
-// GetMediaFromMongoDB retrieves a media file document from MongoDB
-func getMsgFileFromMongoDB(client *mongo.Client, fileID string) (*MsgFile, error) {
-	collection := client.Database(DBName).Collection(CollectionName)
-
-	hex, err := primitive.ObjectIDFromHex(fileID)
-	if err != nil {
-		return nil, err
-	}
-
-	var mediaFile MediaFile
-	err = collection.FindOne(context.Background(), bson.M{"_id": hex}).Decode(&mediaFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to retrieve media file: %s", fileID)
-	}
-
-	msgFile := MsgFile{
-		Filename:    mediaFile.FileName,
-		ContentType: mediaFile.ContentType,
-		Content:     []byte(mediaFile.Base64Data),
-	}
-
-	return &msgFile, nil
-}
-
-// DecodeBase64Media decodes the base64 media content into raw binary data
-func decodeBase64Media(base64Data string) ([]byte, error) {
-	data, err := base64.StdEncoding.DecodeString(base64Data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode base64 data: %v", err)
-	}
-	return data, nil
 }

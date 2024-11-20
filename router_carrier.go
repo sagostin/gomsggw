@@ -159,7 +159,7 @@ func (router *Router) CarrierRouter() {
 						if msg.Delivery != nil {
 							err := msg.Delivery.Reject(true)
 							if err != nil {
-								return
+								continue
 							}
 						}
 						continue

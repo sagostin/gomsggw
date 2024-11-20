@@ -6,6 +6,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -130,7 +131,7 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 	inboundRoute, exists := gateway.Carriers[carrier]
 	if exists {
 		// Call the Inbound method of the carrier handler
-		err := inboundRoute.Inbound(ctx, gateway)
+		err := inboundRoute.Inbound(ctx)
 		if err != nil {
 			// Log the error
 			logf := LoggingFormat{
@@ -168,7 +169,8 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	// Extract the 'id' parameter from the URL
 	fileID := ctx.Params().Get("id")
-	if fileID == "" {
+	id, err := strconv.ParseInt(fileID, 10, 64)
+	if fileID == "" || err != nil {
 		// Log the error
 		logf := LoggingFormat{
 			Type: LogType.Carrier + "_" + LogType.Inbound,
@@ -185,7 +187,7 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	}
 
 	// Retrieve the media file from MongoDB
-	mediaFile, err := getMediaFromMongoDB(gateway.MongoClient, fileID)
+	mediaFile, err := gateway.getMediaFile(uint(id))
 	if err != nil {
 		// Log the error
 		logf := LoggingFormat{
@@ -239,7 +241,50 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	ctx.Write(fileBytes)
 }
 
-func (gateway *Gateway) webReloadClients(ctx iris.Context) {
+func (gateway *Gateway) webReloadData(ctx iris.Context) {
+	if err := gateway.reloadClientsAndNumbers(); err != nil {
+		ctx.StatusCode(500)
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+	ctx.JSON(iris.Map{"status": "Data reloaded successfully"})
+}
+
+func (gateway *Gateway) webAddClient(ctx iris.Context) {
+	var client Client
+	if err := ctx.ReadJSON(&client); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(iris.Map{"error": "Invalid client data"})
+		return
+	}
+
+	if err := gateway.addClient(&client); err != nil {
+		ctx.StatusCode(500)
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(iris.Map{"status": "Client added successfully", "client": client})
+}
+
+func (gateway *Gateway) webAddNumber(ctx iris.Context) {
+	var number ClientNumber
+	if err := ctx.ReadJSON(&number); err != nil {
+		ctx.StatusCode(400)
+		ctx.JSON(iris.Map{"error": "Invalid number data"})
+		return
+	}
+
+	if err := gateway.addNumber(&number); err != nil {
+		ctx.StatusCode(500)
+		ctx.JSON(iris.Map{"error": err.Error()})
+		return
+	}
+
+	ctx.JSON(iris.Map{"status": "Number added successfully", "number": number})
+}
+
+/*func (gateway *Gateway) webReloadClients(ctx iris.Context) {
 	// Log the successful access
 	logf := LoggingFormat{
 		Type:    "reload_clients",
@@ -267,7 +312,7 @@ func (gateway *Gateway) webReloadClients(ctx iris.Context) {
 	// Respond with 200 OK and a message
 	ctx.StatusCode(http.StatusOK)
 	ctx.WriteString("Access Granted: 200 OK")
-}
+}*/
 
 func webHealthCheck(ctx iris.Context) {
 	// Log the successful access

@@ -38,7 +38,7 @@ func (router *Router) ClientMsgConsumer() {
 			}
 			msgQueueItem.Delivery = &delivery
 
-			client.logger.Printf("Received message (%v) from %s", delivery.DeliveryTag, delivery.Body)
+			//client.logger.Printf("Received message (%v) from %s", delivery.DeliveryTag, delivery.Body)
 
 			router.ClientMsgChan <- msgQueueItem
 			// todo only ack if was successful??
@@ -67,7 +67,7 @@ func (router *Router) CarrierMsgConsumer() {
 			}
 			msgQueueItem.Delivery = &delivery
 
-			client.logger.Printf("Received message (%v) from carrier %s", delivery.DeliveryTag, delivery.Body)
+			//client.logger.Printf("Received message (%v) from carrier %s", delivery.DeliveryTag, delivery.Body)
 
 			router.CarrierMsgChan <- msgQueueItem
 			// todo only ack if was successful??

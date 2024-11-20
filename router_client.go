@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/sirupsen/logrus"
 )
 
 // ClientRouter starts the router that handles inbound and outbound from the sms and mms servers
@@ -20,9 +19,6 @@ func (router *Router) ClientRouter() {
 				session, err := router.gateway.SMPPServer.findSmppSession(msg.To)
 				if err != nil {
 					if msg.Delivery != nil {
-						logf.Level = logrus.WarnLevel
-						logf.Error = fmt.Errorf("rejected message due to session being unavailable")
-						logf.Print()
 						err := msg.Delivery.Reject(true)
 						if err != nil {
 							continue
@@ -36,9 +32,6 @@ func (router *Router) ClientRouter() {
 						err = router.gateway.AMPQClient.Publish("client", marshal)
 						continue
 					}
-					logf.Level = logrus.ErrorLevel
-					logf.Error = fmt.Errorf("error finding SMPP session: %v", err)
-					logf.Print()
 					// todo maybe to add to queue via postgres?
 					continue
 				}
@@ -104,9 +97,6 @@ func (router *Router) ClientRouter() {
 				err := router.gateway.MM4Server.sendMM4(msg)
 				if err != nil {
 					if msg.Delivery != nil {
-						logf.Level = logrus.WarnLevel
-						logf.Error = fmt.Errorf("unable to send to mm4 client")
-						logf.Print()
 						err := msg.Delivery.Reject(true)
 						if err != nil {
 							continue
@@ -120,9 +110,6 @@ func (router *Router) ClientRouter() {
 						err = router.gateway.AMPQClient.Publish("client", marshal)
 						continue
 					}
-					logf.Level = logrus.ErrorLevel
-					logf.Error = fmt.Errorf("error finding SMPP session, adding to queue: %v", err)
-					logf.Print()
 					// todo maybe to add to queue via postgres?
 					continue
 				}
@@ -160,9 +147,6 @@ func (router *Router) ClientRouter() {
 			logf.Error = fmt.Errorf("unable to send")
 			logf.Print()
 			if msg.Delivery != nil {
-				logf.Level = logrus.WarnLevel
-				logf.Error = fmt.Errorf("unable to send to mm4 client")
-				logf.Print()
 				err := msg.Delivery.Reject(true)
 				if err != nil {
 					continue

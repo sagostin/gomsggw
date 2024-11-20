@@ -41,6 +41,7 @@ type MsgFile struct {
 	Filename    string `json:"filename,omitempty"`
 	ContentType string `json:"content_type,omitempty"`
 	Content     []byte `json:"content,omitempty"`
+	Base64Data  string `json:"base64_data,omitempty"`
 }
 
 // AMPQClient is the base struct for handling connection recovery, consumption, and publishing.

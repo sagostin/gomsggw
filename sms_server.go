@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 	"zultys-smpp-mm4/smpp"
+	"zultys-smpp-mm4/smpp/coding"
 	"zultys-smpp-mm4/smpp/pdu"
 )
 
@@ -164,10 +165,6 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 	// server (mm4/smpp), success/failed (err), userid, ip
 	// Authentication
 
-	/*logf.Level = logrus.WarnLevel
-	logf.Message = fmt.Sprintf("received bind request: %T", bindReq)
-	logf.Print()*/
-
 	username := bindReq.SystemID
 	password := bindReq.Password
 
@@ -183,7 +180,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		return
 	}
 
-	authed, err := authClient(username, password, h.server.gateway.Clients)
+	authed, err := h.server.gateway.authClient(username, password)
 	if err != nil {
 		logf.Level = logrus.WarnLevel
 		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "unable to authenticate", username, ip)
@@ -249,12 +246,21 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
+	bestCoding := coding.BestSafeCoding(string(submitSM.Message.Message))
+
+	// todo fix this make better??
+	if bestCoding == coding.GSM7BitCoding {
+		bestCoding = coding.ASCIICoding
+	}
+
+	encodedMsg, _ := bestCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+
 	msgQueueItem := MsgQueueItem{
 		To:                submitSM.DestAddr.String(),
 		From:              submitSM.SourceAddr.String(),
 		ReceivedTimestamp: time.Now(),
 		Type:              MsgQueueItemType.SMS,
-		Message:           string(submitSM.Message.Message),
+		Message:           encodedMsg,
 		SkipNumberCheck:   false,
 		LogID:             transId,
 	}
@@ -279,25 +285,6 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}
 }
 
-// here
-/*func (srv *SMPPServer) findRoute(source, destination string) *Route {
-	client, _ := srv.findClientByNumber(destination)
-	if client != nil {
-		return &Route{Type: "smpp", Endpoint: client.Username}
-	}
-
-	carrier, _ := srv.clientOutboundCarrier(source)
-	if carrier != "" {
-		for _, route := range srv.routing.Routes {
-			if route.Type == "carrier" && route.Endpoint == carrier {
-				return route
-			}
-		}
-	}
-
-	return nil
-}*/
-
 func (srv *SMPPServer) clientInboundConn(destination string) (*smpp.Session, error) {
 
 	for _, client := range srv.gateway.Clients {
@@ -314,10 +301,6 @@ func (srv *SMPPServer) clientInboundConn(destination string) (*smpp.Session, err
 
 func (h *SimpleHandler) handleDeliverSM(session *smpp.Session, deliverSM *pdu.DeliverSM) {
 	logf := LoggingFormat{Type: "handleDeliverSM"}
-	/*
-		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("Received DeliverSM: To=%s, From=%s", deliverSM.SourceAddr, deliverSM.DestAddr)
-		logf.Print()*/
 
 	resp := deliverSM.Resp()
 	err := session.Send(resp)
@@ -381,80 +364,63 @@ func (srv *SMPPServer) sendSMPP(msg MsgQueueItem) error {
 
 		// todo postgresql queue system?
 
-		// Enqueue the message for later delivery
-		/*enqueueErr := EnqueueSMS(context.Background(), srv.smsQueueCollection, msg)
-		if enqueueErr != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Error = fmt.Errorf("failed to enqueue SMS (logID: %s): %v", msg.LogID, enqueueErr)
-			logf.Print()
-		}*/
-
 		return logf.Error
 	}
-
-	// Find the client (source systemID) from the destination number
-	/*source, err := srv.findClientByNumber(msg.To)
-	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = err
-		logf.Print()
-
-		// Notify the send failure channel with the client's username
-		// srv.reconnectChannel <- "unknown_client"
-
-		// Enqueue the message for later delivery
-		enqueueErr := EnqueueSMS(context.Background(), srv.smsQueueCollection, msg)
-		if enqueueErr != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Failed to enqueue SMS (logID: %s): %v", msg.LogID, enqueueErr)
-			logf.Print()
-		}
-
-		return logf.Error
-	}*/
 
 	// Generate the next sequence number for the PDU
 	nextSeq := session.NextSequence
 
-	cleanedContent := ValidateAndCleanSMS(msg.Message)
+	// cleanedContent := ValidateAndCleanSMS(msg.Message)
 
 	// todo split messages here?
 
-	// Create the DeliverSM PDU with your specified values
-	submitSM := &pdu.DeliverSM{
-		SourceAddr: pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
-		DestAddr:   pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
-		Message:    pdu.ShortMessage{Message: []byte(cleanedContent)},
-		RegisteredDelivery: pdu.RegisteredDelivery{
-			MCDeliveryReceipt: 1,
-		},
-		Header: pdu.Header{
-			Sequence: nextSeq(),
-		},
+	limit := 134
+	bestCoding := coding.BestSafeCoding(msg.Message)
+
+	segments := make([]string, 0)
+
+	if bestCoding == coding.GSM7BitCoding {
+		bestCoding = coding.ASCIICoding
+	}
+	splitter := bestCoding.Splitter()
+
+	if splitter != nil {
+		segments = splitter.Split(msg.Message, limit)
+	} else {
+		segments = []string{msg.Message}
 	}
 
-	// Attempt to send the PDU
-	err = session.Send(submitSM)
-	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = fmt.Errorf("error sending SubmitSM: %v", err)
-		logf.Print()
+	encoder := bestCoding.Encoding().NewEncoder()
 
-		// Notify the send failure channel with the client's username
-		// srv.reconnectChannel <- source.Username
+	for _, segment := range segments {
+		encoded, _ := encoder.Bytes([]byte(segment))
 
-		// Enqueue the message for later delivery
-		/*enqueueErr := EnqueueSMS(context.Background(), srv.smsQueueCollection, msg)
-		if enqueueErr != nil {
+		// Create the DeliverSM PDU with your specified values
+		submitSM := &pdu.DeliverSM{
+			SourceAddr: pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
+			DestAddr:   pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
+			Message:    pdu.ShortMessage{Message: encoded, DataCoding: bestCoding}, // todo fix encoding
+			RegisteredDelivery: pdu.RegisteredDelivery{
+				MCDeliveryReceipt: 1,
+			},
+			Header: pdu.Header{
+				Sequence: nextSeq(),
+			},
+		}
+
+		// Attempt to send the PDU
+		err = session.Send(submitSM)
+		if err != nil {
 			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Failed to enqueue SMS (logID: %s): %v", msg.LogID, enqueueErr)
+			logf.Error = fmt.Errorf("error sending SubmitSM: %v", err)
 			logf.Print()
-		}*/
-		return logf.Error
-	} else {
-		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", "", msg.From, msg.To)
-		logf.Print()
+
+			return logf.Error
+		} else {
+			logf.Level = logrus.InfoLevel
+			logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", "", msg.From, msg.To)
+			logf.Print()
+		}
 	}
 	return nil
 }

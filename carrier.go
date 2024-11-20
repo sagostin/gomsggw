@@ -26,7 +26,7 @@ type BaseCarrierHandler struct {
 
 // CarrierHandler interface for different carrier handlers
 type CarrierHandler interface {
-	Inbound(c iris.Context, gateway *Gateway) error
+	Inbound(c iris.Context) error
 	SendSMS(sms *MsgQueueItem) error
 	SendMMS(sms *MsgQueueItem) error
 	Name() string

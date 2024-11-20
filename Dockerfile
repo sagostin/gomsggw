@@ -30,7 +30,7 @@ WORKDIR /app
 COPY --from=builder /app/main .
 
 # Copy the .env and carriers.json files
-COPY .env carriers.json ./
+COPY .env clients.json ./
 
 # Use the non-root user
 USER appuser

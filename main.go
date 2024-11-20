@@ -6,6 +6,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 )
 
@@ -18,6 +20,13 @@ func main() {
 		logf.Level = logrus.ErrorLevel
 		logf.Error = err
 	}
+
+	go func() {
+		err := http.ListenAndServe(os.Getenv("PPROF_LISTEN"), nil)
+		if err != nil {
+			return
+		}
+	}()
 
 	app := iris.New()
 
@@ -67,30 +76,6 @@ func main() {
 
 	// todo start router
 
-	// Start consumers for inbound queues
-	/*go GenericConsumerHandler(client, "outbound_to_carrier")
-	go GenericConsumerHandler(client, "outbound_to_client")*/
-
-	// Simulate publishing messages
-	/*queueItem := MsgQueueItem{
-		To:                "17789070844", // support e.164??
-		From:              "12509796725", // support e.164??
-		ReceivedTimestamp: time.Now(),
-		QueuedTimestamp:   time.Now(),
-		Type:              "sms",
-		Files:             nil,
-		Message:           "Hello World!",
-	}
-
-	testMessage, _ := json.Marshal(queueItem)
-
-	go func() {
-		for {
-			ampqClient.Publish("client", testMessage)
-			time.Sleep(15 * time.Second)
-		}
-	}()*/
-
 	go func() {
 		smppServer, err := initSmppServer()
 		if err != nil {
@@ -109,7 +94,6 @@ func main() {
 	go func() {
 		mm4Server := &MM4Server{
 			Addr:    os.Getenv("MM4_LISTEN"),
-			mongo:   gateway.MongoClient,
 			routing: gateway.Router,
 		}
 		gateway.MM4Server = mm4Server
@@ -150,8 +134,12 @@ func main() {
 		webListen = "0.0.0.0:3000"
 	}
 
+	app.Post("/clients", basicAuthMiddleware, gateway.webAddClient)
+	app.Post("/numbers", basicAuthMiddleware, gateway.webAddNumber)
+	app.Get("/reload_data", basicAuthMiddleware, gateway.webReloadData)
+
 	// Define the /reload_clients route
-	app.Get("/reload_clients", basicAuthMiddleware, gateway.webReloadClients)
+	// app.Get("/reload_clients", basicAuthMiddleware, gateway.webReloadClients)
 
 	// Define the /media/{id} route
 	app.Get("/media/{id}", gateway.webMediaFile)

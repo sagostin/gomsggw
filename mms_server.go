@@ -488,22 +488,21 @@ func (s *Session) handleMM4Message() error {
 	}
 	// Existing header checks..
 
+	// todo IMPORTANT convert octet stream to other file?? uerm
+
 	// Parse MIME parts to extract files
-	if err := mm4Message.parseMIMEParts(); err != nil {
+	mm, err := mm4Message.parseMIMEParts()
+
+	if err != nil {
 		return fmt.Errorf("failed to parse MIME parts: %v", err)
 	}
 
-	// Save files to disk or process them as needed
-	/*if err := mm4Message.saveFiles(s.mongo); err != nil {
-		logrus.Errorf("Failed to save files: %v", err)
-	}*/
-
 	msgItem := MsgQueueItem{
-		To:                mm4Message.To,
-		From:              mm4Message.From,
+		To:                mm.To,
+		From:              mm.From,
 		ReceivedTimestamp: time.Now(),
 		Type:              MsgQueueItemType.MMS,
-		Files:             mm4Message.Files,
+		Files:             mm.Files,
 		LogID:             transId,
 	}
 
@@ -538,51 +537,23 @@ func (s *Session) handleMM4Message() error {
 	return nil
 }
 
-// mm4_server.go
-/*func (s *MM4Server) sendMM4Message(mm4Message *MM4Message) error {
-	// Determine the route based on MM4Message.Route
-	route := mm4Message.Route
-	if route == nil {
-		return fmt.Errorf("no route defined for MM4 message (LogID:)")
-	}
-
-	switch route.Type {
-	case "carrier":
-		// Implement carrier-specific sending logic
-		err := route.Handler.SendMMS(mm4Message)
-		if err != nil {
-			return fmt.Errorf("failed to send MM4 message via carrier: %v", err)
-		}
-	case "mm4":
-		// Send MM4 to another MM4 client
-		err := s.sendMM4(route.Endpoint, mm4Message)
-		if err != nil {
-			return fmt.Errorf("failed to send MM4 message to client: %v", err)
-		}
-	default:
-		return fmt.Errorf("unknown route type: %s", route.Type)
-	}
-
-	return nil
-}
-*/
 // parseMIMEParts parses the MIME multipart content to extract files.
-func (m *MM4Message) parseMIMEParts() error {
+func (m *MM4Message) parseMIMEParts() (*MM4Message, error) {
 	// Use the Headers to get the Msg-Type
 	contentType := m.Headers.Get("Content-Type")
 	if contentType == "" {
-		return fmt.Errorf("missing Content-Type header")
+		return nil, fmt.Errorf("missing Content-Type header")
 	}
 
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return fmt.Errorf("failed to parse Msg-Type: %v", err)
+		return nil, fmt.Errorf("failed to parse Msg-Type: %v", err)
 	}
 
 	if strings.HasPrefix(mediaType, "multipart/") {
 		boundary := params["boundary"]
 		if boundary == "" {
-			return fmt.Errorf("no boundary parameter in Msg-Type")
+			return nil, fmt.Errorf("no boundary parameter in Msg-Type")
 		}
 
 		// Create a multipart reader
@@ -593,13 +564,13 @@ func (m *MM4Message) parseMIMEParts() error {
 				break
 			}
 			if err != nil {
-				return fmt.Errorf("failed to read part: %v", err)
+				return nil, fmt.Errorf("failed to read part: %v", err)
 			}
 
 			// Read the part
 			var buf bytes.Buffer
 			if _, err := io.Copy(&buf, part); err != nil {
-				return fmt.Errorf("failed to read part content: %v", err)
+				return nil, fmt.Errorf("failed to read part content: %v", err)
 			}
 
 			// Create a MsgFile struct
@@ -621,14 +592,20 @@ func (m *MM4Message) parseMIMEParts() error {
 		m.Files = append(m.Files, file)
 	}
 
-	return nil
+	ff, err := m.processAndConvertFiles()
+	if err != nil {
+		return nil, err
+	}
+	m.Files = ff
+
+	return m, nil
 }
 
 /*// saveFiles saves each extracted file to disk.
 func (m *MM4Message) saveFiles(client *mongo.Client) error {
 	for _, file := range m.Files {
 		// Create the document with base64 data and expiration date
-		_, err := saveBase64ToMongoDB(client, file.Filename, string(file.Content), file.ContentType)
+		_, err := saveMsgFileMedia(client, file.Filename, string(file.Content), file.ContentType)
 		if err != nil {
 			return err
 		}

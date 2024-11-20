@@ -56,7 +56,7 @@ type TelnyxMessageData struct {
 }
 
 // Inbound handles incoming Telnyx webhooks for MMS and SMS messages.
-func (h *TelnyxHandler) Inbound(c iris.Context, gateway *Gateway) error {
+func (h *TelnyxHandler) Inbound(c iris.Context) error {
 	// Initialize logging with a unique transaction ID
 	transId := primitive.NewObjectID().Hex()
 	logf := LoggingFormat{
@@ -461,8 +461,8 @@ func (h *TelnyxHandler) uploadMediaAndGetURL(file MsgFile) (string, error) {
 
 	// todo readd this??
 
-	// Example using a hypothetical function saveBase64ToMongoDB
-	id, err := saveBase64ToMongoDB(h.gateway.MongoClient, file)
+	// Example using a hypothetical function saveMsgFileMedia
+	id, err := h.gateway.saveMsgFileMedia(file)
 	if err != nil {
 		return "", err
 	}

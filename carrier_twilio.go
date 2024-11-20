@@ -35,7 +35,7 @@ func NewTwilioHandler(gateway *Gateway) *TwilioHandler {
 }
 
 // Inbound handles incoming Twilio webhooks for MMS and SMS messages.
-func (h *TwilioHandler) Inbound(c iris.Context, gateway *Gateway) error {
+func (h *TwilioHandler) Inbound(c iris.Context) error {
 	// Initialize logging with a unique transaction ID
 	transId := primitive.NewObjectID().Hex()
 	logf := LoggingFormat{
@@ -339,14 +339,14 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 				continue
 			}
 
-			id, err := saveBase64ToMongoDB(h.gateway.MongoClient, i)
+			id, err := h.gateway.saveMsgFileMedia(i)
 			if err != nil {
 				logf.Error = err
 				logf.Level = logrus.ErrorLevel
 				return logf.ToError()
 			}
 
-			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+id)
+			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
 		}
 		params.MediaUrl = &mediaUrls
 	}

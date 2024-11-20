@@ -21,15 +21,12 @@ type ClientNumber struct {
 
 func (gateway *Gateway) migrateSchema() error {
 	if err := gateway.DB.AutoMigrate(&Client{}, &ClientNumber{}, &MediaFile{}); err != nil {
-		fmt.Printf("Schema migration failed: %v\n", err)
 		return err
 	}
 	err := gateway.createIndexes()
 	if err != nil {
-		fmt.Printf("Creating indexes failed: %v\n", err)
 		return err
 	}
-	fmt.Println("Schema migration completed successfully.")
 	return nil
 }
 

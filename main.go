@@ -5,42 +5,32 @@ import (
 	"github.com/kataras/iris/v12"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
-	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
 )
 
 func main() {
-	logf := LoggingFormat{Type: LogType.Startup}
-
 	// Load environment variables
 	err := godotenv.Load()
-	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = err
-	}
 
-	go func() {
-		err := http.ListenAndServe(os.Getenv("PPROF_LISTEN"), nil)
-		if err != nil {
-			return
-		}
-	}()
+	if os.Getenv("DEBUG") == "true" {
+		go func() {
+			err := http.ListenAndServe(os.Getenv("PPROF_LISTEN"), nil)
+			if err != nil {
+				return
+			}
+		}()
+	}
 
 	app := iris.New()
 
 	gateway, err := NewGateway()
 	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = err
-		logf.Message = "failed to create gateway"
-		logf.Print()
-		os.Exit(1)
+		panic(err)
 	}
+	// init log manager for startup
 
-	// Create a new RabbitMQ connection.
-	// Define RabbitMQ server URL.
 	amqpServerURL := os.Getenv("AMQP_SERVER_URL")
 	addr := amqpServerURL
 	// we don't need a from client because we directly place it in the to_carrier one
@@ -58,32 +48,28 @@ func main() {
 
 	err = loadCarriers(gateway)
 	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = err
-		logf.Message = "failed to load carriers"
-		logf.Print()
-		os.Exit(1)
+		panic(err)
 	}
 
 	for _, c := range gateway.Carriers {
 		gateway.Router.AddRoute("carrier", c.Name(), c)
 	}
 
-	go gateway.Router.ClientRouter()
-	go gateway.Router.CarrierRouter()
-	go gateway.Router.ClientMsgConsumer()
-	go gateway.Router.CarrierMsgConsumer()
-
-	// todo start router
-
 	go func() {
 		smppServer, err := initSmppServer()
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Error = err
-			logf.Message = "failed to create MM4 server"
-			logf.Print()
-			os.Exit(1)
+			var lm = gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"System.Startup.SMPP",
+				"GenericError",
+				logrus.ErrorLevel,
+				/*		map[string]interface{}{
+						"module": "Configuration",
+					},*/
+				nil,
+				err,
+			))
+			panic(err)
 		}
 		gateway.SMPPServer = smppServer
 		smppServer.gateway = gateway
@@ -101,11 +87,18 @@ func main() {
 
 		err := mm4Server.Start()
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Error = err
-			logf.Message = "failed to create MM4 server"
-			logf.Print()
-			os.Exit(1)
+			var lm = gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"System.Startup.MM4",
+				"GenericError",
+				logrus.ErrorLevel,
+				/*		map[string]interface{}{
+						"module": "Configuration",
+					},*/
+				nil,
+				err,
+			))
+			panic(err)
 		}
 	}()
 
@@ -121,12 +114,24 @@ func main() {
 
 	go func() {
 		if err := prometheusExporter.Start(); err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Error = err
-			logf.Message = "failed to start prometheus exporter"
-			logf.Print()
+			var lm = gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"System.Startup.Prometheus",
+				"GenericError",
+				logrus.ErrorLevel,
+				/*		map[string]interface{}{
+						"module": "Configuration",
+					},*/
+				nil,
+				err,
+			))
 		}
 	}()
+
+	go gateway.Router.ClientRouter()
+	go gateway.Router.CarrierRouter()
+	go gateway.Router.ClientMsgConsumer()
+	go gateway.Router.CarrierMsgConsumer()
 
 	// Start server
 	webListen := os.Getenv("WEB_LISTEN")
@@ -148,6 +153,16 @@ func main() {
 
 	err = app.Listen(webListen)
 	if err != nil {
-		log.Println(err)
+		var lm = gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"System.Startup.Web",
+			"GenericError",
+			logrus.ErrorLevel,
+			/*		map[string]interface{}{
+					"module": "Configuration",
+				},*/
+			nil,
+			err,
+		))
 	}
 }

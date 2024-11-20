@@ -25,8 +25,6 @@ type SMPPServer struct {
 }
 
 func (srv *SMPPServer) Start(gateway *Gateway) {
-	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Startup}
-
 	handler := NewSimpleHandler(gateway.SMPPServer)
 	smppListen := os.Getenv("SMPP_LISTEN")
 	if smppListen == "" {
@@ -38,17 +36,9 @@ func (srv *SMPPServer) Start(gateway *Gateway) {
 	/*srv.smsQueueCollection = gateway.MongoClient.Database(SMSQueueDBName).Collection(SMSQueueCollectionName)
 	 */
 	go func() {
-		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("starting SMPP server on %s", smppListen)
-		logf.Print()
-
 		err := smpp.ServeTCP(smppListen, handler, nil)
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("failed to start SMPP server on %s", smppListen)
-			logf.Error = err
-			logf.Print()
-			os.Exit(1)
+			panic(err)
 		}
 	}()
 	// Start processing the SMS queue
@@ -92,8 +82,6 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 }
 
 func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) {
-	logf := LoggingFormat{Type: LogType.SMPP}
-
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
 
@@ -104,10 +92,14 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 		case <-tick.C:
 			err := session.EnquireLink(ctx, 15*time.Second, 5*time.Second)
 			if err != nil {
-				logf.Error = err
-				logf.Level = logrus.ErrorLevel
-				logf.Message = "EnquireLink process ended"
-				logf.Print()
+				var lm = h.server.gateway.LogManager
+				lm.SendLog(lm.BuildLog(
+					"Server.SMPP.EnquireLink",
+					"SMPPEnquireLinkError",
+					logrus.ErrorLevel,
+					nil, err,
+				))
+
 				return
 			}
 		}
@@ -124,7 +116,7 @@ func (srv *SMPPServer) findAuthdSession(session *smpp.Session) error {
 }
 
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
-	logf := LoggingFormat{Type: LogType.SMPP}
+	var lm = h.server.gateway.LogManager
 
 	switch p := packet.(type) {
 	case *pdu.BindTransceiver:
@@ -132,11 +124,14 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	case *pdu.SubmitSM:
 		err := h.server.findAuthdSession(session)
 		if err != nil {
-			logf.Error = err
-			logf.Level = logrus.ErrorLevel
-			logf.Message = "received submitSM from invalid unauthenticated user"
-			logf.AddField("ip", session.Parent.RemoteAddr())
-			logf.Print()
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.HandlePDU",
+				"AuthError",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"ip": session.Parent.RemoteAddr(),
+				}, err,
+			))
 		}
 		h.handleSubmitSM(session, p)
 	case *pdu.DeliverSM:
@@ -146,45 +141,62 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	case pdu.Responsable:
 		err := session.Send(p.Resp())
 		if err != nil {
-			logf.Error = err
-			logf.Level = logrus.ErrorLevel
-			logf.Message = "error sending response to PDU"
-			logf.Print()
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.HandlePDU",
+				"SMPPResponsableError",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"ip": session.Parent.RemoteAddr(),
+				}, err,
+			))
 		}
 	default:
-		logf.Level = logrus.WarnLevel
-		logf.Message = fmt.Sprintf("received unhandled PDU: %T", p)
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandlePDU",
+			"SMPPUnhandledPDU",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip": session.Parent.RemoteAddr(),
+			}, p,
+		))
 	}
 }
 
 func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTransceiver) {
-	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Authentication}
-	logf.AddField("type", LogType.SMPP)
-
 	// server (mm4/smpp), success/failed (err), userid, ip
 	// Authentication
+
+	var lm = h.server.gateway.LogManager
 
 	username := bindReq.SystemID
 	password := bindReq.Password
 
 	ip, err := h.server.GetClientIP(session)
 
-	logf.AddField("systemID", username)
-	logf.AddField("ip", ip)
-
 	if username == "" || password == "" {
-		logf.Level = logrus.WarnLevel
-		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "invalid username or password", username, ip)
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleBind",
+			"AuthFailed",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip":       ip,
+				"username": username,
+			},
+		))
 		return
 	}
 
 	authed, err := h.server.gateway.authClient(username, password)
 	if err != nil {
-		logf.Level = logrus.WarnLevel
-		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "unable to authenticate", username, ip)
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleBind",
+			"AuthFailed",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip":       session.Parent.RemoteAddr(),
+				"username": username,
+			},
+		))
 		return
 	}
 
@@ -192,16 +204,26 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		resp := bindReq.Resp()
 		err = session.Send(resp)
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Error = err
-			logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "error sending bind req", username, ip)
-			logf.Print()
-			logf.Error = nil
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.HandleBind",
+				"SMPPPDUError",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"ip":       session.Parent.RemoteAddr(),
+					"username": username,
+				}, "BIND REQ",
+			))
 		}
 
-		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "success", username, ip)
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleBind",
+			"AuthSuccess",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip":       session.Parent.RemoteAddr(),
+				"username": username,
+			},
+		))
 
 		h.server.mu.Lock()
 		h.server.conns[username] = session
@@ -209,17 +231,20 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 
 		//h.server.reconnectChannel <- username
 	} else {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "failed to authenticate", username, ip)
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleBind",
+			"AuthFailed",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip":       session.Parent.RemoteAddr(),
+				"username": username,
+			},
+		))
 	}
 }
 
 func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.SubmitSM) {
 	transId := primitive.NewObjectID().Hex()
-	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Inbound + "_" + LogType.Endpoint}
-	logf.AddField("logID", transId)
-
 	// Find the client associated with this session
 	var client *Client
 	h.server.mu.RLock()
@@ -231,10 +256,17 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}
 	h.server.mu.RUnlock()
 
+	var lm = h.server.gateway.LogManager
+
 	if client == nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("unable to identify client for connection")
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleSubmitSM",
+			"SMPPFindSession",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip": session.Parent.RemoteAddr(),
+			},
+		))
 		return
 	}
 
@@ -265,23 +297,27 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		LogID:             transId,
 	}
 
-	logf.AddField("to", msgQueueItem.To)
+	/*logf.AddField("to", msgQueueItem.To)
 	logf.AddField("from", msgQueueItem.From)
-	logf.AddField("systemID", client.Username)
+	logf.AddField("systemID", client.Username)*/
 
 	// send to message queue?
 	h.server.gateway.Router.ClientMsgChan <- msgQueueItem
-	logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf("sending to message queue")
-	logf.Print()
+	/*	logf.Level = logrus.InfoLevel
+		logf.Message = fmt.Sprintf("sending to message queue")
+		logf.Print()*/
 
 	resp := submitSM.Resp()
 	err := session.Send(resp)
 	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("error sending SubmitSM response")
-		logf.Error = err
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleSubmitSM",
+			"SMPPPDUError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip": session.Parent.RemoteAddr(),
+			}, err,
+		))
 	}
 }
 
@@ -352,19 +388,10 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
 // On failure, it notifies via sendFailureChannel and enqueues the message.
 func (srv *SMPPServer) sendSMPP(msg MsgQueueItem) error {
-	logf := LoggingFormat{Type: LogType.SMPP + "_" + LogType.Outbound + "_" + LogType.Endpoint}
-	logf.AddField("logID", msg.LogID)
-
 	// Find the SMPP session associated with the destination number
 	session, err := srv.findSmppSession(msg.To)
 	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = fmt.Errorf("error finding SMPP session: %v", err)
-		logf.Print()
-
-		// todo postgresql queue system?
-
-		return logf.Error
+		return fmt.Errorf("error finding SMPP session: %v", err)
 	}
 
 	// Generate the next sequence number for the PDU
@@ -411,15 +438,7 @@ func (srv *SMPPServer) sendSMPP(msg MsgQueueItem) error {
 		// Attempt to send the PDU
 		err = session.Send(submitSM)
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Error = fmt.Errorf("error sending SubmitSM: %v", err)
-			logf.Print()
-
-			return logf.Error
-		} else {
-			logf.Level = logrus.InfoLevel
-			logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", "", msg.From, msg.To)
-			logf.Print()
+			return fmt.Errorf("error sending SubmitSM: %v", err)
 		}
 	}
 	return nil

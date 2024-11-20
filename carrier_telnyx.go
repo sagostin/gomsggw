@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"github.com/kataras/iris/v12"
 	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -57,25 +57,30 @@ type TelnyxMessageData struct {
 
 // Inbound handles incoming Telnyx webhooks for MMS and SMS messages.
 func (h *TelnyxHandler) Inbound(c iris.Context) error {
-	// Initialize logging with a unique transaction ID
-	transId := primitive.NewObjectID().Hex()
-	logf := LoggingFormat{
-		Type: LogType.Carrier + "_" + LogType.Inbound,
-	}
-	logf.AddField("logID", transId)
-	logf.AddField("carrier", "telnyx")
-
 	// Parse the Telnyx webhook JSON payload
 	var webhookPayload TelnyxWebhookPayload
 	if err := c.ReadBody(&webhookPayload); err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Failed to parse webhook payload: %v", err)
-		logf.Print()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.Inbound.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			nil,
+			err,
+		))
 		c.StatusCode(http.StatusBadRequest)
 		return nil
 	}
 
 	if len(webhookPayload.Data.Payload.To) <= 0 {
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.Inbound.Telnyx",
+			"CarrierNoDestinations",
+			logrus.ErrorLevel,
+			nil,
+		))
+
 		c.StatusCode(http.StatusBadRequest)
 		return nil
 	}
@@ -97,7 +102,12 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 
 	var files []MsgFile
 	if numMedia > 0 {
-		files, _ = fetchTelnyxMediaFiles(webhookPayload.Data.Payload.Media, messageID, logf)
+		ff := h.fetchTelnyxMediaFiles(webhookPayload.Data.Payload.Media, messageID)
+		if len(ff) <= 0 {
+			c.StatusCode(http.StatusBadRequest)
+			return nil
+		}
+		files = ff
 	}
 
 	// Handle MMS if media files are present
@@ -109,9 +119,8 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 			Type:              MsgQueueItemType.MMS,
 			Files:             files,
 			SkipNumberCheck:   false,
-			LogID:             transId,
+			LogID:             messageID,
 		}
-		logMMSReceived(logf, from, to, "", messageID, len(files))
 		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
 		h.gateway.Router.CarrierMsgChan <- msg
 	}
@@ -126,9 +135,8 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 				ReceivedTimestamp: time.Now(),
 				Type:              MsgQueueItemType.SMS,
 				Message:           smsBody,
-				LogID:             transId,
+				LogID:             messageID,
 			}
-			logSMSReceived(logf, from, to, "", messageID, len(sms.Message))
 			h.gateway.Router.CarrierMsgChan <- sms
 		}
 	}
@@ -174,17 +182,15 @@ type TelnyxMedia struct {
 }
 
 // fetchTelnyxMediaFiles retrieves media files from Telnyx webhook payload
-func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFormat) ([]MsgFile, error) {
+func (h *TelnyxHandler) fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string) []MsgFile {
 	var files []MsgFile
-	for i, m := range media {
+	for _, m := range media {
 		contentType := m.ContentType
 		mediaURL := m.URL
 
 		parts := strings.Split(contentType, "/")
 		if len(parts) != 2 {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Invalid MediaContentType%d: %s", i, contentType)
-			logf.Print()
+			// todo?
 			continue
 		}
 
@@ -195,10 +201,15 @@ func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFo
 		// Fetch the media content
 		contentBytes, err := fetchMediaContentTelnyx(mediaURL)
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Error fetching MediaUrl%d: %v", i, err)
-			logf.AddField("messageID", messageID)
-			logf.Print()
+			var lm = h.gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"Carrier.FetchMedia.Telnyx",
+				"CarrierFetchMediaError",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"logID": messageID,
+				}, mediaURL,
+			))
 			continue
 		}
 
@@ -210,7 +221,7 @@ func fetchTelnyxMediaFiles(media []TelnyxMedia, messageID string, logf LoggingFo
 		}
 		files = append(files, file)
 	}
-	return files, nil
+	return files
 }
 
 // fetchMediaContentTelnyx retrieves media content from Telnyx URL
@@ -219,13 +230,6 @@ func fetchMediaContentTelnyx(mediaURL string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// Telnyx may require Bearer token for media retrieval
-	/*apiKey := os.Getenv("TELNYX_API_KEY")
-	if apiKey == "" {
-		return nil, errors.NewMsgQueueClient("TELNYX_API_KEY not set")
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)*/
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -240,7 +244,7 @@ func fetchMediaContentTelnyx(mediaURL string) ([]byte, error) {
 
 	contentBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("Error reading media content: %w", err)
+		return nil, fmt.Errorf("error reading media content: %w", err)
 	}
 
 	return contentBytes, nil
@@ -248,13 +252,6 @@ func fetchMediaContentTelnyx(mediaURL string) ([]byte, error) {
 
 // SendSMS sends an SMS message via Telnyx API
 func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
-	logf := LoggingFormat{
-		Type: LogType.Carrier + "_" + LogType.Outbound,
-	}
-	logf.AddField("carrier", "telnyx")
-	logf.AddField("type", "sms")
-	logf.AddField("logID", sms.LogID)
-
 	// Construct the TelnyxMessage payload
 	message := TelnyxMessage{
 		From: sms.From,
@@ -267,20 +264,30 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 	// Serialize to JSON
 	payloadBytes, err := json.Marshal(message)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to marshal SMS payload"
-		logf.Print()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendSMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": sms.LogID,
+			}, err,
+		))
 		return err
 	}
 
 	// Create HTTP request
 	req, err := http.NewRequest("POST", "https://api.telnyx.com/v2/messages", bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to create HTTP request for SendSMS"
-		logf.Print()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendSMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": sms.LogID,
+			}, err,
+		))
 		return err
 	}
 
@@ -292,10 +299,15 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "HTTP request failed for SendSMS"
-		logf.Print()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendSMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": sms.LogID,
+			}, err,
+		))
 		return err
 	}
 	defer resp.Body.Close()
@@ -303,50 +315,58 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 	// Read and parse response
 	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to read response body for SendSMS"
-		logf.Print()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendSMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": sms.LogID,
+			}, err,
+		))
 		return err
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Non-OK HTTP status for SendSMS: %s, Response: %s", resp.Status, string(bodyBytes))
-		logf.Print()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendSMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": sms.LogID,
+			}, err,
+		))
 		return errors.New("failed to send SMS via Telnyx")
 	}
 
 	// Optionally, parse the response to get message ID
 	var telnyxResp TelnyxResponse
 	if err := json.Unmarshal(bodyBytes, &telnyxResp); err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to parse Telnyx SendSMS response"
-		logf.Print()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendSMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": sms.LogID,
+			}, err,
+		))
 		return err
 	}
 
-	logf.Level = logrus.InfoLevel
+	/*logf.Level = logrus.InfoLevel
 	logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", "telnyx", sms.From, sms.To)
 	logf.AddField("telnyxMessageID", telnyxResp.Data.ID)
 	logf.AddField("from", sms.From)
 	logf.AddField("to", sms.To)
-	logf.Print()
+	logf.Print()*/
 
 	return nil
 }
 
 // SendMMS sends an MMS message via Telnyx API
 func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
-	logf := LoggingFormat{
-		Type: LogType.Carrier + "_" + LogType.Outbound,
-	}
-
-	logf.AddField("carrier", "telnyx")
-	logf.AddField("type", "mms")
-	logf.AddField("logID", mms.LogID)
-
 	// Construct the TelnyxMessage payload
 	message := TelnyxMessage{
 		From: mms.From,
@@ -356,23 +376,31 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 		MediaUrls: []string{},
 	}
 
-	// Add media URLs
+	var mediaUrls []string
+
 	if len(mms.Files) > 0 {
-		for _, file := range mms.Files {
-			if strings.Contains(file.ContentType, "application/smil") {
+		for _, i := range mms.Files {
+			if strings.Contains(i.ContentType, "application/smil") {
 				continue
 			}
 
-			// Assume you have a function to upload media and get a publicly accessible URL
-			mediaURL, err := h.uploadMediaAndGetURL(file)
+			id, err := h.gateway.saveMsgFileMedia(i)
 			if err != nil {
-				logf.Level = logrus.ErrorLevel
-				logf.Message = fmt.Sprintf("Failed to upload media: %v", err)
-				logf.Print()
-				continue
+				var lm = h.gateway.LogManager
+				lm.SendLog(lm.BuildLog(
+					"Carrier.SendMMS.Telnyx",
+					"SaveMediaError",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"logID": mms.LogID,
+					}, err,
+				))
+				return err
 			}
-			message.MediaUrls = append(message.MediaUrls, mediaURL)
+
+			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
 		}
+		message.MediaUrls = mediaUrls
 	}
 
 	// Optionally, set MessagingProfileID if sending alphanumeric messages
@@ -384,20 +412,12 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 	// Serialize to JSON
 	payloadBytes, err := json.Marshal(message)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to marshal MMS payload"
-		logf.Print()
 		return err
 	}
 
 	// Create HTTP request
 	req, err := http.NewRequest("POST", "https://api.telnyx.com/v2/messages", bytes.NewBuffer(payloadBytes))
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to create HTTP request for SendMMS"
-		logf.Print()
 		return err
 	}
 
@@ -409,10 +429,15 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "HTTP request failed for SendMMS"
-		logf.Print()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendMMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": mms.LogID,
+			}, err,
+		))
 		return err
 	}
 	defer resp.Body.Close()
@@ -420,52 +445,23 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 	// Read and parse response
 	bodyBytes, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to read response body for SendMMS"
-		logf.Print()
-		return err
+		return errors.New("failed to read response from Telnyx")
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("Non-OK HTTP status for SendMMS: %s, Response: %s", resp.Status, string(bodyBytes))
-		logf.Print()
 		return errors.New("failed to send MMS via Telnyx")
 	}
 
 	// Optionally, parse the response to get message ID
 	var telnyxResp TelnyxResponse
 	if err := json.Unmarshal(bodyBytes, &telnyxResp); err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to parse Telnyx SendMMS response"
-		logf.Print()
 		return err
 	}
 
-	logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", "telnyx", mms.From, mms.To)
-	logf.AddField("telnyxMessageID", telnyxResp.Data.ID)
+	/*logf.AddField("telnyxMessageID", telnyxResp.Data.ID)
 	logf.AddField("from", mms.From)
 	logf.AddField("to", mms.To)
-	logf.Print()
+	logf.Print()*/
 
 	return nil
-}
-
-// uploadMediaAndGetURL uploads media to your server and returns a publicly accessible URL
-func (h *TelnyxHandler) uploadMediaAndGetURL(file MsgFile) (string, error) {
-	// Implement the logic to save the file to your storage (e.g., MongoDB, AWS S3)
-	// and return the accessible URL.
-
-	// todo readd this??
-
-	// Example using a hypothetical function saveMsgFileMedia
-	id, err := h.gateway.saveMsgFileMedia(file)
-	if err != nil {
-		return "", err
-	}
-
-	return fmt.Sprintf("%s/media/%s", os.Getenv("SERVER_ADDRESS"), id), nil
 }

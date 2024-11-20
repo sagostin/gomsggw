@@ -19,6 +19,7 @@ type Gateway struct {
 	AMPQClient *AMPQClient
 	Clients    map[string]*Client
 	Numbers    map[string]*ClientNumber
+	LogManager *LogManager
 	mu         sync.RWMutex
 }
 
@@ -43,7 +44,7 @@ func getPostgresDSN() string {
 
 	timeZone := os.Getenv("POSTGRES_TIMEZONE")
 	if timeZone == "" {
-		timeZone = "UTC"
+		timeZone = "America/Vancouver"
 	}
 
 	dsn := fmt.Sprintf(
@@ -77,6 +78,13 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	gateway.Router.gateway = gateway
+
+	// Initialize Loki Client and Log Manager
+	lokiClient := NewLokiClient(os.Getenv("LOKI_URL"), os.Getenv("LOKI_USERNAME"), os.Getenv("LOKI_PASSWORD"))
+	logManager := NewLogManager(lokiClient)
+	// Define Templates
+	logManager.LoadTemplates()
+	gateway.LogManager = logManager
 
 	// Migrate the schema
 	if err := gateway.migrateSchema(); err != nil {

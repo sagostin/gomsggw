@@ -38,11 +38,6 @@ func NewTwilioHandler(gateway *Gateway) *TwilioHandler {
 func (h *TwilioHandler) Inbound(c iris.Context) error {
 	// Initialize logging with a unique transaction ID
 	transId := primitive.NewObjectID().Hex()
-	logf := LoggingFormat{
-		Type: LogType.Carrier + "_" + LogType.Inbound,
-	}
-	logf.AddField("logID", transId)
-	logf.AddField("carrier", "twilio")
 
 	// Parse the number of media items
 	numMediaStr := c.FormValue("NumMedia")
@@ -58,18 +53,16 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 	messageSid := c.FormValue("MessageSid")
 	accountSid := c.FormValue("AccountSid")
 
-	logf.AddField("messageSid", messageSid)
-	logf.AddField("accountSid", accountSid)
-
 	var files []MsgFile
 
 	// Fetch media files if present
 	if numMedia > 0 {
-		files, err = fetchMediaFiles(c, numMedia, accountSid, messageSid, logf)
-		if err != nil {
-			// Error already logged in fetchMediaFiles
-			// Proceed to handle SMS if body is present
+		ff := h.fetchMediaFiles(c, numMedia, accountSid, messageSid)
+		if len(ff) <= 0 {
+			c.StatusCode(http.StatusBadRequest)
+			return nil
 		}
+		files = ff
 	}
 
 	// Handle MMS if media files are present
@@ -83,7 +76,6 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 			SkipNumberCheck:   false,
 			LogID:             transId,
 		}
-		logMMSReceived(logf, from, to, "", messageSid, len(files))
 		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
 		h.gateway.Router.CarrierMsgChan <- msg
 	}
@@ -100,29 +92,7 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 				Message:           smsBody,
 				LogID:             transId,
 			}
-			logSMSReceived(logf, from, to, "", messageSid, len(sms.Message))
 			h.gateway.Router.CarrierMsgChan <- sms
-		}
-	}
-
-	// Handle SMS if body is present
-	if strings.TrimSpace(body) != "" {
-		smsMessages := splitSMS(body, 140)
-		for _, smsBody := range smsMessages {
-			sms := MsgQueueItem{
-				To:                to,
-				From:              from,
-				ReceivedTimestamp: time.Now(),
-				QueuedTimestamp:   time.Time{},
-				Type:              MsgQueueItemType.SMS,
-				Files:             nil,
-				Message:           smsBody,
-				SkipNumberCheck:   false,
-				LogID:             transId,
-			}
-			//sms := createSMSMessage(from, to, smsBody, messageSid, accountSid, transId)
-			logSMSReceived(logf, from, to, accountSid, messageSid, len(sms.Message))
-			// gateway.SMPPServer.msgToClientChannel <- sms
 		}
 	}
 
@@ -142,7 +112,7 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 }
 
 // fetchMediaFiles retrieves media files from Twilio and returns a slice of MsgFile structs.
-func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string, logf LoggingFormat) ([]MsgFile, error) {
+func (h *TwilioHandler) fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string) []MsgFile {
 	var files []MsgFile
 
 	for i := 0; i < numMedia; i++ {
@@ -152,9 +122,6 @@ func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string
 		parts := strings.Split(contentType, "/")
 
 		if len(parts) != 2 {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Invalid MediaContentType%d: %s", i, contentType)
-			logf.Print()
 			continue
 		}
 
@@ -164,11 +131,6 @@ func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string
 		// Fetch the media content
 		req, err := http.NewRequest("GET", mediaURL, nil)
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Error creating request for MediaUrl%d: %v", i, err)
-			logf.AddField("accountSid", accountSid)
-			logf.AddField("messageSid", messageSid)
-			logf.Print()
 			continue
 		}
 
@@ -181,33 +143,27 @@ func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string
 		client := &http.Client{}
 		resp, err := client.Do(req)
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Error fetching MediaUrl%d: %v", i, err)
-			logf.AddField("accountSid", accountSid)
-			logf.AddField("messageSid", messageSid)
-			logf.Print()
+			var lm = h.gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"Carrier.FetchMedia.Twilio",
+				"CarrierFetchMediaError",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"logID": messageSid,
+				}, mediaURL,
+			))
 			continue
 		}
 		defer resp.Body.Close()
 
 		// Check for successful response
 		if resp.StatusCode != http.StatusOK {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Non-OK HTTP status for MediaUrl%d: %s", i, resp.Status)
-			logf.AddField("accountSid", accountSid)
-			logf.AddField("messageSid", messageSid)
-			logf.Print()
 			continue
 		}
 
 		// Read the content into memory
 		contentBytes, err := io.ReadAll(resp.Body)
 		if err != nil {
-			logf.Level = logrus.ErrorLevel
-			logf.Message = fmt.Sprintf("Error reading response body for MediaUrl%d: %v", i, err)
-			logf.AddField("accountSid", accountSid)
-			logf.AddField("messageSid", messageSid)
-			logf.Print()
 			continue
 		}
 
@@ -220,7 +176,7 @@ func fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string
 		files = append(files, file)
 	}
 
-	return files, nil
+	return files
 }
 
 // splitSMS splits the SMS content into multiple messages, each not exceeding maxBytes.
@@ -250,41 +206,7 @@ func splitSMS(body string, maxBytes int) []string {
 
 	return smsSegments
 }
-
-// logMMSReceived logs details about the received MMS.
-func logMMSReceived(logf LoggingFormat, from, to string, accountSid, messageSid string, numFiles int) {
-	logf.Message = fmt.Sprintf(LogMessages.Transaction, "inbound", logf.AdditionalData["carrier"], from, to)
-	logf.Level = logrus.InfoLevel
-	logf.AddField("accountSid", accountSid)
-	logf.AddField("messageSid", messageSid)
-	logf.AddField("from", from)
-	logf.AddField("to", to)
-	logf.AddField("type", "mms")
-	logf.AddField("numFiles", numFiles)
-	logf.Print()
-}
-
-// logSMSReceived logs details about the received SMS.
-func logSMSReceived(logf LoggingFormat, from, to string, accountSid, messageSid string, contentLength int) {
-	logf.Message = fmt.Sprintf(LogMessages.Transaction, "inbound", logf.AdditionalData["carrier"], from, to)
-	logf.Level = logrus.InfoLevel
-	logf.AddField("accountSid", accountSid)
-	logf.AddField("messageSid", messageSid)
-	logf.AddField("from", from)
-	logf.AddField("to", to)
-	logf.AddField("type", "sms")
-	logf.AddField("contentLength", contentLength)
-	logf.Print()
-}
-
 func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) error {
-	logf := LoggingFormat{
-		Type: LogType.Carrier + "_" + LogType.Outbound,
-	}
-	logf.AddField("carrier", "twilio")
-	logf.AddField("type", "sms")
-	logf.AddField("logID", sms.LogID)
-
 	params := &twilioApi.CreateMessageParams{}
 	params.SetTo(sms.To)
 	params.SetFrom(sms.From)
@@ -292,37 +214,32 @@ func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) error {
 
 	// todo support for MMS??
 
-	msg, err := h.client.Api.CreateMessage(params)
+	_, err := h.client.Api.CreateMessage(params)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		// direction, carrier, type (mms/sms), sid/msid, from, to
-		logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", logf.AdditionalData["carrier"], sms.From, sms.To)
-		if msg != nil {
-			logf.AddField("messageSid", *msg.Sid)
-		}
-		return logf.ToError()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendSMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": sms.LogID,
+			}, err,
+		))
+		return err
 	}
 
-	logf.Level = logrus.InfoLevel
-	// direction, carrier, type (mms/sms), sid/msid, from, to
-	logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", logf.AdditionalData["carrier"], sms.From, sms.To)
-	logf.AddField("messageSid", *msg.Sid)
-	logf.AddField("from", sms.From)
-	logf.AddField("to", sms.To)
-	logf.Print()
+	/*	logf.Level = logrus.InfoLevel
+		// direction, carrier, type (mms/sms), sid/msid, from, to
+		logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", logf.AdditionalData["carrier"], sms.From, sms.To)
+		logf.AddField("messageSid", *msg.Sid)
+		logf.AddField("from", sms.From)
+		logf.AddField("to", sms.To)
+		logf.Print()*/
 
 	return nil
 }
 
 func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
-	logf := LoggingFormat{
-		Type: LogType.Carrier + "_" + LogType.Outbound,
-	}
-
-	logf.AddField("carrier", "twilio")
-	logf.AddField("type", "mms")
-	logf.AddField("logID", mms.LogID)
 
 	params := &twilioApi.CreateMessageParams{}
 	// clean to & from
@@ -341,9 +258,16 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 
 			id, err := h.gateway.saveMsgFileMedia(i)
 			if err != nil {
-				logf.Error = err
-				logf.Level = logrus.ErrorLevel
-				return logf.ToError()
+				var lm = h.gateway.LogManager
+				lm.SendLog(lm.BuildLog(
+					"Carrier.SendMMS.Twilio",
+					"SaveMediaError",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"logID": mms.LogID,
+					}, err,
+				))
+				return err
 			}
 
 			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
@@ -353,24 +277,19 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 
 	// todo support for MMS??
 
-	msg, err := h.client.Api.CreateMessage(params)
+	_, err := h.client.Api.CreateMessage(params)
 	if err != nil {
-		logf.Error = err
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", logf.AdditionalData["carrier"], mms.From, mms.To)
-
-		if msg != nil {
-			logf.AddField("messageSid", *msg.Sid)
-		}
-		return logf.ToError()
+		var lm = h.gateway.LogManager
+		lm.SendLog(lm.BuildLog(
+			"Carrier.SendSMS.Telnyx",
+			"GenericError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID": mms.LogID,
+			}, err,
+		))
+		return err
 	}
-
-	logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", logf.AdditionalData["carrier"], mms.From, mms.To)
-	logf.AddField("messageSid", *msg.Sid)
-	logf.AddField("from", mms.From)
-	logf.AddField("to", mms.To)
-	logf.Print()
 
 	return nil
 }

@@ -16,12 +16,12 @@ func basicAuthMiddleware(ctx iris.Context) {
 	expectedAPIKey := os.Getenv("API_KEY")
 	if expectedAPIKey == "" {
 		// Log the error
-		logf := LoggingFormat{
+		/*logf := LoggingFormat{
 			Type:    "middleware_auth",
 			Level:   logrus.ErrorLevel,
 			Message: "API_KEY environment variable not set",
 		}
-		logf.Print()
+		logf.Print()*/
 
 		// Respond with 500 Internal Server Error
 		ctx.StatusCode(http.StatusInternalServerError)
@@ -113,13 +113,13 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 	carrier := ctx.Params().Get("carrier")
 	if carrier == "" {
 		// Log the error
-		logf := LoggingFormat{
+		/*logf := LoggingFormat{
 			Type: LogType.Carrier + "_" + LogType.Inbound,
 		}
 		logf.AddField("error", "carrier parameter is missing")
 		logf.Level = logrus.ErrorLevel
 		logf.Message = "Missing carrier parameter in request"
-		logf.Print()
+		logf.Print()*/
 
 		// Respond with 400 Bad Request
 		ctx.StatusCode(http.StatusBadRequest)
@@ -134,14 +134,14 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 		err := inboundRoute.Inbound(ctx)
 		if err != nil {
 			// Log the error
-			logf := LoggingFormat{
+			/*logf := LoggingFormat{
 				Type: LogType.Carrier + "_" + LogType.Inbound,
 			}
 			logf.AddField("carrier", carrier)
 			logf.AddField("error", err.Error())
 			logf.Level = logrus.ErrorLevel
 			logf.Message = "Failed to process inbound message"
-			logf.Print()
+			logf.Print()*/
 
 			// Respond with 500 Internal Server Error
 			ctx.StatusCode(http.StatusInternalServerError)
@@ -153,14 +153,14 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 	}
 
 	// Log the error for unknown carrier
-	logf := LoggingFormat{
+	/*logf := LoggingFormat{
 		Type: LogType.Carrier + "_" + LogType.Inbound,
 	}
 	logf.AddField("carrier", carrier)
 	logf.Level = logrus.WarnLevel
 	logf.Message = "Unknown carrier"
 	logf.Print()
-
+	*/
 	// Respond with 404 Not Found
 	ctx.StatusCode(http.StatusNotFound)
 	ctx.WriteString("carrier not found")
@@ -172,13 +172,13 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	id, err := strconv.ParseInt(fileID, 10, 64)
 	if fileID == "" || err != nil {
 		// Log the error
-		logf := LoggingFormat{
+		/*logf := LoggingFormat{
 			Type: LogType.Carrier + "_" + LogType.Inbound,
 		}
 		logf.AddField("error", "file ID is required")
 		logf.Level = logrus.ErrorLevel
 		logf.Message = "Missing file ID in request"
-		logf.Print()
+		logf.Print()*/
 
 		// Respond with 400 Bad Request
 		ctx.StatusCode(http.StatusBadRequest)
@@ -190,14 +190,14 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	mediaFile, err := gateway.getMediaFile(uint(id))
 	if err != nil {
 		// Log the error
-		logf := LoggingFormat{
+		/*logf := LoggingFormat{
 			Type: LogType.Carrier + "_" + LogType.Inbound,
-		}
-		logf.AddField("error", err.Error())
+		}*/
+		/*logf.AddField("error", err.Error())
 		logf.AddField("fileID", fileID)
 		logf.Level = logrus.ErrorLevel
 		logf.Message = "Failed to retrieve media file from MongoDB"
-		logf.Print()
+		logf.Print()*/
 
 		// Respond with 404 Not Found
 		ctx.StatusCode(http.StatusNotFound)
@@ -215,14 +215,14 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	fileBytes, err := base64.StdEncoding.DecodeString(mediaFile.Base64Data)
 	if err != nil {
 		// Log the error
-		logf := LoggingFormat{
+		/*logf := LoggingFormat{
 			Type: LogType.Carrier + "_" + LogType.Inbound,
 		}
 		logf.AddField("error", err.Error())
 		logf.AddField("fileID", fileID)
 		logf.Level = logrus.ErrorLevel
 		logf.Message = "Failed to decode Base64 media data"
-		logf.Print()
+		logf.Print()*/
 
 		// Respond with 500 Internal Server Error
 		ctx.StatusCode(http.StatusInternalServerError)
@@ -283,36 +283,6 @@ func (gateway *Gateway) webAddNumber(ctx iris.Context) {
 
 	ctx.JSON(iris.Map{"status": "Number added successfully", "number": number})
 }
-
-/*func (gateway *Gateway) webReloadClients(ctx iris.Context) {
-	// Log the successful access
-	logf := LoggingFormat{
-		Type:    "reload_clients",
-		Level:   logrus.InfoLevel,
-		Message: "Reload connectedClients route accessed successfully",
-	}
-	logf.AddField("client_ip", ctx.RemoteAddr())
-	logf.Print()
-
-	clients, err := loadClients()
-	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Error = err
-		logf.Message = "failed to load clients"
-	}
-
-	clientMap := make(map[string]*Client)
-	for i := range clients {
-		clientMap[clients[i].Username] = &clients[i]
-	}
-
-	gateway.Clients = clientMap
-	//gateway.SMPPServer.connectedClients = clientMap
-
-	// Respond with 200 OK and a message
-	ctx.StatusCode(http.StatusOK)
-	ctx.WriteString("Access Granted: 200 OK")
-}*/
 
 func webHealthCheck(ctx iris.Context) {
 	// Log the successful access

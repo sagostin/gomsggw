@@ -57,8 +57,6 @@ func NewDB() (*DB, error) {
 		return nil, fmt.Errorf("unable to ping database: %w", err)
 	}
 
-	fmt.Println("Connected to PostgreSQL database")
-
 	// Return the initialized DB instance
 	return &DB{pool: pool}, nil
 }
@@ -114,22 +112,3 @@ func joinStrings(strs []string, sep string) string {
 	}
 	return result
 }
-
-/*func main() {
-	// Initialize the DB instance using the factory function
-	db, err := NewDB()
-	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
-	}
-	defer db.Close()
-
-	// Example usage: run a test query
-	query := "SELECT CURRENT_TIMESTAMP"
-	currentTime, err := db.QueryRow(query)
-	if err != nil {
-		log.Fatalf("Query failed: %v", err)
-	}
-
-	fmt.Printf("Current database time: %s\n", currentTime)
-}
-*/

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -25,7 +26,6 @@ func (router *Router) ClientMsgConsumer() {
 		client := router.gateway.AMPQClient
 		deliveries, err := client.ConsumeMessages("client")
 		if err != nil {
-			client.logger.Error(err)
 			continue
 		}
 
@@ -42,9 +42,6 @@ func (router *Router) ClientMsgConsumer() {
 
 			router.ClientMsgChan <- msgQueueItem
 			// todo only ack if was successful??
-
-			/*client.logger.Info("waiting to see if it does anything different?")
-			time.Sleep(5 * time.Second)*/
 		}
 	}
 }
@@ -71,9 +68,6 @@ func (router *Router) CarrierMsgConsumer() {
 
 			router.CarrierMsgChan <- msgQueueItem
 			// todo only ack if was successful??
-
-			/*client.logger.Info("waiting to see if it does anything different?")
-			time.Sleep(5 * time.Second)*/
 		}
 	}
 }
@@ -91,42 +85,49 @@ func (router *Router) findRouteByName(routeType, routeName string) *Route {
 	return nil
 }
 
+// findClientByNumber searches for a client using an E.164 number.
+// The client's number list does not have the `+` prefix.
 func (router *Router) findClientByNumber(number string) (*Client, error) {
+	// Normalize the input number by removing the leading `+`, if present
+	searchNumber := strings.TrimPrefix(number, "+")
+
 	for _, client := range router.gateway.Clients {
 		for _, num := range client.Numbers {
-			if strings.Contains(number, num.Number) {
+			// Compare the normalized input number with the stored number
+			if strings.Contains(searchNumber, num.Number) {
 				return client, nil
 			}
 		}
 	}
-	return nil, fmt.Errorf("unable to find client")
+
+	return nil, fmt.Errorf("unable to find client for number: %s", number)
 }
 
-/*// Build a map of numbers to carriers
-func buildNumberToCarrierMap(clients map[string]*Client) map[string]string {
-	numberToCarrier := make(map[string]string)
-	for _, client := range clients {
-		for _, num := range client.Numbers {
-			numberToCarrier[num.Number] = num.Carrier
-		}
+func FormatToE164(number string) (string, error) {
+	// Preserve the original number
+	originalNumber := number
+
+	// Remove any metadata like "/TYPE=PLMN"
+	number = strings.Split(number, "/")[0]
+
+	// Regex to match a valid E.164 number
+	e164Regex := regexp.MustCompile(`^\+?[1-9]\d{1,14}$`)
+
+	// Remove any non-digit characters except the leading '+'
+	cleaned := strings.TrimLeft(number, "+")
+	cleaned = regexp.MustCompile(`\D`).ReplaceAllString(cleaned, "")
+
+	// Re-add the leading '+' if it was stripped
+	if strings.HasPrefix(number, "+") {
+		cleaned = "+" + cleaned
+	} else {
+		cleaned = "+" + cleaned // Add '+' if not already present
 	}
-	return numberToCarrier
+
+	// Validate the cleaned number against E.164 format
+	if !e164Regex.MatchString(cleaned) {
+		return originalNumber, fmt.Errorf("unable to format to E.164: %s", originalNumber)
+	}
+
+	return cleaned, nil
 }
-
-// Then update your findRouteByNumber function
-func findRouteByNumberOptimized(sourceNumber string, destinationNumber string, numberToCarrier map[string]string, routes []Route) (*Route, error) {
-	destinationCarrier, ok := numberToCarrier[destinationNumber]
-	if !ok {
-		return nil, fmt.Errorf("carrier not found for destination number: %s", destinationNumber)
-	}
-
-	// Now, find the route that matches the carrier
-	for _, route := range routes {
-		if route.Type == destinationCarrier {
-			return &route, nil
-		}
-	}
-
-	return nil, fmt.Errorf("route not found for carrier: %s", destinationCarrier)
-}
-*/

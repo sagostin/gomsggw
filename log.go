@@ -8,134 +8,64 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
 
+func (lm *LogManager) LoadTemplates() {
+	templates := map[string]string{
+		"GenericError":            "An error occurred: %s",
+		"UnexpectedError":         "Unexpected error: %s",
+		"UnhandledException":      "Unhandled exception: %s",
+		"CarrierNoDestinations":   "No destination numbers were included.",
+		"CarrierFetchMediaError":  "Unable to fetch media from: %s",
+		"SaveMediaError":          "Unable to save media to DB: %s",
+		"MM4RemoveInactiveClient": "Removed inactive from MM4 server.",
+		"ParseAddressError":       "Failed to parse address: %s",
+		"AuthError":               "Authentication failed",
+		"AuthSuccess":             "Authentication success",
+		"MM4ReconnectInactivity":  "Reconnecting client after inactivity.",
+		"MM4Reconnect":            "Reconnecting client %s from %s",
+		"MM4SessionError":         "Session error: %s",
+		"RouterSendSMPP":          "Failed to send SMPP to client: %s",
+		"RouterSendMM4":           "Failed to send MM4 to client: %s",
+		"RouterSendCarrier":       "Failed to send carrier: %s",
+		"NoFiles":                 "No files were included.",
+		"RouterSendFailed":        "Failed to send.",
+		"RouterFindSMPP":          "Failed to find SMPP client.",
+		"RouterFindCarrier":       "Failed to find carrier.",
+		"SMPPEnquireLinkError":    "Error enquiring link: %s",
+		"SMPPUnhandledPDU":        "Unhandled PDU: %s",
+		"SMPPResponsableError":    "Responsable Error: %s",
+		"SMPPPDUError":            "Error sending PDU: %s",
+		"SMPPFindSession":         "Failed to find SMPP session.",
+	}
+
+	for name, template := range templates {
+		lm.AddTemplate(name, template)
+	}
+}
+
+// LogManager manages log templates and handles dispatching logs to Loki.
+type LogManager struct {
+	Templates  map[string]string
+	LokiClient *LokiClient
+	LogChannel chan *LoggingFormat
+	wg         sync.WaitGroup
+}
+
+// LoggingFormat represents the structure of a log message.
 type LoggingFormat struct {
 	Message        string                 `json:"message,omitempty"`
 	Error          error                  `json:"error,omitempty"`
 	Type           string                 `json:"type,omitempty"`
 	Level          logrus.Level           `json:"level,omitempty"`
 	AdditionalData map[string]interface{} `json:"additional_data,omitempty"`
+	Timestamp      time.Time              `json:"timestamp,omitempty"`
 }
 
-func (e *LoggingFormat) AddField(key string, value interface{}) {
-	if e.AdditionalData == nil {
-		e.AdditionalData = make(map[string]interface{})
-	}
-	e.AdditionalData[key] = value
-}
-
-// LogTypeStruct represents specific types of log messages within a category.
-type LogTypeStruct struct {
-	// Carrier-related log types
-	// prefixes
-	Carrier  string
-	Endpoint string
-	Server   string
-	MM4      string
-	SMPP     string
-	// status - second prefix
-	Startup  string
-	Shutdown string
-	// suffixes
-	Routing        string
-	Queue          string
-	Inbound        string
-	Outbound       string
-	Authentication string
-	// Add more log types as needed
-	DEBUG string
-}
-
-// LogType is a singleton instance of LogTypeStruct containing all log types.
-var LogType = LogTypeStruct{
-	// Initialize the log types with lowercase and underscores
-	//directions - prefix
-	Carrier:  "carrier",
-	Endpoint: "endpoint",
-	Server:   "server",
-	// service types - prefix
-	MM4:  "mm4",
-	SMPP: "smpp",
-	// statuses - second prefix
-	Startup:  "startup",
-	Shutdown: "shutdown",
-	// direction / type - suffix
-	Inbound:        "inbound",
-	Outbound:       "outbound",
-	Routing:        "routing",
-	Queue:          "queue",
-	Authentication: "authentication",
-	DEBUG:          "debug",
-}
-
-// LogMessages contains standardized log message templates.
-var LogMessages = struct {
-	Transaction    string // used for sending/receiving mms/sms transactions
-	Authentication string
-	// Add more messages as needed
-}{
-	// Initialize the message templates
-	Transaction:    "%s, %s - from: %s, to: %s",      // direction, carrier - from: number, to: number
-	Authentication: "%s, auth: %s, user: %s, ip: %s", // server (mm4/smpp), success/failed (err), userid, ip
-}
-
-func (e *LoggingFormat) String() string {
-	marshal, err := json.Marshal(e)
-	if err != nil {
-		return ""
-	}
-
-	return string(marshal)
-}
-
-func (e *LoggingFormat) ToError() error {
-	e.Print()
-	// todo send logs over to loki??!??
-	return fmt.Errorf(e.String())
-}
-
-func (e *LoggingFormat) Print() {
-	// todo send over to loki as well??
-	debugEnabled := os.Getenv("DEBUG") == "true"
-	if debugEnabled {
-		switch e.Level.String() {
-		case "warning":
-			logrus.Warn(e.String())
-		case "error":
-			logrus.Error(e.String())
-		case "debug":
-			logrus.Debug(e.String())
-		default:
-			logrus.Info(e.String())
-		}
-	}
-
-	lokiClient := NewLokiClient(os.Getenv("LOKI_URL"), os.Getenv("LOKI_USERNAME"), os.Getenv("LOKI_PASSWORD"))
-	labels := map[string]string{"job": "sms-mms-gateway", "server_id": os.Getenv("SERVER_ID")}
-
-	data, err := json.Marshal(e)
-	if err != nil {
-		logrus.Error("error marshalling to send to loki")
-		return
-	}
-	err = lokiClient.PushLog(labels, LogEntry{Timestamp: time.Now(), Line: string(data)})
-	if err != nil {
-		logrus.Error("error sending to loki")
-		logrus.Error(err)
-		return
-	}
-}
-
-// LokiClient holds the configuration for the Loki client.
-type LokiClient struct {
-	PushURL  string // URL to Loki's push API
-	Username string // Username for basic auth
-	Password string // Password for basic auth
-}
-
-// LogEntry struct to use time.Time for Timestamp
+// LogEntry represents a log entry for Loki.
 type LogEntry struct {
 	Timestamp time.Time
 	Line      string
@@ -152,7 +82,14 @@ type LokiStream struct {
 	Values [][2]string       `json:"values"` // Array of [timestamp, line] tuples
 }
 
-// NewLokiClient creates a new client to interact with Loki.
+// LokiClient handles interactions with the Loki service.
+type LokiClient struct {
+	PushURL  string
+	Username string
+	Password string
+}
+
+// NewLokiClient initializes a new Loki client.
 func NewLokiClient(pushURL, username, password string) *LokiClient {
 	return &LokiClient{
 		PushURL:  pushURL,
@@ -163,35 +100,28 @@ func NewLokiClient(pushURL, username, password string) *LokiClient {
 
 // PushLog sends a log entry to Loki.
 func (c *LokiClient) PushLog(labels map[string]string, entry LogEntry) error {
-	// Convert time to Unix epoch in nanoseconds
-	unixNano := entry.Timestamp.UnixNano()
-	timestampStr := strconv.FormatInt(unixNano, 10)
-
-	/*// Ensure the log line is properly escaped for JSON
-	escapedLine := strconv.Quote(entry.Line)
-	// Remove the surrounding quotes added by Quote
-	escapedLine = escapedLine[1 : len(escapedLine)-1]*/
-
 	payload := LokiPushData{
 		Streams: []LokiStream{
 			{
 				Stream: labels,
-				Values: [][2]string{{timestampStr, entry.Line}},
+				Values: [][2]string{
+					{strconv.FormatInt(entry.Timestamp.UnixNano(), 10), entry.Line},
+				},
 			},
 		},
 	}
 
 	jsonPayload, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("error marshaling json: %w", err)
+		return fmt.Errorf("failed to marshal JSON payload: %w", err)
 	}
 
 	req, err := http.NewRequest("POST", c.PushURL, bytes.NewBuffer(jsonPayload))
 	if err != nil {
-		return fmt.Errorf("error creating request: %w", err)
+		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 
+	req.Header.Set("Content-Type", "application/json")
 	if c.Username != "" && c.Password != "" {
 		req.SetBasicAuth(c.Username, c.Password)
 	}
@@ -199,13 +129,124 @@ func (c *LokiClient) PushLog(labels map[string]string, entry LogEntry) error {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("error sending request to Loki: %w", err)
+		return fmt.Errorf("failed to send request to Loki: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("received unexpected response status: %d", resp.StatusCode)
+		return fmt.Errorf("unexpected response from Loki: %d", resp.StatusCode)
 	}
 
 	return nil
+}
+
+// NewLogManager initializes a new LogManager.
+func NewLogManager(lokiClient *LokiClient) *LogManager {
+	lm := &LogManager{
+		Templates:  make(map[string]string),
+		LokiClient: lokiClient,
+		LogChannel: make(chan *LoggingFormat),
+	}
+	lm.wg.Add(1)
+	go lm.processLogChannel()
+	return lm
+}
+
+// AddTemplate adds a new log template to the manager.
+func (lm *LogManager) AddTemplate(name, template string) {
+	lm.Templates[strings.ToUpper(name)] = template
+}
+
+// BuildLog creates and formats a log message dynamically.
+func (lm *LogManager) BuildLog(logType string, templateName string, level logrus.Level, fields map[string]interface{}, args ...interface{}) *LoggingFormat {
+	message := lm.formatTemplate(templateName, args...)
+	return &LoggingFormat{
+		Message:        message,
+		Type:           strings.ToUpper(logType),
+		Level:          level,
+		AdditionalData: fields,
+		Timestamp:      time.Now(),
+	}
+}
+
+// AddField adds a new field to an already built log.
+func (lf *LoggingFormat) AddField(key string, value interface{}) {
+	if lf.AdditionalData == nil {
+		lf.AdditionalData = make(map[string]interface{})
+	}
+	lf.AdditionalData[key] = value
+}
+
+// formatTemplate formats a template with provided arguments.
+func (lm *LogManager) formatTemplate(templateName string, args ...interface{}) string {
+	template, exists := lm.Templates[strings.ToUpper(templateName)]
+	if !exists {
+		return fmt.Sprintf("Template '%s' not found", templateName)
+	}
+	return fmt.Sprintf(template, args...)
+}
+
+// SendLog sends a log to Loki asynchronously via the log channel.
+func (lm *LogManager) SendLog(log *LoggingFormat) {
+	log.Print()
+	lm.LogChannel <- log
+}
+
+// processLogChannel processes logs from the channel and sends them to Loki.
+func (lm *LogManager) processLogChannel() {
+	defer lm.wg.Done()
+	for log := range lm.LogChannel {
+		labels := map[string]string{
+			"job":       "sms-mms-gateway",
+			"server_id": os.Getenv("SERVER_ID"),
+			"type":      log.Type,
+		}
+		logLine := log.String()
+		entry := LogEntry{
+			Timestamp: log.Timestamp,
+			Line:      logLine,
+		}
+		if err := lm.LokiClient.PushLog(labels, entry); err != nil {
+			logrus.Error("Failed to send log to Loki:", err)
+		}
+	}
+}
+
+// Print outputs the log locally (stdout or logrus).
+func (lf *LoggingFormat) Print() {
+	logEntry := logrus.WithFields(logrus.Fields{
+		"type":  lf.Type,
+		"level": lf.Level.String(),
+		"time":  lf.Timestamp.Format(time.RFC3339),
+	})
+
+	for key, value := range lf.AdditionalData {
+		logEntry = logEntry.WithField(key, value)
+	}
+
+	switch lf.Level {
+	case logrus.ErrorLevel:
+		logEntry.Error(lf.Message)
+	case logrus.WarnLevel:
+		logEntry.Warn(lf.Message)
+	case logrus.DebugLevel:
+		logEntry.Debug(lf.Message)
+	default:
+		logEntry.Info(lf.Message)
+	}
+}
+
+// String serializes the LoggingFormat into JSON for Loki.
+func (lf *LoggingFormat) String() string {
+	data, err := json.Marshal(lf)
+	if err != nil {
+		return fmt.Sprintf("Error serializing log: %v", err)
+	}
+	return string(data)
+}
+
+// CloseLogManager gracefully shuts down the log manager and waits for the log channel to empty.
+func (lm *LogManager) CloseLogManager() {
+	close(lm.LogChannel)
+	lm.wg.Wait()
 }

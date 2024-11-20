@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/kataras/iris/v12"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -69,4 +70,25 @@ func loadCarriers(gateway *Gateway) error {
 	gateway.Carriers = carriers
 
 	return nil
+}
+
+func (gateway *Gateway) uploadMediaGetUrls(mms *MsgQueueItem) ([]string, error) {
+	var mediaUrls []string
+
+	if len(mms.Files) > 0 {
+		for _, i := range mms.Files {
+			if strings.Contains(i.ContentType, "application/smil") {
+				continue
+			}
+
+			id, err := gateway.saveMsgFileMedia(i)
+			if err != nil {
+				return mediaUrls, err
+			}
+
+			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
+		}
+		return mediaUrls, nil
+	}
+	return mediaUrls, nil
 }

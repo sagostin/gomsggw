@@ -2,15 +2,19 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
+	"github.com/sirupsen/logrus"
 )
 
 // ClientRouter starts the router that handles inbound and outbound from the sms and mms servers
 func (router *Router) ClientRouter() {
 	for {
 		msg := <-router.ClientMsgChan
-		logf := LoggingFormat{Type: "client_router"}
-		logf.AddField("logID", msg.LogID)
+		var lm = router.gateway.LogManager
+
+		to, _ := FormatToE164(msg.To)
+		msg.To = to
+		from, _ := FormatToE164(msg.From)
+		msg.From = from
 
 		switch msgType := msg.Type; msgType {
 		case MsgQueueItemType.SMS:
@@ -32,12 +36,31 @@ func (router *Router) ClientRouter() {
 						err = router.gateway.AMPQClient.Publish("client", marshal)
 						continue
 					}
+					lm.SendLog(lm.BuildLog(
+						"Router.Client.SMS",
+						"RouterFindSMPP",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"client": client.Username,
+							"logID":  msg.LogID,
+						}, err,
+					))
 					// todo maybe to add to queue via postgres?
 					continue
 				}
 				if session != nil {
 					err := router.gateway.SMPPServer.sendSMPP(msg)
 					if err != nil {
+						lm.SendLog(lm.BuildLog(
+							"Router.Carrier.SMS",
+							"RouterSendSMPP",
+							logrus.ErrorLevel,
+							map[string]interface{}{
+								"client": client.Username,
+								"logID":  msg.LogID,
+							}, err,
+						))
+
 						if msg.Delivery != nil {
 							err := msg.Delivery.Reject(true)
 							if err != nil {
@@ -63,6 +86,16 @@ func (router *Router) ClientRouter() {
 					}
 					continue
 				} else {
+					lm.SendLog(lm.BuildLog(
+						"Router.Client.SMS",
+						"RouterFindSMPP",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"client": client.Username,
+							"logID":  msg.LogID,
+						}, err,
+					))
+
 					if msg.Delivery != nil {
 						err := msg.Delivery.Nack(false, true)
 						if err != nil {
@@ -87,15 +120,34 @@ func (router *Router) ClientRouter() {
 					continue
 				}
 				continue
+			} else {
+				lm.SendLog(lm.BuildLog(
+					"Router.Client.SMS",
+					"RouterFindCarrier",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"client": client.Username,
+						"logID":  msg.LogID,
+					},
+				))
 			}
-			// throw error?
-			logf.Error = fmt.Errorf("unable to send")
-			logf.Print()
+			continue
 		case MsgQueueItemType.MMS:
 			client, _ := router.findClientByNumber(msg.To)
 			if client != nil {
 				err := router.gateway.MM4Server.sendMM4(msg)
 				if err != nil {
+					// throw error?
+					lm.SendLog(lm.BuildLog(
+						"Router.Client.MMS",
+						"RouterSendMM4",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"client": client.Username,
+							"logID":  msg.LogID,
+						}, err,
+					))
+
 					if msg.Delivery != nil {
 						err := msg.Delivery.Reject(true)
 						if err != nil {
@@ -142,10 +194,18 @@ func (router *Router) ClientRouter() {
 					continue
 				}
 				continue
+			} else {
+				lm.SendLog(lm.BuildLog(
+					"Router.Client.MMS",
+					"RouterFindCarrier",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"client": client.Username,
+						"logID":  msg.LogID,
+					},
+				))
 			}
-			// throw error?
-			logf.Error = fmt.Errorf("unable to send")
-			logf.Print()
+
 			if msg.Delivery != nil {
 				err := msg.Delivery.Reject(true)
 				if err != nil {

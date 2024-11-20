@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	log "github.com/sirupsen/logrus"
 	"sync"
@@ -61,13 +60,6 @@ type AMPQClient struct {
 const (
 	reconnectDelay = 5 * time.Second
 	reInitDelay    = 2 * time.Second
-	resendDelay    = 5 * time.Second
-)
-
-var (
-	errNotConnected  = errors.New("not connected to a server")
-	errAlreadyClosed = errors.New("already closed: not connected to the server")
-	errShutdown      = errors.New("client is shutting down")
 )
 
 // Close will cleanly shut down the channel and connection.
@@ -78,7 +70,7 @@ func (client *AMPQClient) Close() error {
 	defer client.m.Unlock()
 
 	if !client.isReady {
-		return errAlreadyClosed
+		return fmt.Errorf("connection already closed")
 	}
 	close(client.done)
 	err := client.channel.Close()
@@ -260,7 +252,7 @@ func (client *AMPQClient) UnsafePublish(queueName string, data []byte) error {
 	defer client.m.Unlock()
 
 	if !client.isReady || client.channel == nil {
-		return errNotConnected
+		return fmt.Errorf("not connected")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -285,7 +277,7 @@ func (client *AMPQClient) ConsumeMessages(queueName string) (<-chan amqp.Deliver
 	defer client.m.Unlock()
 
 	if !client.isReady || client.channel == nil {
-		return nil, errNotConnected
+		return nil, fmt.Errorf("not connected")
 	}
 
 	if err := client.channel.Qos(1, 0, false); err != nil {

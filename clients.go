@@ -17,17 +17,6 @@ type ClientNumber struct {
 	Carrier  string `json:"carrier"`
 }
 
-func (gateway *Gateway) migrateSchema() error {
-	if err := gateway.DB.AutoMigrate(&Client{}, &ClientNumber{}, &MediaFile{}, &MsgRecordDBItem{}); err != nil {
-		return err
-	}
-	err := gateway.createIndexes()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 func (gateway *Gateway) loadClients() error {
 	var clients []Client
 	if err := gateway.DB.Preload("Numbers").Find(&clients).Error; err != nil {

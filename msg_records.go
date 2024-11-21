@@ -7,6 +7,9 @@ import (
 func (gateway *Gateway) processMsgRecords() {
 	for {
 		msg := <-gateway.MsgRecordChan
+		if msg.ClientID == 0 {
+			continue
+		}
 		err := gateway.InsertMsgQueueItem(msg.MsgQueueItem, msg.ClientID, msg.Carrier, msg.Internal)
 		if err != nil {
 			// todo logging
@@ -41,7 +44,7 @@ func PartiallyRedactMessage(message string) string {
 // InsertMsgQueueItem inserts a MsgQueueItem into the database.
 func (gateway *Gateway) InsertMsgQueueItem(item MsgQueueItem, clientID uint, carrier string, internal bool) error {
 	// Convert MsgQueueItem to MsgRecordDBItem with redacted message.
-	dbItem := MsgRecordDBItem{
+	dbItem := &MsgRecordDBItem{
 		To:                item.To,
 		From:              item.From,
 		ClientID:          clientID,

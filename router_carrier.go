@@ -92,8 +92,8 @@ func (router *Router) CarrierRouter() {
 								continue
 							}
 						}
+						continue
 					}
-					continue
 				} else {
 					if msg.Delivery != nil {
 						err := msg.Delivery.Nack(false, true)
@@ -118,12 +118,6 @@ func (router *Router) CarrierRouter() {
 				if route != nil {
 					err := route.Handler.SendSMS(&msg)
 					if err != nil {
-						router.gateway.MsgRecordChan <- MsgRecord{
-							MsgQueueItem: msg,
-							Carrier:      carrier,
-							ClientID:     client.ID,
-							Internal:     false,
-						}
 						// todo log
 						if msg.Delivery != nil {
 							err = msg.Delivery.Reject(true)
@@ -139,11 +133,17 @@ func (router *Router) CarrierRouter() {
 						))
 						continue
 					}
+					router.gateway.MsgRecordChan <- MsgRecord{
+						MsgQueueItem: msg,
+						Carrier:      carrier,
+						ClientID:     client.ID,
+						Internal:     false,
+					}
 					if msg.Delivery != nil {
 						err = msg.Delivery.Ack(false)
 					}
+					continue
 				}
-				continue
 			} else {
 				lm.SendLog(lm.BuildLog(
 					"Router.Carrier.MMS",
@@ -222,7 +222,6 @@ func (router *Router) CarrierRouter() {
 					ClientID:     client.ID,
 					Internal:     false,
 				}
-
 				if msg.Delivery != nil {
 					err := msg.Delivery.Ack(false)
 					if err != nil {
@@ -234,8 +233,8 @@ func (router *Router) CarrierRouter() {
 
 			client, _ = router.findClientByNumber(msg.From)
 			if client != nil {
-				continue
 				// todo log & error invalid sender number
+
 			}
 
 			carrier, _ := router.gateway.getClientCarrier(msg.From)

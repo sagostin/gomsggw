@@ -128,14 +128,11 @@ func (gateway *Gateway) getClient(number string) *Client {
 	gateway.mu.RLock()
 	defer gateway.mu.RUnlock()
 
-	num, exists := gateway.Numbers[number]
-	if !exists {
-		return nil
-	}
-
 	for _, client := range gateway.Clients {
-		if client.ID == num.ClientID {
-			return client
+		for _, num := range client.Numbers {
+			if strings.Contains(number, num.Number) {
+				return client
+			}
 		}
 	}
 	return nil

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"github.com/sirupsen/logrus"
+	"time"
 )
 
 // ClientRouter starts the router that handles inbound and outbound from the sms and mms servers
@@ -34,6 +35,7 @@ func (router *Router) ClientRouter() {
 							// todo
 							continue
 						}
+						msg.QueuedTimestamp = time.Now()
 						err = router.gateway.AMPQClient.Publish("client", marshal)
 						continue
 					}
@@ -74,6 +76,7 @@ func (router *Router) ClientRouter() {
 								// todo
 								continue
 							}
+							msg.QueuedTimestamp = time.Now()
 							err = router.gateway.AMPQClient.Publish("client", marshal)
 							continue
 						}
@@ -128,6 +131,7 @@ func (router *Router) ClientRouter() {
 					continue
 				}
 				// add to outbound carrier queue
+				msg.QueuedTimestamp = time.Now()
 				err = router.gateway.AMPQClient.Publish("carrier", marshal)
 				if err != nil {
 					// todo
@@ -174,6 +178,7 @@ func (router *Router) ClientRouter() {
 							// todo
 							continue
 						}
+						msg.QueuedTimestamp = time.Now()
 						err = router.gateway.AMPQClient.Publish("client", marshal)
 						continue
 					}
@@ -215,6 +220,7 @@ func (router *Router) ClientRouter() {
 					}
 				}
 				// add to outbound carrier queue
+				msg.QueuedTimestamp = time.Now()
 				err = router.gateway.AMPQClient.Publish("carrier", marshal)
 				if err != nil {
 					// todo
@@ -244,6 +250,7 @@ func (router *Router) ClientRouter() {
 					// todo
 					continue
 				}
+				msg.QueuedTimestamp = time.Now()
 				err = router.gateway.AMPQClient.Publish("client", marshal)
 				continue
 			}

@@ -10,3 +10,14 @@ func (gateway *Gateway) createIndexes() error {
 	}
 	return nil
 }
+
+func (gateway *Gateway) migrateSchema() error {
+	if err := gateway.DB.AutoMigrate(&Client{}, &ClientNumber{}, &MediaFile{}, &MsgRecordDBItem{}); err != nil {
+		return err
+	}
+	err := gateway.createIndexes()
+	if err != nil {
+		return err
+	}
+	return nil
+}

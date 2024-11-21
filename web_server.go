@@ -11,10 +11,20 @@ import (
 )
 
 // basicAuthMiddleware is a middleware that enforces Basic Authentication using an API key
-func basicAuthMiddleware(ctx iris.Context) {
+func basicAuthMiddleware(ctx iris.Context, gateway *Gateway) {
 	// Retrieve the expected API key from environment variables
+	var lm = gateway.LogManager
+
 	expectedAPIKey := os.Getenv("API_KEY")
 	if expectedAPIKey == "" {
+		lm.SendLog(lm.BuildLog(
+			"Server.Web.AuthMiddleware",
+			"Authenticated web client",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip": ctx.RemoteAddr(),
+			},
+		))
 		// Log the error
 		/*logf := LoggingFormat{
 			Type:    "middleware_auth",
@@ -33,7 +43,7 @@ func basicAuthMiddleware(ctx iris.Context) {
 	authHeader := ctx.GetHeader("Authorization")
 	if authHeader == "" {
 		// Missing Authorization header
-		unauthorized(ctx, "Authorization header missing")
+		unauthorized(ctx, gateway, "Authorization header missing")
 		return
 	}
 
@@ -41,7 +51,7 @@ func basicAuthMiddleware(ctx iris.Context) {
 	const prefix = "Basic "
 	if len(authHeader) < len(prefix) || authHeader[:len(prefix)] != prefix {
 		// Invalid Authorization header format
-		unauthorized(ctx, "Invalid Authorization header format")
+		unauthorized(ctx, gateway, "Invalid Authorization header format")
 		return
 	}
 
@@ -50,7 +60,7 @@ func basicAuthMiddleware(ctx iris.Context) {
 	decodedBytes, err := base64.StdEncoding.DecodeString(encodedCredentials)
 	if err != nil {
 		// Failed to decode credentials
-		unauthorized(ctx, "Failed to decode credentials")
+		unauthorized(ctx, gateway, "Failed to decode credentials")
 		return
 	}
 	credentials := string(decodedBytes)
@@ -59,7 +69,7 @@ func basicAuthMiddleware(ctx iris.Context) {
 	colonIndex := indexOf(credentials, ':')
 	if colonIndex < 0 {
 		// Invalid credentials format
-		unauthorized(ctx, "Invalid credentials format")
+		unauthorized(ctx, gateway, "Invalid credentials format")
 		return
 	}
 
@@ -71,7 +81,7 @@ func basicAuthMiddleware(ctx iris.Context) {
 	// Compare the provided API key with the expected one
 	if apiKey != expectedAPIKey {
 		// Invalid API key
-		unauthorized(ctx, "Invalid API key")
+		unauthorized(ctx, gateway, "Invalid API key")
 		return
 	}
 
@@ -90,22 +100,24 @@ func indexOf(s string, sep byte) int {
 }
 
 // unauthorized responds with a 401 status and a WWW-Authenticate header
-func unauthorized(ctx iris.Context, message string) {
+func unauthorized(ctx iris.Context, gateway *Gateway, message string) {
 	// Log the unauthorized access attempt
-	logf := LoggingFormat{
-		Type:    "middleware_auth",
-		Level:   logrus.WarnLevel,
-		Message: message,
-	}
-	logf.AddField("client_ip", ctx.RemoteAddr())
-	logf.Print()
+	var lm = gateway.LogManager
+	lm.SendLog(lm.BuildLog(
+		"Server.Web.AuthMiddleware",
+		"Unauthorized web client",
+		logrus.ErrorLevel,
+		map[string]interface{}{
+			"ip": ctx.RemoteAddr(),
+		},
+	))
 
 	// Set the WWW-Authenticate header to indicate Basic Auth is required
 	ctx.Header("WWW-Authenticate", `Basic realm="Restricted"`)
 
 	// Respond with 401 Unauthorized
 	ctx.StatusCode(http.StatusUnauthorized)
-	ctx.WriteString("Unauthorized")
+	ctx.WriteString(message)
 }
 
 func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {

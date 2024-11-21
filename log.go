@@ -25,10 +25,11 @@ func (lm *LogManager) LoadTemplates() {
 		"ParseAddressError":       "Failed to parse address: %v",
 		"AuthFailed":              "Authentication failed",
 		"AuthSuccess":             "Authentication success",
-		"MM4ReconnectInactivity":  "Reconnecting client after inactivity.",
-		"MM4Reconnect":            "Reconnecting client %v from %v",
+		"MM4ReconnectInactivity":  "Reconnecting client after inactivity of >2 minutes.",
+		"MM4Reconnect":            "Reconnecting client",
 		"MM4SessionError":         "Session error: %v",
 		"RouterSendSMPP":          "Failed to send SMPP to client: %v",
+		"MM4HandleData":           "Handle data cmd.",
 		"RouterSendMM4":           "Failed to send MM4 to client: %v",
 		"RouterSendCarrier":       "Failed to send carrier: %v",
 		"NoFiles":                 "No files were included.",
@@ -181,7 +182,7 @@ func (lf *LoggingFormat) AddField(key string, value interface{}) {
 func (lm *LogManager) formatTemplate(templateName string, args ...interface{}) string {
 	template, exists := lm.Templates[strings.ToUpper(templateName)]
 	if !exists {
-		return fmt.Sprintf("Template '%v' not found", templateName)
+		return fmt.Sprintf(templateName, args...)
 	}
 	return fmt.Sprintf(template, args...)
 }

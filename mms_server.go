@@ -40,18 +40,57 @@ type MM4Message struct {
 
 // MM4Server represents the SMTP server.
 type MM4Server struct {
-	Addr             string
-	routing          *Router
-	mu               sync.RWMutex
-	listener         net.Listener
-	mongo            *mongo.Client
-	connectedClients map[string]time.Time
-	gateway          *Gateway
+	Addr               string
+	routing            *Router
+	mu                 sync.RWMutex
+	listener           net.Listener
+	mongo              *mongo.Client
+	connectedClients   map[string]time.Time
+	gateway            *Gateway
+	MediaTranscodeChan chan *MM4Message
+}
+
+func (s *MM4Server) transcodeMedia() {
+	for {
+		mm4Message := <-s.MediaTranscodeChan
+
+		ff, err := mm4Message.processAndConvertFiles()
+		if err != nil {
+			mm4Message.Files = nil
+
+			var lm = s.gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.CleanInactive",
+				"MM4RemoveInactiveClient",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"client":  mm4Message.Client,
+					"message": mm4Message,
+				},
+			))
+			continue
+		}
+		mm4Message.Files = ff
+
+		transId := primitive.NewObjectID().Hex()
+
+		msgItem := MsgQueueItem{
+			To:                mm4Message.To,
+			From:              mm4Message.From,
+			ReceivedTimestamp: time.Now(),
+			Type:              MsgQueueItemType.MMS,
+			Files:             mm4Message.Files,
+			LogID:             transId,
+		}
+
+		s.gateway.Router.ClientMsgChan <- msgItem
+	}
 }
 
 // Start begins listening for incoming SMTP connections.
 func (s *MM4Server) Start() error {
 	s.connectedClients = make(map[string]time.Time)
+	s.MediaTranscodeChan = make(chan *MM4Message)
 
 	listen, err := net.Listen("tcp", s.Addr)
 	if err != nil {
@@ -215,9 +254,9 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 				"MM4ReconnectInactivity",
 				logrus.InfoLevel,
 				map[string]interface{}{
-					"client":              client.Username,
-					"ip":                  ip,
-					"inactivity_duration": inactivityDuration,
+					"client":             client.Username,
+					"ip":                 ip,
+					"inactivity_seconds": inactivityDuration.Seconds(),
 				},
 			))
 		} else {
@@ -227,9 +266,9 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 				"MM4Reconnect",
 				logrus.InfoLevel,
 				map[string]interface{}{
-					"client":              client.Username,
-					"ip":                  ip,
-					"inactivity_duration": inactivityDuration,
+					"client":             client.Username,
+					"ip":                 ip,
+					"inactivity_seconds": inactivityDuration.Seconds(),
 				},
 			))
 		}
@@ -364,6 +403,16 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 	case "DATA":
 		writeResponse(s.Writer, "354 End data with <CR><LF>.<CR><LF>")
 		if err := s.handleData(); err != nil {
+			var lm = s.Server.gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.HandleCommand",
+				"HandleData",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"client": s.Client.Username,
+					"ip":     s.ClientIP,
+				},
+			))
 			writeResponse(s.Writer, fmt.Sprintf("554 %v", err))
 		} else {
 			writeResponse(s.Writer, "250 OK")
@@ -443,8 +492,6 @@ func (s *Session) handleMM4Message() error {
 	transactionID := s.Headers.Get("X-Mms-Transaction-ID")
 	messageID := s.Headers.Get("X-Mms-Message-ID")
 
-	transId := primitive.NewObjectID().Hex()
-
 	mm4Message := &MM4Message{
 		From:          s.Headers.Get("From"),
 		To:            s.Headers.Get("To"),
@@ -465,7 +512,9 @@ func (s *Session) handleMM4Message() error {
 		return fmt.Errorf("failed to parse MIME parts: %v", err)
 	}
 
-	msgItem := MsgQueueItem{
+	s.Server.MediaTranscodeChan <- mm
+
+	/*msgItem := MsgQueueItem{
 		To:                mm.To,
 		From:              mm.From,
 		ReceivedTimestamp: time.Now(),
@@ -474,7 +523,7 @@ func (s *Session) handleMM4Message() error {
 		LogID:             transId,
 	}
 
-	s.Server.gateway.Router.ClientMsgChan <- msgItem
+	s.Server.gateway.Router.ClientMsgChan <- msgItem*/
 
 	writeResponse(s.Writer, "250 Message queued for processing")
 
@@ -550,12 +599,6 @@ func (m *MM4Message) parseMIMEParts() (*MM4Message, error) {
 		}
 		m.Files = append(m.Files, file)
 	}
-
-	ff, err := m.processAndConvertFiles()
-	if err != nil {
-		return nil, err
-	}
-	m.Files = ff
 
 	return m, nil
 }

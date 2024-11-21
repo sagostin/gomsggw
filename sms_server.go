@@ -129,7 +129,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 				"AuthFailed",
 				logrus.ErrorLevel,
 				map[string]interface{}{
-					"ip": session.Parent.RemoteAddr(),
+					"ip": session.Parent.RemoteAddr().String(),
 				}, err,
 			))
 		}
@@ -146,7 +146,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 				"SMPPResponsableError",
 				logrus.ErrorLevel,
 				map[string]interface{}{
-					"ip": session.Parent.RemoteAddr(),
+					"ip": session.Parent.RemoteAddr().String(),
 				}, err,
 			))
 		}
@@ -156,7 +156,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 			"SMPPUnhandledPDU",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"ip": session.Parent.RemoteAddr(),
+				"ip": session.Parent.RemoteAddr().String(),
 			}, p,
 		))
 	}
@@ -193,7 +193,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 			"AuthFailed",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"ip":       session.Parent.RemoteAddr(),
+				"ip":       session.Parent.RemoteAddr().String(),
 				"username": username,
 			},
 		))
@@ -209,7 +209,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 				"SMPPPDUError",
 				logrus.ErrorLevel,
 				map[string]interface{}{
-					"ip":       session.Parent.RemoteAddr(),
+					"ip":       session.Parent.RemoteAddr().String(),
 					"username": username,
 				}, "BIND REQ",
 			))
@@ -220,7 +220,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 			"AuthSuccess",
 			logrus.InfoLevel,
 			map[string]interface{}{
-				"ip":       session.Parent.RemoteAddr(),
+				"ip":       session.Parent.RemoteAddr().String(),
 				"username": username,
 			},
 		))
@@ -236,7 +236,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 			"AuthFailed",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"ip":       session.Parent.RemoteAddr(),
+				"ip":       session.Parent.RemoteAddr().String(),
 				"username": username,
 			},
 		))
@@ -264,7 +264,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			"SMPPFindSession",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"ip": session.Parent.RemoteAddr(),
+				"ip": session.Parent.RemoteAddr().String(),
 			},
 		))
 		return
@@ -315,7 +315,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			"SMPPPDUError",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"ip": session.Parent.RemoteAddr(),
+				"ip": session.Parent.RemoteAddr().String(),
 			}, err,
 		))
 	}

@@ -218,7 +218,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleBind",
 			"AuthSuccess",
-			logrus.ErrorLevel,
+			logrus.InfoLevel,
 			map[string]interface{}{
 				"ip":       session.Parent.RemoteAddr(),
 				"username": username,

@@ -107,7 +107,6 @@ func (router *Router) CarrierRouter() {
 
 			client, _ = router.findClientByNumber(msg.From)
 			if client != nil {
-				continue
 				// todo log & error invalid sender number
 			}
 

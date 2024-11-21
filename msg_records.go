@@ -64,3 +64,10 @@ func (gateway *Gateway) InsertMsgQueueItem(item MsgQueueItem, clientID uint, car
 	// Insert into the database using InsertStruct.
 	return nil
 }
+
+func swapToAndFrom(item MsgQueueItem) MsgQueueItem {
+	newMsg := item
+	newMsg.From = item.To
+	newMsg.To = item.From
+	return newMsg
+}

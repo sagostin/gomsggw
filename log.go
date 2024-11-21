@@ -15,30 +15,30 @@ import (
 
 func (lm *LogManager) LoadTemplates() {
 	templates := map[string]string{
-		"GenericError":            "An error occurred: %s",
-		"UnexpectedError":         "Unexpected error: %s",
-		"UnhandledException":      "Unhandled exception: %s",
+		"GenericError":            "An error occurred: %v",
+		"UnexpectedError":         "Unexpected error: %v",
+		"UnhandledException":      "Unhandled exception: %v",
 		"CarrierNoDestinations":   "No destination numbers were included.",
-		"CarrierFetchMediaError":  "Unable to fetch media from: %s",
-		"SaveMediaError":          "Unable to save media to DB: %s",
+		"CarrierFetchMediaError":  "Unable to fetch media from: %v",
+		"SaveMediaError":          "Unable to save media to DB: %v",
 		"MM4RemoveInactiveClient": "Removed inactive from MM4 server.",
-		"ParseAddressError":       "Failed to parse address: %s",
+		"ParseAddressError":       "Failed to parse address: %v",
 		"AuthFailed":              "Authentication failed",
 		"AuthSuccess":             "Authentication success",
 		"MM4ReconnectInactivity":  "Reconnecting client after inactivity.",
-		"MM4Reconnect":            "Reconnecting client %s from %s",
-		"MM4SessionError":         "Session error: %s",
-		"RouterSendSMPP":          "Failed to send SMPP to client: %s",
-		"RouterSendMM4":           "Failed to send MM4 to client: %s",
-		"RouterSendCarrier":       "Failed to send carrier: %s",
+		"MM4Reconnect":            "Reconnecting client %v from %v",
+		"MM4SessionError":         "Session error: %v",
+		"RouterSendSMPP":          "Failed to send SMPP to client: %v",
+		"RouterSendMM4":           "Failed to send MM4 to client: %v",
+		"RouterSendCarrier":       "Failed to send carrier: %v",
 		"NoFiles":                 "No files were included.",
 		"RouterSendFailed":        "Failed to send.",
 		"RouterFindSMPP":          "Failed to find SMPP client.",
 		"RouterFindCarrier":       "Failed to find carrier.",
-		"SMPPEnquireLinkError":    "Error enquiring link: %s",
-		"SMPPUnhandledPDU":        "Unhandled PDU: %s",
-		"SMPPResponsableError":    "Responsable Error: %s",
-		"SMPPPDUError":            "Error sending PDU: %s",
+		"SMPPEnquireLinkError":    "Error enquiring link: %v",
+		"SMPPUnhandledPDU":        "Unhandled PDU: %v",
+		"SMPPResponsableError":    "Responsable Error: %v",
+		"SMPPPDUError":            "Error sending PDU: %v",
 		"SMPPFindSession":         "Failed to find SMPP session.",
 	}
 
@@ -181,7 +181,7 @@ func (lf *LoggingFormat) AddField(key string, value interface{}) {
 func (lm *LogManager) formatTemplate(templateName string, args ...interface{}) string {
 	template, exists := lm.Templates[strings.ToUpper(templateName)]
 	if !exists {
-		return fmt.Sprintf("Template '%s' not found", templateName)
+		return fmt.Sprintf("Template '%v' not found", templateName)
 	}
 	return fmt.Sprintf(template, args...)
 }

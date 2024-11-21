@@ -1,7 +1,5 @@
 package main
 
-import "fmt"
-
 type Client struct {
 	ID         uint           `gorm:"primaryKey" json:"id"`
 	Username   string         `gorm:"unique;not null" json:"username"`
@@ -20,21 +18,12 @@ type ClientNumber struct {
 }
 
 func (gateway *Gateway) migrateSchema() error {
-	if err := gateway.DB.AutoMigrate(&Client{}, &ClientNumber{}, &MediaFile{}); err != nil {
+	if err := gateway.DB.AutoMigrate(&Client{}, &ClientNumber{}, &MediaFile{}, &MsgRecordDBItem{}); err != nil {
 		return err
 	}
 	err := gateway.createIndexes()
 	if err != nil {
 		return err
-	}
-	return nil
-}
-
-func (gateway *Gateway) createIndexes() error {
-	// Create index on expires_at column
-	err := gateway.DB.Migrator().CreateIndex(&MediaFile{}, "ExpiresAt")
-	if err != nil {
-		return fmt.Errorf("failed to create index on expires_at: %v", err)
 	}
 	return nil
 }

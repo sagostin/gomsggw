@@ -19,6 +19,7 @@ func (router *Router) ClientRouter() {
 		switch msgType := msg.Type; msgType {
 		case MsgQueueItemType.SMS:
 			client, _ := router.findClientByNumber(msg.To)
+			fromClient, _ := router.findClientByNumber(msg.From)
 			if client != nil {
 				session, err := router.gateway.SMPPServer.findSmppSession(msg.To)
 				if err != nil {
@@ -77,6 +78,19 @@ func (router *Router) ClientRouter() {
 							continue
 						}
 					} else {
+						router.gateway.MsgRecordChan <- MsgRecord{
+							MsgQueueItem: msg,
+							Carrier:      "inbound",
+							ClientID:     client.ID,
+							Internal:     true,
+						}
+						router.gateway.MsgRecordChan <- MsgRecord{
+							MsgQueueItem: msg,
+							Carrier:      "outbound",
+							ClientID:     fromClient.ID,
+							Internal:     true,
+						}
+
 						if msg.Delivery != nil {
 							err := msg.Delivery.Ack(false)
 							if err != nil {
@@ -134,6 +148,7 @@ func (router *Router) ClientRouter() {
 			continue
 		case MsgQueueItemType.MMS:
 			client, _ := router.findClientByNumber(msg.To)
+			fromClient, _ := router.findClientByNumber(msg.From)
 			if client != nil {
 				err := router.gateway.MM4Server.sendMM4(msg)
 				if err != nil {
@@ -164,6 +179,18 @@ func (router *Router) ClientRouter() {
 					}
 					// todo maybe to add to queue via postgres?
 					continue
+				}
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem: msg,
+					Carrier:      "inbound",
+					ClientID:     client.ID,
+					Internal:     true,
+				}
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem: msg,
+					Carrier:      "outbound",
+					ClientID:     fromClient.ID,
+					Internal:     true,
 				}
 				if msg.Delivery != nil {
 					err := msg.Delivery.Ack(false)

@@ -80,6 +80,12 @@ func (router *Router) CarrierRouter() {
 						_ = router.gateway.AMPQClient.Publish("client", marshal)
 						continue
 					} else {
+						router.gateway.MsgRecordChan <- MsgRecord{
+							MsgQueueItem: msg,
+							Carrier:      "inbound",
+							ClientID:     client.ID,
+							Internal:     false,
+						}
 						if msg.Delivery != nil {
 							err := msg.Delivery.Ack(false)
 							if err != nil {
@@ -99,6 +105,12 @@ func (router *Router) CarrierRouter() {
 				}
 			}
 
+			client, _ = router.findClientByNumber(msg.From)
+			if client != nil {
+				continue
+				// todo log & error invalid sender number
+			}
+
 			carrier, _ := router.gateway.getClientCarrier(msg.From)
 			if carrier != "" {
 				// add to outbound carrier queue
@@ -106,6 +118,12 @@ func (router *Router) CarrierRouter() {
 				if route != nil {
 					err := route.Handler.SendSMS(&msg)
 					if err != nil {
+						router.gateway.MsgRecordChan <- MsgRecord{
+							MsgQueueItem: msg,
+							Carrier:      carrier,
+							ClientID:     client.ID,
+							Internal:     false,
+						}
 						// todo log
 						if msg.Delivery != nil {
 							err = msg.Delivery.Reject(true)
@@ -198,6 +216,13 @@ func (router *Router) CarrierRouter() {
 					// todo maybe to add to queue via postgres?
 					continue
 				}
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem: msg,
+					Carrier:      "inbound",
+					ClientID:     client.ID,
+					Internal:     false,
+				}
+
 				if msg.Delivery != nil {
 					err := msg.Delivery.Ack(false)
 					if err != nil {
@@ -205,6 +230,12 @@ func (router *Router) CarrierRouter() {
 					}
 				}
 				continue
+			}
+
+			client, _ = router.findClientByNumber(msg.From)
+			if client != nil {
+				continue
+				// todo log & error invalid sender number
 			}
 
 			carrier, _ := router.gateway.getClientCarrier(msg.From)
@@ -231,6 +262,12 @@ func (router *Router) CarrierRouter() {
 							}
 						}
 						continue
+					}
+					router.gateway.MsgRecordChan <- MsgRecord{
+						MsgQueueItem: msg,
+						Carrier:      carrier,
+						ClientID:     client.ID,
+						Internal:     false,
 					}
 					if msg.Delivery != nil {
 						err := msg.Delivery.Ack(false)

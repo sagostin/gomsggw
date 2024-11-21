@@ -11,16 +11,24 @@ import (
 
 // Gateway handles SMS processing for different carriers
 type Gateway struct {
-	Carriers   map[string]CarrierHandler
-	DB         *gorm.DB
-	SMPPServer *SMPPServer
-	Router     *Router
-	MM4Server  *MM4Server
-	AMPQClient *AMPQClient
-	Clients    map[string]*Client
-	Numbers    map[string]*ClientNumber
-	LogManager *LogManager
-	mu         sync.RWMutex
+	Carriers      map[string]CarrierHandler
+	DB            *gorm.DB
+	SMPPServer    *SMPPServer
+	Router        *Router
+	MM4Server     *MM4Server
+	AMPQClient    *AMPQClient
+	Clients       map[string]*Client
+	Numbers       map[string]*ClientNumber
+	LogManager    *LogManager
+	mu            sync.RWMutex
+	MsgRecordChan chan MsgRecord
+}
+
+type MsgRecord struct {
+	MsgQueueItem MsgQueueItem
+	ClientID     uint
+	Carrier      string
+	Internal     bool
 }
 
 func getPostgresDSN() string {
@@ -72,9 +80,10 @@ func NewGateway() (*Gateway, error) {
 			ClientMsgChan:  make(chan MsgQueueItem),
 			CarrierMsgChan: make(chan MsgQueueItem),
 		},
-		Clients: make(map[string]*Client),
-		Numbers: make(map[string]*ClientNumber),
-		DB:      db,
+		MsgRecordChan: make(chan MsgRecord),
+		Clients:       make(map[string]*Client),
+		Numbers:       make(map[string]*ClientNumber),
+		DB:            db,
 	}
 
 	gateway.Router.gateway = gateway

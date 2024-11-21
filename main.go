@@ -133,6 +133,8 @@ func main() {
 	go gateway.Router.ClientMsgConsumer()
 	go gateway.Router.CarrierMsgConsumer()
 
+	go gateway.processMsgRecords()
+
 	// Start server
 	webListen := os.Getenv("WEB_LISTEN")
 	if webListen == "" {

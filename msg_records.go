@@ -25,7 +25,6 @@ type MsgRecordDBItem struct {
 	To                string    `json:"to_number"`
 	From              string    `json:"from_number"`
 	ReceivedTimestamp time.Time `json:"received_timestamp"`
-	QueuedTimestamp   time.Time `json:"queued_timestamp"`
 	Type              string    `json:"type"`              // "mms" or "sms"
 	RedactedMessage   string    `json:"redacted_message"`  // Partially redacted message
 	Carrier           string    `json:"carrier,omitempty"` // Carrier name (optional)
@@ -49,12 +48,12 @@ func (gateway *Gateway) InsertMsgQueueItem(item MsgQueueItem, clientID uint, car
 		From:              item.From,
 		ClientID:          clientID,
 		ReceivedTimestamp: item.ReceivedTimestamp,
-		QueuedTimestamp:   item.QueuedTimestamp,
-		Type:              string(item.Type),
-		RedactedMessage:   PartiallyRedactMessage(item.Message),
-		Carrier:           carrier,
-		Internal:          internal,
-		LogID:             item.LogID,
+		//QueuedTimestamp:   item.QueuedTimestamp,
+		Type:            string(item.Type),
+		RedactedMessage: PartiallyRedactMessage(item.Message),
+		Carrier:         carrier,
+		Internal:        internal,
+		LogID:           item.LogID,
 	}
 
 	if err := gateway.DB.Create(dbItem).Error; err != nil {

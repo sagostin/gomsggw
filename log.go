@@ -23,7 +23,7 @@ func (lm *LogManager) LoadTemplates() {
 		"SaveMediaError":          "Unable to save media to DB: %s",
 		"MM4RemoveInactiveClient": "Removed inactive from MM4 server.",
 		"ParseAddressError":       "Failed to parse address: %s",
-		"AuthError":               "Authentication failed",
+		"AuthFailed":              "Authentication failed",
 		"AuthSuccess":             "Authentication success",
 		"MM4ReconnectInactivity":  "Reconnecting client after inactivity.",
 		"MM4Reconnect":            "Reconnecting client %s from %s",

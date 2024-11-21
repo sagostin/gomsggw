@@ -126,7 +126,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 		if err != nil {
 			lm.SendLog(lm.BuildLog(
 				"Server.SMPP.HandlePDU",
-				"AuthError",
+				"AuthFailed",
 				logrus.ErrorLevel,
 				map[string]interface{}{
 					"ip": session.Parent.RemoteAddr(),

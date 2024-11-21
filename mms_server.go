@@ -170,7 +170,7 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		writeResponse(writer, "550 Access denied")
 		lm.SendLog(lm.BuildLog(
 			"Server.MM4.HandleConnection",
-			"AuthError",
+			"AuthFailed",
 			logrus.WarnLevel,
 			map[string]interface{}{
 				"client": "unknown",

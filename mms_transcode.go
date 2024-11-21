@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -16,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	_ "image/gif"
 	_ "image/jpeg"
@@ -26,6 +29,48 @@ const (
 	maxImageSize = 0.5 * 1024 * 1024 // 1 MB
 	maxFileSize  = 0.5 * 1024 * 1024 // 5 MB
 )
+
+func (s *MM4Server) transcodeMedia() {
+	for {
+		mm4Message := <-s.MediaTranscodeChan
+
+		transId := primitive.NewObjectID().Hex()
+
+		ff, err := mm4Message.processAndConvertFiles()
+		if err != nil {
+			mm4Message.Files = nil
+			mm4Message.Content = nil // remove content to be safe
+
+			mm4Message.Client.Password = "***"
+
+			// todo add log privacy
+
+			var lm = s.gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"Failed to transcode media. %s",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"mm4Message": mm4Message,
+					"logID":      transId,
+				}, err,
+			))
+			continue
+		}
+		mm4Message.Files = ff
+
+		msgItem := MsgQueueItem{
+			To:                mm4Message.To,
+			From:              mm4Message.From,
+			ReceivedTimestamp: time.Now(),
+			Type:              MsgQueueItemType.MMS,
+			Files:             mm4Message.Files,
+			LogID:             transId,
+		}
+
+		s.gateway.Router.ClientMsgChan <- msgItem
+	}
+}
 
 // List of compatible MIME types
 var compatibleTypes = map[string]bool{

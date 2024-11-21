@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"github.com/pires/go-proxyproto"
 	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"io"
@@ -50,47 +49,12 @@ type MM4Server struct {
 	MediaTranscodeChan chan *MM4Message
 }
 
-func (s *MM4Server) transcodeMedia() {
-	for {
-		mm4Message := <-s.MediaTranscodeChan
-
-		ff, err := mm4Message.processAndConvertFiles()
-		if err != nil {
-			mm4Message.Files = nil
-
-			var lm = s.gateway.LogManager
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.CleanInactive",
-				"MM4RemoveInactiveClient",
-				logrus.InfoLevel,
-				map[string]interface{}{
-					"client":  mm4Message.Client,
-					"message": mm4Message,
-				},
-			))
-			continue
-		}
-		mm4Message.Files = ff
-
-		transId := primitive.NewObjectID().Hex()
-
-		msgItem := MsgQueueItem{
-			To:                mm4Message.To,
-			From:              mm4Message.From,
-			ReceivedTimestamp: time.Now(),
-			Type:              MsgQueueItemType.MMS,
-			Files:             mm4Message.Files,
-			LogID:             transId,
-		}
-
-		s.gateway.Router.ClientMsgChan <- msgItem
-	}
-}
-
 // Start begins listening for incoming SMTP connections.
 func (s *MM4Server) Start() error {
 	s.connectedClients = make(map[string]time.Time)
 	s.MediaTranscodeChan = make(chan *MM4Message)
+
+	go s.transcodeMedia()
 
 	listen, err := net.Listen("tcp", s.Addr)
 	if err != nil {

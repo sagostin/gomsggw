@@ -154,7 +154,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandlePDU",
 			"SMPPUnhandledPDU",
-			logrus.ErrorLevel,
+			logrus.WarnLevel,
 			map[string]interface{}{
 				"ip": session.Parent.RemoteAddr().String(),
 			}, p,

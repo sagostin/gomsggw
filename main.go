@@ -139,9 +139,9 @@ func main() {
 		webListen = "0.0.0.0:3000"
 	}
 
-	app.Post("/clients", basicAuthMiddleware, gateway.webAddClient)
-	app.Post("/numbers", basicAuthMiddleware, gateway.webAddNumber)
-	app.Get("/reload_data", basicAuthMiddleware, gateway.webReloadData)
+	app.Post("/clients", gateway.basicAuthMiddleware, gateway.webAddClient)
+	app.Post("/numbers", gateway.basicAuthMiddleware, gateway.webAddNumber)
+	app.Get("/reload_data", gateway.basicAuthMiddleware, gateway.webReloadData)
 
 	// Define the /reload_clients route
 	// app.Get("/reload_clients", basicAuthMiddleware, gateway.webReloadClients)

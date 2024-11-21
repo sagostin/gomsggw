@@ -11,7 +11,7 @@ import (
 )
 
 // basicAuthMiddleware is a middleware that enforces Basic Authentication using an API key
-func basicAuthMiddleware(ctx iris.Context, gateway *Gateway) {
+func (gateway *Gateway) basicAuthMiddleware(ctx iris.Context) {
 	// Retrieve the expected API key from environment variables
 	var lm = gateway.LogManager
 

@@ -34,6 +34,7 @@ services:
     ports:
       - "${RABBITMQ_PORT}:5672"
       - "${RABBITMQ_MANAGEMENT_PORT}:15672"
+      - "${RABBITMQ_PROMETHEUS_PORT}:15692" # Prometheus metrics exporter
     restart: always
 
 volumes:

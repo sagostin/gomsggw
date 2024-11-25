@@ -141,9 +141,16 @@ func main() {
 		webListen = "0.0.0.0:3000"
 	}
 
+	app.Use(ProxyIPMiddleware)
+
 	app.Post("/clients", gateway.basicAuthMiddleware, gateway.webAddClient)
 	app.Post("/numbers", gateway.basicAuthMiddleware, gateway.webAddNumber)
 	app.Get("/reload_data", gateway.basicAuthMiddleware, gateway.webReloadData)
+
+	app.Get("/health", func(ctx iris.Context) {
+		ctx.StatusCode(200)
+		return
+	})
 
 	// Define the /reload_clients route
 	// app.Get("/reload_clients", basicAuthMiddleware, gateway.webReloadClients)

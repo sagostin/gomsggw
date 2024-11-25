@@ -251,8 +251,12 @@ func (client *AMPQClient) UnsafePublish(queueName string, data []byte) error {
 	client.m.Lock()
 	defer client.m.Unlock()
 
-	if !client.isReady || client.channel == nil {
+	if client.isReady && client.channel == nil || client.channel == nil {
 		return fmt.Errorf("not connected")
+	}
+
+	if !client.isReady {
+		return fmt.Errorf("not ready")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -276,8 +280,12 @@ func (client *AMPQClient) ConsumeMessages(queueName string) (<-chan amqp.Deliver
 	client.m.Lock()
 	defer client.m.Unlock()
 
-	if !client.isReady || client.channel == nil {
+	if client.isReady && client.channel == nil || client.channel == nil {
 		return nil, fmt.Errorf("not connected")
+	}
+
+	if !client.isReady {
+		return nil, fmt.Errorf("not ready")
 	}
 
 	if err := client.channel.Qos(1, 0, false); err != nil {

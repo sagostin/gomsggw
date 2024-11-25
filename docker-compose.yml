@@ -16,6 +16,8 @@ services:
     ports:
       - "5432:5432"
     restart: always
+    networks:
+      - smsgw-network
 
   rabbitmq:
     image: rabbitmq:3.12-management-alpine
@@ -36,7 +38,50 @@ services:
       - "${RABBITMQ_MANAGEMENT_PORT}:15672"
       - "${RABBITMQ_PROMETHEUS_PORT}:15692" # Prometheus metrics exporter
     restart: always
+    networks:
+      - smsgw-network
 
-volumes:
-  postgres_data:
-  rabbitmq_data:
+  msggw1:
+    image: sms-mms-gw:latest
+    container_name: msggw1
+    env_file:
+      - .env
+    restart: always
+    networks:
+      - smsgw-network
+    expose:
+      - "3000"
+      - "2775"
+      - "2566"
+    environment:
+      - SERVER_ID=msggw1
+  msggw2:
+    image: sms-mms-gw:latest
+    container_name: msggw2
+    env_file:
+      - .env
+    restart: always
+    networks:
+      - smsgw-network
+    expose:
+      - "3000"
+      - "2775"
+      - "2566"
+    environment:
+      - SERVER_ID=msggw2
+  haproxy:
+    image: haproxy:latest
+    container_name: haproxy
+    volumes:
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "80:80"
+      - "2775:2775"
+      - "2566:2566"
+    networks:
+      - smsgw-network
+    restart: always
+
+networks:
+  smsgw-network:
+    driver: bridge

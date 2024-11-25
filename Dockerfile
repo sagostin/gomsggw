@@ -1,5 +1,8 @@
 # Start from a Golang base image
-FROM golang:1.21-alpine AS builder
+FROM golang:1.22-alpine AS builder
+
+# Configure Go proxy
+ENV GOPROXY=https://proxy.golang.org,direct
 
 # Set the working directory inside the container
 WORKDIR /app
@@ -20,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 FROM alpine:latest
 
 # Add CA certificates and create non-root user
-RUN apk --no-cache add ca-certificates && \
+RUN apk --no-cache add ca-certificates ffmpeg && \
     adduser -D appuser
 
 # Set the working directory
@@ -29,8 +32,8 @@ WORKDIR /app
 # Copy the pre-built binary file from the previous stage
 COPY --from=builder /app/main .
 
-# Copy the .env and carriers.json files
-COPY .env clients.json ./
+# Copy additional resources
+COPY ./transcode ./
 
 # Use the non-root user
 USER appuser

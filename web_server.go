@@ -23,7 +23,7 @@ func (gateway *Gateway) basicAuthMiddleware(ctx iris.Context) {
 			"Authenticated web client",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"ip": ctx.RemoteAddr(),
+				"ip": ctx.Values().GetString("client_ip"),
 			},
 		))
 		// Log the error
@@ -109,7 +109,7 @@ func unauthorized(ctx iris.Context, gateway *Gateway, message string) {
 		"Unauthorized web client",
 		logrus.ErrorLevel,
 		map[string]interface{}{
-			"ip": ctx.RemoteAddr(),
+			"ip": ctx.Values().GetString("client_ip"),
 		},
 	))
 

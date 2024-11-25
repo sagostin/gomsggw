@@ -52,7 +52,7 @@ func (router *Router) ClientRouter() {
 					continue
 				}
 				if session != nil {
-					err := router.gateway.SMPPServer.sendSMPP(msg)
+					err := router.gateway.SMPPServer.sendSMPP(msg, session)
 					if err != nil {
 						lm.SendLog(lm.BuildLog(
 							"Router.Carrier.SMS",

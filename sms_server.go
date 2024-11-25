@@ -108,7 +108,14 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 
 func (srv *SMPPServer) findAuthdSession(session *smpp.Session) error {
 	for _, sess := range srv.conns {
-		if session.Parent.RemoteAddr() == sess.Parent.RemoteAddr() {
+		currentConn, err := srv.GetClientIP(session)
+		loggedConn, err := srv.GetClientIP(sess)
+
+		if err != nil {
+			return fmt.Errorf("error getting client ip for auth check")
+		}
+
+		if currentConn == loggedConn {
 			return nil
 		}
 	}
@@ -321,20 +328,6 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}
 }
 
-func (srv *SMPPServer) clientInboundConn(destination string) (*smpp.Session, error) {
-
-	for _, client := range srv.gateway.Clients {
-		for _, num := range client.Numbers {
-			//log.Printf("%s", num)
-			if strings.Contains(destination, num.Number) {
-				return srv.conns[client.Username], nil
-			}
-		}
-	}
-
-	return nil, nil
-}
-
 func (h *SimpleHandler) handleDeliverSM(session *smpp.Session, deliverSM *pdu.DeliverSM) {
 	logf := LoggingFormat{Type: "handleDeliverSM"}
 
@@ -453,8 +446,9 @@ func (srv *SMPPServer) findSmppSession(destination string) (*smpp.Session, error
 			if strings.Contains(destination, num.Number) {
 				if session, ok := srv.conns[client.Username]; ok {
 					return session, nil
+				} else {
+					return nil, fmt.Errorf("client found but not connected: %s", client.Username)
 				}
-				return nil, fmt.Errorf("client found but not connected: %s", client.Username)
 			}
 		}
 	}

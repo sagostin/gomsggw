@@ -62,7 +62,7 @@ func (router *Router) CarrierRouter() {
 					continue
 				}
 				if session != nil {
-					err := router.gateway.SMPPServer.sendSMPP(msg)
+					err := router.gateway.SMPPServer.sendSMPP(msg, session)
 					if err != nil {
 						if msg.Delivery != nil {
 							err = msg.Delivery.Ack(false)

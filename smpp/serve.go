@@ -54,12 +54,12 @@ func ServeTCP(address string, handler Handler, config *tls.Config) (err error) {
 			return err
 		}
 
-		defer func(conn net.Conn) {
+		/*defer func(conn net.Conn) {
 			err := conn.Close()
 			if err != nil {
 				log.Fatal("couldn't close proxy connection")
 			}
-		}(conn)
+		}(conn)*/
 
 		// Print connection details
 		if conn.LocalAddr() == nil {

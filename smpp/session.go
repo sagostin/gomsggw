@@ -59,11 +59,14 @@ func (c *Session) watch(ctx context.Context) {
 				Header: pdu.Header{CommandStatus: status, Sequence: pdu.ReadSequence(packet)},
 				Tags:   pdu.Tags{0xFFFF: []byte(err.Error())},
 			})
+			c.LastSeen = time.Now()
 			continue
 		}
 		if callback, ok := c.pending.Load(pdu.ReadSequence(packet)); ok {
 			callback.(func(any))(packet)
+			c.LastSeen = time.Now()
 		} else {
+			c.LastSeen = time.Now()
 			c.receiveQueue <- packet
 		}
 	}

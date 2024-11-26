@@ -139,7 +139,7 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 		case <-ctx.Done():
 			return
 		case <-tick.C:
-			session.LastSeen = time.Now()
+			// session.LastSeen = time.Now()
 			err := session.EnquireLink(ctx, 15*time.Second, 5*time.Second)
 			if err != nil {
 				var lm = h.server.gateway.LogManager
@@ -190,7 +190,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 				}, err,
 			))
 		}
-		session.LastSeen = time.Now()
+		// session.LastSeen = time.Now()
 		h.handleSubmitSM(session, p)
 	case *pdu.DeliverSM:
 		h.handleDeliverSM(session, p)
@@ -283,12 +283,12 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 			},
 		))
 
-		session.LastSeen = time.Now()
+		// session.LastSeen = time.Now()
 
-		h.server.mu.Lock()
+		/*h.server.mu.Lock()
 		h.server.conns[username] = session
 		h.server.mu.Unlock()
-
+		*/
 		//h.server.reconnectChannel <- username
 	} else {
 		lm.SendLog(lm.BuildLog(

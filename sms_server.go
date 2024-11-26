@@ -110,7 +110,7 @@ func (s *SMPPServer) RemoveInactiveClients() {
 				))
 
 				// Close the session if necessary
-				if err := session.Close(context.TODO()); err != nil {
+				/*if err := session.Close(context.TODO()); err != nil {
 					lm.SendLog(lm.BuildLog(
 						"Server.SMPP.CleanInactive",
 						"Error removing inactive session",
@@ -120,7 +120,7 @@ func (s *SMPPServer) RemoveInactiveClients() {
 							"last_seen": session.LastSeen,
 						},
 					))
-				}
+				}*/
 
 				// Remove the session from the map
 				delete(s.conns, username)
@@ -174,8 +174,6 @@ func (s *SMPPServer) findAuthdSession(session *smpp.Session) error {
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	var lm = h.server.gateway.LogManager
 
-	session.LastSeen = time.Now()
-
 	switch p := packet.(type) {
 	case *pdu.BindTransceiver:
 		h.handleBind(session, p)
@@ -209,7 +207,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 				}, err,
 			))
 		}
-		session.LastSeen = time.Now()
+		//session.LastSeen = time.Now()
 	default:
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandlePDU",
@@ -425,7 +423,7 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 			return
 		}
 
-		if err := session.Close(context.TODO()); err != nil {
+		/*if err := session.Close(context.TODO()); err != nil {
 			var lm = h.server.gateway.LogManager
 			lm.SendLog(lm.BuildLog(
 				"Server.SMPP.CleanInactive",
@@ -436,7 +434,7 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 					"last_seen": session.LastSeen,
 				},
 			))
-		}
+		}*/
 
 		if clientIP == ip {
 			delete(h.server.conns, username)

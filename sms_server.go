@@ -80,7 +80,6 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 		case <-ctx.Done():
 			return
 		case packet := <-session.PDU():
-			session.LastSeen = time.Now()
 			h.handlePDU(session, packet)
 		}
 	}
@@ -174,6 +173,8 @@ func (s *SMPPServer) findAuthdSession(session *smpp.Session) error {
 
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	var lm = h.server.gateway.LogManager
+
+	session.LastSeen = time.Now()
 
 	switch p := packet.(type) {
 	case *pdu.BindTransceiver:

@@ -24,7 +24,7 @@ type SMPPServer struct {
 	gateway          *Gateway
 }
 
-const InactivityDuration = 2 * time.Minute
+const InactivityDuration = 5 * time.Minute
 
 func (s *SMPPServer) Start(gateway *Gateway) {
 	handler := NewSimpleHandler(gateway.SMPPServer)

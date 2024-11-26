@@ -22,7 +22,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 # Start a new stage from scratch
 FROM alpine:latest
 
-# Add CA certificates and create non-root user
+# Add CA certificates and ffmpeg, then create a non-root user
 RUN apk --no-cache add ca-certificates ffmpeg && \
     adduser -D appuser
 
@@ -32,8 +32,8 @@ WORKDIR /app
 # Copy the pre-built binary file from the previous stage
 COPY --from=builder /app/main .
 
-# Make transcode directory
-RUN mkdir -p ./transcode
+# Make transcode directory and set ownership to appuser
+RUN mkdir -p /app/transcode && chown -R appuser:appuser /app/transcode
 
 # Use the non-root user
 USER appuser

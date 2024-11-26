@@ -43,7 +43,7 @@ services:
 
   msggw1:
     image: sms-mms-gw:latest
-    container_name: msggw1-1
+    container_name: msggw1
     env_file:
       - .env
     restart: always
@@ -54,10 +54,10 @@ services:
       - "2775"
       - "2566"
     environment:
-      - SERVER_ID=msggw1
+      - SERVER_ID=msggw1-1
   msggw2:
     image: sms-mms-gw:latest
-    container_name: msggw1-2
+    container_name: msggw2
     env_file:
       - .env
     restart: always
@@ -68,7 +68,7 @@ services:
       - "2775"
       - "2566"
     environment:
-      - SERVER_ID=msggw2
+      - SERVER_ID=msggw1-2
   haproxy:
     image: haproxy:latest
     container_name: haproxy

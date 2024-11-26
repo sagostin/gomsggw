@@ -80,6 +80,7 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 		case <-ctx.Done():
 			return
 		case packet := <-session.PDU():
+			session.LastSeen = time.Now()
 			h.handlePDU(session, packet)
 		}
 	}

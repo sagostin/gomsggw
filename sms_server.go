@@ -92,10 +92,10 @@ func (s *SMPPServer) RemoveInactiveClients() {
 
 	for {
 		<-ticker.C
-		now := time.Now()
 
 		s.mu.Lock()
 		for username, session := range s.conns {
+			now := time.Now()
 			if now.Sub(session.LastSeen) > InactivityDuration {
 				// Log the removal
 				var lm = s.gateway.LogManager
@@ -110,7 +110,7 @@ func (s *SMPPServer) RemoveInactiveClients() {
 				))
 
 				// Close the session if necessary
-				/*if err := session.Close(context.TODO()); err != nil {
+				if err := session.Close(context.TODO()); err != nil {
 					lm.SendLog(lm.BuildLog(
 						"Server.SMPP.CleanInactive",
 						"Error removing inactive session",
@@ -120,7 +120,7 @@ func (s *SMPPServer) RemoveInactiveClients() {
 							"last_seen": session.LastSeen,
 						},
 					))
-				}*/
+				}
 
 				// Remove the session from the map
 				delete(s.conns, username)
@@ -139,6 +139,7 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			session.LastSeen = time.Now()
 			err := session.EnquireLink(ctx, 15*time.Second, 5*time.Second)
 			if err != nil {
 				var lm = h.server.gateway.LogManager
@@ -207,7 +208,6 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 				}, err,
 			))
 		}
-		//session.LastSeen = time.Now()
 	default:
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandlePDU",

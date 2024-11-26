@@ -113,7 +113,6 @@ func (c *Session) EnquireLink(ctx context.Context, tick time.Duration, timeout t
 			ticker.Stop()
 			err = c.Close(ctx)
 		}
-		c.LastSeen = time.Now()
 		cancel()
 		<-ticker.C
 	}

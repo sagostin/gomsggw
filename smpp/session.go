@@ -54,6 +54,7 @@ func (c *Session) watch(ctx context.Context) {
 		if packet == nil {
 			continue
 		}
+		c.LastSeen = time.Now()
 		if status, ok := err.(pdu.CommandStatus); ok {
 			_ = c.Send(&pdu.GenericNACK{
 				Header: pdu.Header{CommandStatus: status, Sequence: pdu.ReadSequence(packet)},

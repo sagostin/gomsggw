@@ -111,12 +111,17 @@ func (s *SMPPServer) RemoveInactiveClients() {
 				))
 
 				// Close the session if necessary
-				/*if err := session.Close(context.Background()); err != nil {
-					logrus.WithFields(logrus.Fields{
-						"username": username,
-						"error":    err,
-					}).Error("Error closing inactive session")
-				}*/
+				if err := session.Close(context.TODO()); err != nil {
+					lm.SendLog(lm.BuildLog(
+						"Server.SMPP.CleanInactive",
+						"Error removing inactive session",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"username":  username,
+							"last_seen": session.LastSeen,
+						},
+					))
+				}
 
 				// Remove the session from the map
 				delete(s.conns, username)
@@ -417,6 +422,19 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 		if err != nil {
 			println(err)
 			return
+		}
+
+		if err := session.Close(context.TODO()); err != nil {
+			var lm = h.server.gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.CleanInactive",
+				"Error removing inactive session",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"username":  username,
+					"last_seen": session.LastSeen,
+				},
+			))
 		}
 
 		if clientIP == ip {

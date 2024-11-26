@@ -425,7 +425,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.carrier.Password)
+	req.Header.Set("Authorization", "Bearer "+h.password)
 
 	// Perform the request
 	client := &http.Client{}

@@ -22,6 +22,8 @@ type Gateway struct {
 	LogManager    *LogManager
 	mu            sync.RWMutex
 	MsgRecordChan chan MsgRecord
+	ServerID      string
+	EncryptionKey string // PSK for encryption/decryption
 }
 
 type MsgRecord struct {
@@ -83,6 +85,7 @@ func NewGateway() (*Gateway, error) {
 		MsgRecordChan: make(chan MsgRecord),
 		Clients:       make(map[string]*Client),
 		Numbers:       make(map[string]*ClientNumber),
+		ServerID:      os.Getenv("SERVER_ID"),
 		DB:            db,
 	}
 

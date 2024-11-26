@@ -5,6 +5,7 @@ import (
 	"github.com/kataras/iris/v12"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+	"log"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -21,6 +22,11 @@ func main() {
 				return
 			}
 		}()
+	}
+
+	encryptionKey := os.Getenv("ENCRYPTION_KEY")
+	if encryptionKey == "" {
+		log.Fatal("ENCRYPTION_KEY environment variable not set")
 	}
 
 	app := iris.New()
@@ -46,7 +52,7 @@ func main() {
 
 	gateway.AMPQClient = ampqClient
 
-	err = loadCarriers(gateway)
+	err = gateway.loadCarriers()
 	if err != nil {
 		panic(err)
 	}
@@ -143,10 +149,8 @@ func main() {
 
 	app.Use(ProxyIPMiddleware)
 
-	app.Post("/clients", gateway.basicAuthMiddleware, gateway.webAddClient)
-	app.Post("/numbers", gateway.basicAuthMiddleware, gateway.webAddNumber)
-	app.Get("/reload_data", gateway.basicAuthMiddleware, gateway.webReloadData)
-
+	SetupCarrierRoutes(app, gateway)
+	SetupClientRoutes(app, gateway)
 	app.Get("/health", func(ctx iris.Context) {
 		ctx.StatusCode(200)
 		return

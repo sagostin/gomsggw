@@ -90,6 +90,68 @@ func (gateway *Gateway) basicAuthMiddleware(ctx iris.Context) {
 	ctx.Next()
 }
 
+// SetupCarrierRoutes sets up the HTTP routes for carrier management
+func SetupCarrierRoutes(app *iris.Application, gateway *Gateway) {
+	carriers := app.Party("/carriers", gateway.basicAuthMiddleware)
+	{
+		// Add a new carrier
+		carriers.Post("/", func(ctx iris.Context) {
+			var carrier Carrier
+			if err := ctx.ReadJSON(&carrier); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid carrier data"})
+			}
+
+			// Validate required fields
+			if carrier.Name == "" || carrier.Type == "" || carrier.Username == "" || carrier.Password == "" {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "All fields (name, type, username, password) are required"})
+			}
+
+			if err := gateway.addCarrier(&carrier); err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": err.Error()})
+			}
+
+			// Return the carrier without exposing encrypted fields
+			responseCarrier := Carrier{
+				ID:   carrier.ID,
+				Name: carrier.Name,
+				Type: carrier.Type,
+			}
+
+			ctx.StatusCode(iris.StatusCreated)
+			ctx.JSON(responseCarrier)
+		})
+
+		// Reload carriers from the database
+		carriers.Post("/reload", func(ctx iris.Context) {
+			if err := gateway.reloadCarriers(); err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": err.Error()})
+			}
+
+			ctx.JSON(iris.Map{"status": "Carriers reloaded"})
+		})
+
+		// Get all carriers
+		carriers.Get("/", func(ctx iris.Context) {
+			gateway.mu.RLock()
+			defer gateway.mu.RUnlock()
+
+			var carrierList []Carrier
+			/*for _, handler := range gateway.Carriers {
+				// Assuming each handler can provide its Carrier information
+				if base, ok := handler.(*BaseCarrierHandler); ok {
+					carrierList = append(carrierList, Carrier{Name: base.Name})
+				}
+			}*/
+
+			ctx.JSON(carrierList)
+		})
+	}
+}
+
 // indexOf finds the index of the first occurrence of sep in s
 func indexOf(s string, sep byte) int {
 	for i := 0; i < len(s); i++ {
@@ -121,6 +183,132 @@ func unauthorized(ctx iris.Context, gateway *Gateway, message string) {
 	ctx.WriteString(message)
 }
 
+// SetupClientRoutes sets up the HTTP routes for client management.
+func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
+	clients := app.Party("/clients", gateway.basicAuthMiddleware)
+	{
+		// Add a new client
+		clients.Post("/", func(ctx iris.Context) {
+			var client Client
+			if err := ctx.ReadJSON(&client); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client data"})
+				return
+			}
+
+			// Validate required fields
+			if client.Username == "" || client.Password == "" {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Username and Password are required"})
+				return
+			}
+
+			if err := gateway.addClient(&client); err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": err.Error()})
+				return
+			}
+
+			// Return the client without exposing encrypted fields
+			responseClient := Client{
+				ID:         client.ID,
+				Username:   client.Username,
+				Name:       client.Name,
+				Address:    client.Address,
+				LogPrivacy: client.LogPrivacy,
+			}
+
+			ctx.StatusCode(iris.StatusCreated)
+			ctx.JSON(responseClient)
+		})
+
+		// Reload clients and numbers from the database
+		clients.Post("/reload", func(ctx iris.Context) {
+			if err := gateway.reloadClientsAndNumbers(); err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": err.Error()})
+				return
+			}
+
+			ctx.JSON(iris.Map{"status": "Clients and Numbers reloaded"})
+		})
+
+		// Add a new number to a client
+		clients.Post("/{id}/numbers", func(ctx iris.Context) {
+			clientID := ctx.Params().Get("id")
+			var newNumber ClientNumber
+			if err := ctx.ReadJSON(&newNumber); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number data"})
+				return
+			}
+
+			// Validate required fields
+			if newNumber.Number == "" || newNumber.Carrier == "" {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Number and Carrier are required"})
+				return
+			}
+
+			// Add the number to the client
+			if err := gateway.addNumber(clientID, &newNumber); err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": err.Error()})
+				return
+			}
+
+			// Return the newly added number
+			responseNumber := ClientNumber{
+				ID:       newNumber.ID,
+				ClientID: newNumber.ClientID,
+				Number:   newNumber.Number,
+				Carrier:  newNumber.Carrier,
+			}
+
+			ctx.StatusCode(iris.StatusCreated)
+			ctx.JSON(responseNumber)
+		})
+
+		// Get all numbers for a specific client
+		clients.Get("/{id}/numbers", func(ctx iris.Context) {
+			clientID := ctx.Params().Get("id")
+
+			gateway.mu.RLock()
+			client, exists := gateway.Clients[clientID]
+			gateway.mu.RUnlock()
+
+			if !exists {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			ctx.JSON(client.Numbers)
+		})
+
+		// Get all clients
+		clients.Get("/", func(ctx iris.Context) {
+			gateway.mu.RLock()
+			defer gateway.mu.RUnlock()
+
+			var clientList []Client
+			for _, client := range gateway.Clients {
+				// Return clients without exposing sensitive information
+				c := Client{
+					ID:         client.ID,
+					Username:   client.Username,
+					Name:       client.Name,
+					Address:    client.Address,
+					LogPrivacy: client.LogPrivacy,
+					Numbers:    client.Numbers,
+				}
+				clientList = append(clientList, c)
+			}
+
+			ctx.JSON(clientList)
+		})
+	}
+}
 func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 	// Extract the 'carrier' parameter from the URL
 	carrier := ctx.Params().Get("carrier")
@@ -261,55 +449,6 @@ func (gateway *Gateway) webReloadData(ctx iris.Context) {
 		return
 	}
 	ctx.JSON(iris.Map{"status": "Data reloaded successfully"})
-}
-
-func (gateway *Gateway) webAddClient(ctx iris.Context) {
-	var client Client
-	if err := ctx.ReadJSON(&client); err != nil {
-		ctx.StatusCode(400)
-		ctx.JSON(iris.Map{"error": "Invalid client data"})
-		return
-	}
-
-	if err := gateway.addClient(&client); err != nil {
-		ctx.StatusCode(500)
-		ctx.JSON(iris.Map{"error": err.Error()})
-		return
-	}
-
-	ctx.JSON(iris.Map{"status": "Client added successfully", "client": client})
-}
-
-func (gateway *Gateway) webAddNumber(ctx iris.Context) {
-	var number ClientNumber
-	if err := ctx.ReadJSON(&number); err != nil {
-		ctx.StatusCode(400)
-		ctx.JSON(iris.Map{"error": "Invalid number data"})
-		return
-	}
-
-	if err := gateway.addNumber(&number); err != nil {
-		ctx.StatusCode(500)
-		ctx.JSON(iris.Map{"error": err.Error()})
-		return
-	}
-
-	ctx.JSON(iris.Map{"status": "Number added successfully", "number": number})
-}
-
-func webHealthCheck(ctx iris.Context) {
-	// Log the successful access
-	logf := LoggingFormat{
-		Type:    "protected_route",
-		Level:   logrus.InfoLevel,
-		Message: "Protected route accessed successfully",
-	}
-	logf.AddField("client_ip", ctx.RemoteAddr())
-	logf.Print()
-
-	// Respond with 200 OK and a message
-	ctx.StatusCode(http.StatusOK)
-	ctx.WriteString("Access Granted: 200 OK")
 }
 
 var trustedProxies = []string{

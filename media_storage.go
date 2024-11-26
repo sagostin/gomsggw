@@ -4,12 +4,36 @@ import (
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
+	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
 const (
 	TTLDuration = 7 * 24 * time.Hour // 7-day expiration
 )
+
+func (gateway *Gateway) uploadMediaGetUrls(mms *MsgQueueItem) ([]string, error) {
+	var mediaUrls []string
+
+	if len(mms.Files) > 0 {
+		for _, i := range mms.Files {
+			if strings.Contains(i.ContentType, "application/smil") {
+				continue
+			}
+
+			id, err := gateway.saveMsgFileMedia(i)
+			if err != nil {
+				return mediaUrls, err
+			}
+
+			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
+		}
+		return mediaUrls, nil
+	}
+	return mediaUrls, nil
+}
 
 type MediaFile struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`

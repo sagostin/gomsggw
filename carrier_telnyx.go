@@ -20,16 +20,18 @@ import (
 // TelnyxHandler implements CarrierHandler for Telnyx
 type TelnyxHandler struct {
 	BaseCarrierHandler
-	gateway *Gateway
-	apiKey  string
+	gateway  *Gateway
+	carrier  *Carrier
+	password string
 }
 
 // NewTelnyxHandler initializes a new TelnyxHandler
-func NewTelnyxHandler(gateway *Gateway) *TelnyxHandler {
+func NewTelnyxHandler(gateway *Gateway, carrier *Carrier, decryptedUsername string, decryptedPassword string) *TelnyxHandler {
 	return &TelnyxHandler{
 		BaseCarrierHandler: BaseCarrierHandler{name: "telnyx"},
 		gateway:            gateway,
-		apiKey:             os.Getenv("TELNYX_API_KEY"),
+		carrier:            carrier,
+		password:           decryptedPassword,
 	}
 }
 
@@ -293,7 +295,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	req.Header.Set("Authorization", "Bearer "+h.carrier.Password)
 
 	// Perform the request
 	client := &http.Client{}
@@ -423,7 +425,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.apiKey)
+	req.Header.Set("Authorization", "Bearer "+h.carrier.Password)
 
 	// Perform the request
 	client := &http.Client{}

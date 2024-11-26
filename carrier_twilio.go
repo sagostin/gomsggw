@@ -21,16 +21,18 @@ type TwilioHandler struct {
 	BaseCarrierHandler
 	client  *twilio.RestClient
 	gateway *Gateway
+	carrier *Carrier
 }
 
-func NewTwilioHandler(gateway *Gateway) *TwilioHandler {
+func NewTwilioHandler(gateway *Gateway, carrier *Carrier, decryptedUsername string, decryptedPassword string) *TwilioHandler {
 	return &TwilioHandler{
 		BaseCarrierHandler: BaseCarrierHandler{name: "twilio"},
 		client: twilio.NewRestClientWithParams(twilio.ClientParams{
-			Username: os.Getenv("TWILIO_ACCOUNT_SID"),
-			Password: os.Getenv("TWILIO_AUTH_TOKEN"),
+			Username: decryptedUsername,
+			Password: decryptedPassword,
 		}),
 		gateway: gateway,
+		carrier: carrier,
 	}
 }
 

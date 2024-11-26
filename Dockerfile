@@ -32,8 +32,8 @@ WORKDIR /app
 # Copy the pre-built binary file from the previous stage
 COPY --from=builder /app/main .
 
-# Copy additional resources
-COPY ./transcode ./
+# Make transcode directory
+RUN mkdir -p ./transcode
 
 # Use the non-root user
 USER appuser

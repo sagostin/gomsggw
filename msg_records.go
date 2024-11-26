@@ -30,6 +30,7 @@ type MsgRecordDBItem struct {
 	Carrier           string    `json:"carrier,omitempty"` // Carrier name (optional)
 	Internal          bool      `json:"internal"`          // Whether the message is internal
 	LogID             string    `json:"log_id"`
+	ServerID          string
 }
 
 // PartiallyRedactMessage redacts part of the message for privacy.
@@ -54,6 +55,7 @@ func (gateway *Gateway) InsertMsgQueueItem(item MsgQueueItem, clientID uint, car
 		Carrier:         carrier,
 		Internal:        internal,
 		LogID:           item.LogID,
+		ServerID:        gateway.ServerID,
 	}
 
 	if err := gateway.DB.Create(dbItem).Error; err != nil {

@@ -98,18 +98,24 @@ func (s *SMPPServer) RemoveInactiveClients() {
 		for username, session := range s.conns {
 			if now.Sub(session.LastSeen) > InactivityDuration {
 				// Log the removal
-				logrus.WithFields(logrus.Fields{
-					"username":  username,
-					"last_seen": session.LastSeen,
-				}).Info("Removing inactive client due to inactivity")
+				var lm = s.gateway.LogManager
+				lm.SendLog(lm.BuildLog(
+					"Server.SMPP.CleanInactive",
+					"Removing inactive client due to inactivity",
+					logrus.InfoLevel,
+					map[string]interface{}{
+						"username":  username,
+						"last_seen": session.LastSeen,
+					},
+				))
 
 				// Close the session if necessary
-				if err := session.Close(context.Background()); err != nil {
+				/*if err := session.Close(context.Background()); err != nil {
 					logrus.WithFields(logrus.Fields{
 						"username": username,
 						"error":    err,
 					}).Error("Error closing inactive session")
-				}
+				}*/
 
 				// Remove the session from the map
 				delete(s.conns, username)

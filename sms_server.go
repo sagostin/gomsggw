@@ -147,7 +147,6 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 
 				return
 			}
-			session.LastSeen = time.Now()
 		}
 	}
 }

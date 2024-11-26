@@ -9,7 +9,82 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// StatsResponse represents the overall statistics response.
+type StatsResponse struct {
+	SMPPConnectedClients int              `json:"smpp_connected_clients"`
+	SMPPClients          []SMPPClientInfo `json:"smpp_clients"`
+	MM4ConnectedClients  int              `json:"mm4_connected_clients"`
+	MM4Clients           []MM4ClientInfo  `json:"mm4_clients"`
+}
+
+// SMPPClientInfo contains information about a connected SMPP client.
+type SMPPClientInfo struct {
+	Username  string    `json:"username"`
+	IPAddress string    `json:"ip_address"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
+// MM4ClientInfo contains information about a connected MM4 client.
+type MM4ClientInfo struct {
+	ClientID    string    `json:"client_id"`
+	ConnectedAt time.Time `json:"connected_at"`
+}
+
+// SetupStatsRoutes sets up the HTTP routes for statistics.
+func SetupStatsRoutes(app *iris.Application, gateway *Gateway) {
+	stats := app.Party("/stats", gateway.basicAuthMiddleware)
+	{
+		stats.Get("/", func(ctx iris.Context) {
+			statsResponse := StatsResponse{}
+
+			// Collect SMPP Server Stats
+			gateway.SMPPServer.mu.RLock()
+			smppConnCount := len(gateway.SMPPServer.conns)
+			statsResponse.SMPPConnectedClients = smppConnCount
+
+			smppClients := make([]SMPPClientInfo, 0, smppConnCount)
+			for username, session := range gateway.SMPPServer.conns {
+				ip, err := gateway.SMPPServer.GetClientIP(session)
+				if err != nil {
+					logrus.WithFields(logrus.Fields{
+						"username": username,
+						"error":    err,
+					}).Error("Failed to get IP for SMPP session")
+					ip = "unknown"
+				}
+
+				smppClients = append(smppClients, SMPPClientInfo{
+					Username:  username,
+					IPAddress: ip,
+					LastSeen:  session.LastSeen,
+				})
+			}
+			gateway.SMPPServer.mu.RUnlock()
+			statsResponse.SMPPClients = smppClients
+
+			// Collect MM4 Server Stats
+			gateway.MM4Server.mu.RLock()
+			mm4ConnCount := len(gateway.MM4Server.connectedClients)
+			statsResponse.MM4ConnectedClients = mm4ConnCount
+
+			mm4Clients := make([]MM4ClientInfo, 0, mm4ConnCount)
+			for clientID, connectedAt := range gateway.MM4Server.connectedClients {
+				mm4Clients = append(mm4Clients, MM4ClientInfo{
+					ClientID:    clientID,
+					ConnectedAt: connectedAt,
+				})
+			}
+			gateway.MM4Server.mu.RUnlock()
+			statsResponse.MM4Clients = mm4Clients
+
+			// Return the stats as JSON
+			ctx.JSON(statsResponse)
+		})
+	}
+}
 
 // basicAuthMiddleware is a middleware that enforces Basic Authentication using an API key
 func (gateway *Gateway) basicAuthMiddleware(ctx iris.Context) {

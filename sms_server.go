@@ -24,14 +24,18 @@ type SMPPServer struct {
 	gateway          *Gateway
 }
 
-func (srv *SMPPServer) Start(gateway *Gateway) {
+const InactivityDuration = 2 * time.Minute
+
+func (s *SMPPServer) Start(gateway *Gateway) {
 	handler := NewSimpleHandler(gateway.SMPPServer)
 	smppListen := os.Getenv("SMPP_LISTEN")
 	if smppListen == "" {
 		smppListen = "0.0.0.0:2775"
 	}
 
-	srv.gateway = gateway
+	s.gateway = gateway
+
+	go s.RemoveInactiveClients()
 
 	/*srv.smsQueueCollection = gateway.MongoClient.Database(SMSQueueDBName).Collection(SMSQueueCollectionName)
 	 */
@@ -81,6 +85,40 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 	}
 }
 
+// RemoveInactiveClients periodically checks for inactive clients and removes them.
+func (s *SMPPServer) RemoveInactiveClients() {
+	ticker := time.NewTicker(1 * time.Minute) // Check every minute
+	defer ticker.Stop()
+
+	for {
+		<-ticker.C
+		now := time.Now()
+
+		s.mu.Lock()
+		for username, session := range s.conns {
+			if now.Sub(session.LastSeen) > InactivityDuration {
+				// Log the removal
+				logrus.WithFields(logrus.Fields{
+					"username":  username,
+					"last_seen": session.LastSeen,
+				}).Info("Removing inactive client due to inactivity")
+
+				// Close the session if necessary
+				if err := session.Close(context.Background()); err != nil {
+					logrus.WithFields(logrus.Fields{
+						"username": username,
+						"error":    err,
+					}).Error("Error closing inactive session")
+				}
+
+				// Remove the session from the map
+				delete(s.conns, username)
+			}
+		}
+		s.mu.Unlock()
+	}
+}
+
 func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) {
 	tick := time.NewTicker(15 * time.Second)
 	defer tick.Stop()
@@ -102,14 +140,15 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 
 				return
 			}
+			session.LastSeen = time.Now()
 		}
 	}
 }
 
-func (srv *SMPPServer) findAuthdSession(session *smpp.Session) error {
-	for _, sess := range srv.conns {
-		currentConn, err := srv.GetClientIP(session)
-		loggedConn, err := srv.GetClientIP(sess)
+func (s *SMPPServer) findAuthdSession(session *smpp.Session) error {
+	for _, sess := range s.conns {
+		currentConn, err := s.GetClientIP(session)
+		loggedConn, err := s.GetClientIP(sess)
 
 		if err != nil {
 			return fmt.Errorf("error getting client ip for auth check")
@@ -140,6 +179,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 				}, err,
 			))
 		}
+		session.LastSeen = time.Now()
 		h.handleSubmitSM(session, p)
 	case *pdu.DeliverSM:
 		h.handleDeliverSM(session, p)
@@ -157,6 +197,7 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 				}, err,
 			))
 		}
+		session.LastSeen = time.Now()
 	default:
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandlePDU",
@@ -231,6 +272,8 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 				"username": username,
 			},
 		))
+
+		session.LastSeen = time.Now()
 
 		h.server.mu.Lock()
 		h.server.conns[username] = session
@@ -380,9 +423,9 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
 // On failure, it notifies via sendFailureChannel and enqueues the message.
-func (srv *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
+func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 	// Find the SMPP session associated with the destination number
-	session, err := srv.findSmppSession(msg.To)
+	session, err := s.findSmppSession(msg.To)
 	if err != nil {
 		return fmt.Errorf("error finding SMPP session: %v", err)
 	}
@@ -437,14 +480,14 @@ func (srv *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 	return nil
 }
 
-func (srv *SMPPServer) findSmppSession(destination string) (*smpp.Session, error) {
-	srv.mu.RLock()
-	defer srv.mu.RUnlock()
+func (s *SMPPServer) findSmppSession(destination string) (*smpp.Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-	for _, client := range srv.gateway.Clients {
+	for _, client := range s.gateway.Clients {
 		for _, num := range client.Numbers {
 			if strings.Contains(destination, num.Number) {
-				if session, ok := srv.conns[client.Username]; ok {
+				if session, ok := s.conns[client.Username]; ok {
 					return session, nil
 				} else {
 					return nil, fmt.Errorf("client found but not connected: %s", client.Username)
@@ -456,7 +499,7 @@ func (srv *SMPPServer) findSmppSession(destination string) (*smpp.Session, error
 	return nil, fmt.Errorf("no session found for destination: %s", destination)
 }
 
-func (srv *SMPPServer) GetClientIP(session *smpp.Session) (string, error) {
+func (s *SMPPServer) GetClientIP(session *smpp.Session) (string, error) {
 	if session == nil {
 		return "", fmt.Errorf("session is nil")
 	}

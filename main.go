@@ -151,6 +151,7 @@ func main() {
 
 	SetupCarrierRoutes(app, gateway)
 	SetupClientRoutes(app, gateway)
+	SetupStatsRoutes(app, gateway)
 	app.Get("/health", func(ctx iris.Context) {
 		ctx.StatusCode(200)
 		return

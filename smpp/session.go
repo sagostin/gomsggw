@@ -17,6 +17,7 @@ type Session struct {
 	NextSequence func() int32
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
+	LastSeen     time.Time
 }
 
 func NewSession(ctx context.Context, parent net.Conn) (session *Session) {
@@ -28,6 +29,7 @@ func NewSession(ctx context.Context, parent net.Conn) (session *Session) {
 		NextSequence: random.Int31,
 		ReadTimeout:  time.Minute * 15,
 		WriteTimeout: time.Minute * 15,
+		LastSeen:     time.Now(),
 	}
 	go session.watch(ctx)
 	return

@@ -213,11 +213,6 @@ func (s *SMPPServer) findAuthdSession(session *smpp.Session) error {
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	var lm = h.server.gateway.LogManager
 
-	h.server.mu.Lock()
-	session.LastSeen = time.Now()
-	h.server.updateConnSession(session)
-	h.server.mu.Unlock()
-
 	switch p := packet.(type) {
 	case *pdu.BindTransceiver:
 		h.handleBind(session, p)
@@ -261,6 +256,11 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 			}, p,
 		))
 	}
+
+	h.server.mu.Lock()
+	session.LastSeen = time.Now()
+	h.server.updateConnSession(session)
+	h.server.mu.Unlock()
 }
 
 func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTransceiver) {

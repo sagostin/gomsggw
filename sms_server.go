@@ -285,10 +285,9 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 
 		// session.LastSeen = time.Now()
 
-		/*h.server.mu.Lock()
+		h.server.mu.Lock()
 		h.server.conns[username] = session
 		h.server.mu.Unlock()
-		*/
 		//h.server.reconnectChannel <- username
 	} else {
 		lm.SendLog(lm.BuildLog(

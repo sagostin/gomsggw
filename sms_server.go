@@ -356,8 +356,14 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 		logf.Print()
 	}
 
+	err = session.Close(context.TODO())
+	if err != nil {
+		// logrus.Error(err)
+		return
+	}
+
 	// Remove the session from the server's connections
-	h.server.mu.Lock()
+	/*h.server.mu.RLock()
 	for username, conn := range h.server.conns {
 		ip, err := h.server.GetClientIP(conn)
 		if err != nil {
@@ -375,7 +381,7 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 			break
 		}
 	}
-	h.server.mu.Unlock()
+	h.server.mu.RUnlock()*/
 }
 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.

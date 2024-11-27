@@ -465,18 +465,18 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 			return
 		}
 
-		/*if err := session.Close(context.TODO()); err != nil {
+		if err := session.Close(context.TODO()); err != nil {
 			var lm = h.server.gateway.LogManager
 			lm.SendLog(lm.BuildLog(
-				"Server.SMPP.CleanInactive",
-				"Error removing inactive session",
+				"Server.SMPP.Unbind",
+				"Error closing session",
 				logrus.ErrorLevel,
 				map[string]interface{}{
 					"username":  username,
 					"last_seen": session.LastSeen,
 				},
 			))
-		}*/
+		}
 
 		if clientIP == ip {
 			delete(h.server.conns, username)

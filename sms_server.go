@@ -380,9 +380,11 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
 // On failure, it notifies via sendFailureChannel and enqueues the message.
-func (srv *SMPPServer) sendSMPP(msg MsgQueueItem) error {
+// sendSMPP attempts to send an SMPPMessage via the SMPP server.
+// On failure, it notifies via sendFailureChannel and enqueues the message.
+func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 	// Find the SMPP session associated with the destination number
-	session, err := srv.findSmppSession(msg.To)
+	session, err := s.findSmppSession(msg.To)
 	if err != nil {
 		return fmt.Errorf("error finding SMPP session: %v", err)
 	}

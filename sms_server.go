@@ -92,32 +92,55 @@ func (s *SMPPServer) RemoveInactiveClients() {
 
 	for {
 		<-ticker.C
+		now := time.Now()
 
 		s.mu.Lock()
+		s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
+			"Server.SMPP.RemoveInactiveClients",
+			"Starting inactive clients check",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"current_time":    now.Format(time.RFC3339),
+				"active_sessions": len(s.conns),
+			},
+		))
+
 		for username, session := range s.conns {
-			now := time.Now()
-			if now.Sub(session.LastSeen) > InactivityDuration {
+			duration := now.Sub(session.LastSeen)
+			if duration > InactivityDuration {
 				// Log the removal
-				var lm = s.gateway.LogManager
-				lm.SendLog(lm.BuildLog(
-					"Server.SMPP.CleanInactive",
+				s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
+					"Server.SMPP.RemoveInactiveClients",
 					"Removing inactive client due to inactivity",
 					logrus.InfoLevel,
 					map[string]interface{}{
-						"username":  username,
-						"last_seen": session.LastSeen,
+						"username":   username,
+						"last_seen":  session.LastSeen.Format(time.RFC3339),
+						"duration":   duration.String(),
+						"current_ip": session.Parent.RemoteAddr().String(),
 					},
 				))
 
 				// Close the session if necessary
 				if err := session.Close(context.TODO()); err != nil {
-					lm.SendLog(lm.BuildLog(
-						"Server.SMPP.CleanInactive",
+					s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
+						"Server.SMPP.RemoveInactiveClients",
 						"Error removing inactive session",
 						logrus.ErrorLevel,
 						map[string]interface{}{
 							"username":  username,
-							"last_seen": session.LastSeen,
+							"last_seen": session.LastSeen.Format(time.RFC3339),
+							"error":     err.Error(),
+						},
+					))
+				} else {
+					s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
+						"Server.SMPP.RemoveInactiveClients",
+						"Successfully removed inactive session",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"username":  username,
+							"last_seen": session.LastSeen.Format(time.RFC3339),
 						},
 					))
 				}
@@ -126,6 +149,17 @@ func (s *SMPPServer) RemoveInactiveClients() {
 				delete(s.conns, username)
 			}
 		}
+
+		s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
+			"Server.SMPP.RemoveInactiveClients",
+			"Completed inactive clients check",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"current_time":       time.Now().Format(time.RFC3339),
+				"remaining_sessions": len(s.conns),
+			},
+		))
+
 		s.mu.Unlock()
 	}
 }

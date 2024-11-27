@@ -51,7 +51,7 @@ func (router *Router) CarrierMsgConsumer() {
 		client := router.gateway.AMPQClient
 		deliveries, err := client.ConsumeMessages("carrier")
 		if err != nil {
-			client.logger.Error(err)
+			//client.logger.Error(err)
 			continue
 		}
 

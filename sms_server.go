@@ -35,7 +35,7 @@ func (s *SMPPServer) Start(gateway *Gateway) {
 
 	s.gateway = gateway
 
-	go s.RemoveInactiveClients()
+	// go s.RemoveInactiveClients()
 
 	/*srv.smsQueueCollection = gateway.MongoClient.Database(SMSQueueDBName).Collection(SMSQueueCollectionName)
 	 */

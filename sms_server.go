@@ -35,7 +35,7 @@ func (s *SMPPServer) Start(gateway *Gateway) {
 
 	s.gateway = gateway
 
-	// go s.RemoveInactiveClients()
+	go s.RemoveInactiveClients()
 
 	/*srv.smsQueueCollection = gateway.MongoClient.Database(SMSQueueDBName).Collection(SMSQueueCollectionName)
 	 */
@@ -184,6 +184,10 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 					nil, err,
 				))
 
+				h.server.mu.Lock()
+				session.LastSeen = time.Now()
+				h.server.updateConnSession(session)
+				h.server.mu.Unlock()
 				return
 			}
 		}
@@ -208,6 +212,11 @@ func (s *SMPPServer) findAuthdSession(session *smpp.Session) error {
 
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	var lm = h.server.gateway.LogManager
+
+	h.server.mu.Lock()
+	session.LastSeen = time.Now()
+	h.server.updateConnSession(session)
+	h.server.mu.Unlock()
 
 	switch p := packet.(type) {
 	case *pdu.BindTransceiver:
@@ -475,6 +484,41 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 		}
 	}
 	h.server.mu.Unlock()
+}
+
+func (s *SMPPServer) updateConnSession(session *smpp.Session) {
+	s.mu.Lock()
+	for username, conn := range s.conns {
+		ip, err := s.GetClientIP(conn)
+		if err != nil {
+			continue
+		}
+		clientIP, err := s.GetClientIP(session)
+		if err != nil {
+			continue
+		}
+
+		/*if err := session.Close(context.TODO()); err != nil {
+			var lm = h.server.gateway.LogManager
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.CleanInactive",
+				"Error removing inactive session",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"username":  username,
+					"last_seen": session.LastSeen,
+				},
+			))
+		}*/
+
+		if clientIP == ip {
+			s.conns[username] = session
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.mu.Unlock()
+	return
 }
 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.

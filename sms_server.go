@@ -487,7 +487,6 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 }
 
 func (s *SMPPServer) updateConnSession(session *smpp.Session) {
-	s.mu.Lock()
 	for username, conn := range s.conns {
 		ip, err := s.GetClientIP(conn)
 		if err != nil {
@@ -513,11 +512,9 @@ func (s *SMPPServer) updateConnSession(session *smpp.Session) {
 
 		if clientIP == ip {
 			s.conns[username] = session
-			s.mu.Unlock()
 			return
 		}
 	}
-	s.mu.Unlock()
 	return
 }
 

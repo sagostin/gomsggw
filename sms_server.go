@@ -88,7 +88,11 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 		select {
 		case <-ctx.Done():
 			return
-		case packet := <-session.PDU():
+		case packet, ok := <-session.PDU():
+			if !ok {
+				// The receiveQueue is closed; exit the loop
+				return
+			}
 			h.handlePDU(session, packet)
 		}
 	}
@@ -245,11 +249,10 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		h.server.mu.Lock()
 		// Close old session if exists
 		if oldSession, exists := h.server.conns[username]; exists {
-			oldSession.Close(context.Background())
+			_ = oldSession.Close(context.Background())
 		}
 		h.server.conns[username] = session
 		h.server.mu.Unlock()
-
 	} else {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleBind",
@@ -379,15 +382,8 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 	}
 
 	// Close the session and remove it from conns
-	h.server.mu.Lock()
-	session.Close(context.Background())
-	for username, sess := range h.server.conns {
-		if sess == session {
-			delete(h.server.conns, username)
-			break
-		}
-	}
-	h.server.mu.Unlock()
+	_ = session.Close(context.Background())
+	h.server.removeSession(session)
 }
 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.

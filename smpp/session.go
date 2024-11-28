@@ -48,10 +48,8 @@ func (c *Session) watch(ctx context.Context) {
 		if c.ReadTimeout > 0 {
 			_ = c.Parent.SetReadDeadline(time.Now().Add(c.ReadTimeout))
 		}
-		packet, err = pdu.Unmarshal(c.Parent)
-		if err != nil {
-			// Handle or log the error if necessary
-			return // Exit the goroutine on any error
+		if packet, err = pdu.Unmarshal(c.Parent); err == io.EOF {
+			return
 		}
 		if packet == nil {
 			continue
@@ -124,18 +122,14 @@ func (c *Session) EnquireLink(ctx context.Context, tick time.Duration, timeout t
 }
 
 func (c *Session) Close(ctx context.Context) (err error) {
-	// Attempt to send Unbind, but proceed even if it fails
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
-	_, _ = c.Submit(ctx, new(pdu.Unbind)) // Ignore error
-
-	// Close the receiveQueue to signal the watch goroutine to exit
+	_, err = c.Submit(ctx, new(pdu.Unbind))
+	if err != nil {
+		return
+	}
 	close(c.receiveQueue)
-
-	// Close the Parent connection
-	err = c.Parent.Close()
-
-	return
+	return c.Parent.Close()
 }
 
 func (c *Session) PDU() <-chan any {

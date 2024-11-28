@@ -21,6 +21,20 @@ func (router *Router) ClientRouter() {
 		case MsgQueueItemType.SMS:
 			client, _ := router.findClientByNumber(msg.To)
 			fromClient, _ := router.findClientByNumber(msg.From)
+
+			if fromClient == nil && client == nil {
+				lm.SendLog(lm.BuildLog(
+					"Router.Client.SMS",
+					"Invalid sender number.",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"logID": msg.LogID,
+						"from":  msg.From,
+					},
+				))
+				continue
+			}
+
 			if client != nil {
 				session, err := router.gateway.SMPPServer.findSmppSession(msg.To)
 				if err != nil {
@@ -146,7 +160,7 @@ func (router *Router) ClientRouter() {
 					"RouterFindCarrier",
 					logrus.ErrorLevel,
 					map[string]interface{}{
-						"client": client.Username,
+						"client": fromClient.Username,
 						"logID":  msg.LogID,
 					},
 				))

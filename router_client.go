@@ -87,11 +87,13 @@ func (router *Router) ClientRouter() {
 							ClientID:     client.ID,
 							Internal:     true,
 						}
-						router.gateway.MsgRecordChan <- MsgRecord{
-							MsgQueueItem: msg,
-							Carrier:      "outbound",
-							ClientID:     fromClient.ID,
-							Internal:     true,
+						if fromClient != nil {
+							router.gateway.MsgRecordChan <- MsgRecord{
+								MsgQueueItem: msg,
+								Carrier:      "outbound",
+								ClientID:     fromClient.ID,
+								Internal:     true,
+							}
 						}
 
 						if msg.Delivery != nil {

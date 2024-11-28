@@ -62,11 +62,24 @@ func NewSimpleHandler(server *SMPPServer) *SimpleHandler {
 	return &SimpleHandler{server: server}
 }
 
+func (srv *SMPPServer) removeSession(session *smpp.Session) {
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	for username, sess := range srv.conns {
+		if sess == session {
+			delete(srv.conns, username)
+			break
+		}
+	}
+}
+
 func (h *SimpleHandler) Serve(session *smpp.Session) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer func() {
 		cancel()
 		_ = session.Close(ctx)
+		// Remove session from conns map
+		h.server.removeSession(session)
 	}()
 
 	go h.enquireLink(session, ctx)
@@ -170,9 +183,6 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 }
 
 func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTransceiver) {
-	// server (mm4/smpp), success/failed (err), userid, ip
-	// Authentication
-
 	var lm = h.server.gateway.LogManager
 
 	username := bindReq.SystemID
@@ -233,10 +243,13 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		))
 
 		h.server.mu.Lock()
+		// Close old session if exists
+		if oldSession, exists := h.server.conns[username]; exists {
+			oldSession.Close(context.Background())
+		}
 		h.server.conns[username] = session
 		h.server.mu.Unlock()
 
-		//h.server.reconnectChannel <- username
 	} else {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleBind",
@@ -249,7 +262,6 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		))
 	}
 }
-
 func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.SubmitSM) {
 	transId := primitive.NewObjectID().Hex()
 	// Find the client associated with this session
@@ -342,46 +354,40 @@ func (h *SimpleHandler) handleDeliverSM(session *smpp.Session, deliverSM *pdu.De
 }
 
 func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) {
-	logf := LoggingFormat{Type: "handleUnbind"}
-	logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf("received unbind request")
-	logf.Print()
+	var lm = h.server.gateway.LogManager
+
+	lm.SendLog(lm.BuildLog(
+		"Server.SMPP.HandleUnbind",
+		"ReceivedUnbind",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"ip": session.Parent.RemoteAddr().String(),
+		},
+	))
 
 	resp := unbind.Resp()
 	err := session.Send(resp)
 	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = fmt.Sprintf("error sending Unbind response: %v", err)
-		logf.Error = err
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleUnbind",
+			"SMPPPDUError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip": session.Parent.RemoteAddr().String(),
+			}, err,
+		))
 	}
 
-	err = session.Close(context.TODO())
-	if err != nil {
-		// logrus.Error(err)
-		return
-	}
-
-	// Remove the session from the server's connections
-	/*h.server.mu.RLock()
-	for username, conn := range h.server.conns {
-		ip, err := h.server.GetClientIP(conn)
-		if err != nil {
-			println(err)
-			return
-		}
-		clientIP, err := h.server.GetClientIP(session)
-		if err != nil {
-			println(err)
-			return
-		}
-
-		if clientIP == ip {
+	// Close the session and remove it from conns
+	h.server.mu.Lock()
+	session.Close(context.Background())
+	for username, sess := range h.server.conns {
+		if sess == session {
 			delete(h.server.conns, username)
 			break
 		}
 	}
-	h.server.mu.RUnlock()*/
+	h.server.mu.Unlock()
 }
 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.

@@ -171,6 +171,10 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 	client := s.getClientByIP(ip)
 	if client == nil {
 		writeResponse(writer, "550 Access denied")
+
+		if isTrustedProxy(ip, trustedProxies) {
+			return
+		}
 		lm.SendLog(lm.BuildLog(
 			"Server.MM4.HandleConnection",
 			"AuthFailed",

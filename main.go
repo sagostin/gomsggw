@@ -6,6 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -191,4 +192,25 @@ func main() {
 			err,
 		))
 	}
+}
+
+// isTrustedProxy checks if an IP address is in any of the trusted subnets or IPs
+func isTrustedProxy(ip string, trustedProxies []string) bool {
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return false // Invalid IP
+	}
+
+	for _, cidr := range trustedProxies {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return false // Invalid CIDR
+		}
+
+		if network.Contains(parsedIP) {
+			return true
+		}
+	}
+
+	return false
 }

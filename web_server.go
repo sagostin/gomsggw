@@ -386,17 +386,8 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 }
 func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 	// Extract the 'carrier' parameter from the URL
-	carrier := ctx.Params().Get("carrier")
+	carrier := ctx.Params().Get("carrier") // the carrier is the uuid of the carrier
 	if carrier == "" {
-		// Log the error
-		/*logf := LoggingFormat{
-			Type: LogType.Carrier + "_" + LogType.Inbound,
-		}
-		logf.AddField("error", "carrier parameter is missing")
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "Missing carrier parameter in request"
-		logf.Print()*/
-
 		// Respond with 400 Bad Request
 		ctx.StatusCode(http.StatusBadRequest)
 		ctx.WriteString("carrier parameter is required")
@@ -404,24 +395,19 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 	}
 
 	// Retrieve the corresponding inbound route handler
-	inboundRoute, exists := gateway.Carriers[carrier]
+	carrierObj, exists := gateway.CarrierUUIDs[carrier]
 	if exists {
-		// Call the Inbound method of the carrier handler
-		err := inboundRoute.Inbound(ctx)
-		if err != nil {
-			// Log the error
-			/*logf := LoggingFormat{
-				Type: LogType.Carrier + "_" + LogType.Inbound,
-			}
-			logf.AddField("carrier", carrier)
-			logf.AddField("error", err.Error())
-			logf.Level = logrus.ErrorLevel
-			logf.Message = "Failed to process inbound message"
-			logf.Print()*/
+		inboundRoute, exists := gateway.Carriers[carrierObj.Name]
+		if exists {
 
-			// Respond with 500 Internal Server Error
-			ctx.StatusCode(http.StatusInternalServerError)
-			ctx.WriteString("failed to process inbound message")
+			// Call the Inbound method of the carrier handler
+			err := inboundRoute.Inbound(ctx)
+			if err != nil {
+				// Respond with 500 Internal Server Error
+				ctx.StatusCode(http.StatusInternalServerError)
+				ctx.WriteString("failed to process inbound message")
+				return
+			}
 			return
 		}
 		// Successfully processed the inbound message

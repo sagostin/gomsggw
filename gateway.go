@@ -12,6 +12,7 @@ import (
 // Gateway handles SMS processing for different carriers
 type Gateway struct {
 	Carriers      map[string]CarrierHandler
+	CarrierUUIDs  map[string]Carrier
 	DB            *gorm.DB
 	SMPPServer    *SMPPServer
 	Router        *Router
@@ -76,7 +77,8 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	gateway := &Gateway{
-		Carriers: make(map[string]CarrierHandler),
+		Carriers:     make(map[string]CarrierHandler),
+		CarrierUUIDs: make(map[string]Carrier),
 		Router: &Router{
 			Routes:         make([]*Route, 0),
 			ClientMsgChan:  make(chan MsgQueueItem),

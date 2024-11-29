@@ -4,6 +4,7 @@ package main
 import (
 	"fmt"
 	"github.com/kataras/iris/v12"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"strings"
 )
 
@@ -14,6 +15,7 @@ type Carrier struct {
 	Type     string `gorm:"not null" json:"type"`        // e.g., "twilio", "telnyx"
 	Username string `gorm:"not null" json:"username"`    // e.g., Account SID for Twilio (encrypted)
 	Password string `gorm:"not null" json:"password"`    // e.g., Auth Token for Twilio (encrypted)
+	UUID     string `gorm:"unique;not null" json:"uuid"`
 	// Add any carrier-specific configuration fields here
 }
 
@@ -22,9 +24,24 @@ func (h *BaseCarrierHandler) Name() string {
 	return h.name
 }
 
+/*func (h *BaseCarrierHandler) Password() string {
+	return h.password
+}*/
+
+/*func (h *BaseCarrierHandler) UUID() string {
+	return h.UUID
+}*/
+
+/*func (h *BaseCarrierHandler) Username() string {
+	return h.username
+}*/
+
 // BaseCarrierHandler provides common functionality for carriers
 type BaseCarrierHandler struct {
 	name string
+	/*UUID string
+	username string
+	password string*/
 }
 
 // CarrierHandler interface for different carrier handlers
@@ -33,6 +50,9 @@ type CarrierHandler interface {
 	SendSMS(sms *MsgQueueItem) error
 	SendMMS(sms *MsgQueueItem) error
 	Name() string
+	/*UUID()
+	Password()
+	Username()*/
 }
 
 // loadCarriers loads carriers from the database and initializes their handlers.
@@ -45,6 +65,7 @@ func (gateway *Gateway) loadCarriers() error {
 	}
 
 	carriersMap := make(map[string]CarrierHandler)
+	carriersMapUUIDs := make(map[string]Carrier)
 
 	// Initialize carrier handlers based on their type
 	for _, carrier := range carriers {
@@ -69,12 +90,14 @@ func (gateway *Gateway) loadCarriers() error {
 			return fmt.Errorf("unknown carrier type: %s", carrier.Type)
 		}
 		carriersMap[carrier.Name] = handler
+		carriersMapUUIDs[carrier.UUID] = carrier
 	}
 
 	// Update the Gateway's Carriers map
 	gateway.mu.Lock()
 	defer gateway.mu.Unlock()
 	gateway.Carriers = carriersMap
+	gateway.CarrierUUIDs = carriersMapUUIDs
 
 	return nil
 }
@@ -93,6 +116,8 @@ func (gateway *Gateway) addCarrier(carrier *Carrier) error {
 
 	carrier.Username = encryptedUsername
 	carrier.Password = encryptedPassword
+
+	carrier.UUID = primitive.NewObjectID().Hex()
 
 	// Create the carrier in the database
 	if err := gateway.DB.Create(carrier).Error; err != nil {
@@ -127,6 +152,16 @@ func (gateway *Gateway) addCarrier(carrier *Carrier) error {
 	gateway.Carriers[carrier.Name] = handler
 
 	return nil
+}
+
+// FindCarrierByUUID searches for an item with the given UUID in a slice of items
+func (gateway *Gateway) FindCarrierByUUID(uuid string) (*Carrier, bool) {
+	for _, item := range gateway.CarrierUUIDs {
+		if item.UUID == uuid {
+			return &item, true
+		}
+	}
+	return nil, false
 }
 
 // reloadCarriers reloads carriers from the database and reinitializes their handlers.

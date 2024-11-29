@@ -174,16 +174,17 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 
 		if isTrustedProxy(ip, trustedProxies) {
 			return
+		} else {
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.HandleConnection",
+				"AuthFailed",
+				logrus.WarnLevel,
+				map[string]interface{}{
+					"client": "unknown",
+					"ip":     ip,
+				},
+			))
 		}
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.HandleConnection",
-			"AuthFailed",
-			logrus.WarnLevel,
-			map[string]interface{}{
-				"client": "unknown",
-				"ip":     ip,
-			},
-		))
 		return
 	}
 

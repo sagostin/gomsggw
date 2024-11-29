@@ -17,25 +17,25 @@ func (router *Router) ClientRouter() {
 		from, _ := FormatToE164(msg.From)
 		msg.From = from
 
+		toClient, _ := router.findClientByNumber(msg.To)
+		fromClient, _ := router.findClientByNumber(msg.From)
+
+		if fromClient == nil && toClient == nil {
+			lm.SendLog(lm.BuildLog(
+				"Router.Client.SMS",
+				"Invalid sender number.",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"logID": msg.LogID,
+					"from":  msg.From,
+				},
+			))
+			continue
+		}
+
 		switch msgType := msg.Type; msgType {
 		case MsgQueueItemType.SMS:
-			client, _ := router.findClientByNumber(msg.To)
-			fromClient, _ := router.findClientByNumber(msg.From)
-
-			if fromClient == nil && client == nil {
-				lm.SendLog(lm.BuildLog(
-					"Router.Client.SMS",
-					"Invalid sender number.",
-					logrus.ErrorLevel,
-					map[string]interface{}{
-						"logID": msg.LogID,
-						"from":  msg.From,
-					},
-				))
-				continue
-			}
-
-			if client != nil {
+			if toClient != nil {
 				session, err := router.gateway.SMPPServer.findSmppSession(msg.To)
 				if err != nil {
 					if msg.Delivery != nil {
@@ -50,7 +50,7 @@ func (router *Router) ClientRouter() {
 							continue
 						}
 						msg.QueuedTimestamp = time.Now()
-						err = router.gateway.AMPQClient.Publish("client", marshal)
+						err = router.gateway.AMPQClient.Publish("toClient", marshal)
 						continue
 					}
 					lm.SendLog(lm.BuildLog(
@@ -58,8 +58,8 @@ func (router *Router) ClientRouter() {
 						"RouterFindSMPP",
 						logrus.ErrorLevel,
 						map[string]interface{}{
-							"client": client.Username,
-							"logID":  msg.LogID,
+							"toClient": toClient.Username,
+							"logID":    msg.LogID,
 						}, err,
 					))
 					// todo maybe to add to queue via postgres?
@@ -73,8 +73,8 @@ func (router *Router) ClientRouter() {
 							"RouterSendSMPP",
 							logrus.ErrorLevel,
 							map[string]interface{}{
-								"client": client.Username,
-								"logID":  msg.LogID,
+								"toClient": toClient.Username,
+								"logID":    msg.LogID,
 							}, err,
 						))
 
@@ -91,22 +91,26 @@ func (router *Router) ClientRouter() {
 								continue
 							}
 							msg.QueuedTimestamp = time.Now()
-							err = router.gateway.AMPQClient.Publish("client", marshal)
+							err = router.gateway.AMPQClient.Publish("toClient", marshal)
 							continue
 						}
 					} else {
-						router.gateway.MsgRecordChan <- MsgRecord{
-							MsgQueueItem: msg,
-							Carrier:      "inbound",
-							ClientID:     client.ID,
-							Internal:     true,
-						}
+
+						var internal = fromClient != nil && toClient != nil
 						if fromClient != nil {
 							router.gateway.MsgRecordChan <- MsgRecord{
 								MsgQueueItem: msg,
-								Carrier:      "outbound",
+								Carrier:      "from_client",
 								ClientID:     fromClient.ID,
-								Internal:     true,
+								Internal:     internal,
+							}
+						}
+						if toClient != nil {
+							router.gateway.MsgRecordChan <- MsgRecord{
+								MsgQueueItem: msg,
+								Carrier:      "to_client",
+								ClientID:     toClient.ID,
+								Internal:     internal,
 							}
 						}
 
@@ -124,8 +128,8 @@ func (router *Router) ClientRouter() {
 						"RouterFindSMPP",
 						logrus.ErrorLevel,
 						map[string]interface{}{
-							"client": client.Username,
-							"logID":  msg.LogID,
+							"toClient": toClient.Username,
+							"logID":    msg.LogID,
 						}, err,
 					))
 
@@ -160,16 +164,14 @@ func (router *Router) ClientRouter() {
 					"RouterFindCarrier",
 					logrus.ErrorLevel,
 					map[string]interface{}{
-						"client": fromClient.Username,
-						"logID":  msg.LogID,
+						"toClient": fromClient.Username,
+						"logID":    msg.LogID,
 					},
 				))
 			}
 			continue
 		case MsgQueueItemType.MMS:
-			client, _ := router.findClientByNumber(msg.To)
-			fromClient, _ := router.findClientByNumber(msg.From)
-			if client != nil {
+			if toClient != nil {
 				err := router.gateway.MM4Server.sendMM4(msg)
 				if err != nil {
 					// throw error?
@@ -178,8 +180,8 @@ func (router *Router) ClientRouter() {
 						"RouterSendMM4",
 						logrus.ErrorLevel,
 						map[string]interface{}{
-							"client": client.Username,
-							"logID":  msg.LogID,
+							"toClient": toClient.Username,
+							"logID":    msg.LogID,
 						}, err,
 					))
 
@@ -195,23 +197,29 @@ func (router *Router) ClientRouter() {
 							continue
 						}
 						msg.QueuedTimestamp = time.Now()
-						err = router.gateway.AMPQClient.Publish("client", marshal)
+						err = router.gateway.AMPQClient.Publish("toClient", marshal)
 						continue
 					}
 					// todo maybe to add to queue via postgres?
 					continue
 				}
-				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem: msg,
-					Carrier:      "inbound",
-					ClientID:     client.ID,
-					Internal:     true,
+
+				var internal = fromClient != nil && toClient != nil
+				if fromClient != nil {
+					router.gateway.MsgRecordChan <- MsgRecord{
+						MsgQueueItem: msg,
+						Carrier:      "from_client",
+						ClientID:     fromClient.ID,
+						Internal:     internal,
+					}
 				}
-				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem: msg,
-					Carrier:      "outbound",
-					ClientID:     fromClient.ID,
-					Internal:     true,
+				if toClient != nil {
+					router.gateway.MsgRecordChan <- MsgRecord{
+						MsgQueueItem: msg,
+						Carrier:      "to_client",
+						ClientID:     toClient.ID,
+						Internal:     internal,
+					}
 				}
 				if msg.Delivery != nil {
 					err := msg.Delivery.Ack(false)
@@ -249,8 +257,8 @@ func (router *Router) ClientRouter() {
 					"RouterFindCarrier",
 					logrus.ErrorLevel,
 					map[string]interface{}{
-						"client": client.Username,
-						"logID":  msg.LogID,
+						"toClient": toClient.Username,
+						"logID":    msg.LogID,
 					},
 				))
 			}
@@ -267,7 +275,7 @@ func (router *Router) ClientRouter() {
 					continue
 				}
 				msg.QueuedTimestamp = time.Now()
-				err = router.gateway.AMPQClient.Publish("client", marshal)
+				err = router.gateway.AMPQClient.Publish("toClient", marshal)
 				continue
 			}
 		}

@@ -9,7 +9,10 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"strings"
 )
+
+var trustedProxies []string
 
 func main() {
 	// Load environment variables
@@ -27,6 +30,15 @@ func main() {
 	encryptionKey := os.Getenv("ENCRYPTION_KEY")
 	if encryptionKey == "" {
 		log.Fatal("ENCRYPTION_KEY environment variable not set")
+	}
+
+	if os.Getenv("TRUSTED_PROXIES") == "" {
+		trustedProxies = []string{"10.0.0.0/8",
+			"172.16.0.0/12",
+			"192.168.0.0/16",
+			"fc00::/7"}
+	} else {
+		trustedProxies = strings.Split(os.Getenv("TRUSTED_PROXIES"), ",")
 	}
 
 	app := iris.New()

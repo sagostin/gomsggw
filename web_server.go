@@ -512,13 +512,6 @@ func (gateway *Gateway) webReloadData(ctx iris.Context) {
 	ctx.JSON(iris.Map{"status": "Data reloaded successfully"})
 }
 
-var trustedProxies = []string{
-	"10.0.0.0/8",
-	"172.16.0.0/12",
-	"192.168.0.0/16",
-	"fc00::/7",
-}
-
 func isPrivateIP(ip net.IP) bool {
 	for _, cidr := range trustedProxies {
 		_, network, err := net.ParseCIDR(cidr)

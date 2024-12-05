@@ -50,7 +50,7 @@ func (router *Router) ClientRouter() {
 							continue
 						}
 						msg.QueuedTimestamp = time.Now()
-						err = router.gateway.AMPQClient.Publish("toClient", marshal)
+						err = router.gateway.AMPQClient.Publish("client", marshal)
 						continue
 					}
 					lm.SendLog(lm.BuildLog(
@@ -91,7 +91,7 @@ func (router *Router) ClientRouter() {
 								continue
 							}
 							msg.QueuedTimestamp = time.Now()
-							err = router.gateway.AMPQClient.Publish("toClient", marshal)
+							err = router.gateway.AMPQClient.Publish("client", marshal)
 							continue
 						}
 					} else {
@@ -197,7 +197,7 @@ func (router *Router) ClientRouter() {
 							continue
 						}
 						msg.QueuedTimestamp = time.Now()
-						err = router.gateway.AMPQClient.Publish("toClient", marshal)
+						err = router.gateway.AMPQClient.Publish("client", marshal)
 						continue
 					}
 					// todo maybe to add to queue via postgres?
@@ -275,7 +275,7 @@ func (router *Router) ClientRouter() {
 					continue
 				}
 				msg.QueuedTimestamp = time.Now()
-				err = router.gateway.AMPQClient.Publish("toClient", marshal)
+				err = router.gateway.AMPQClient.Publish("client", marshal)
 				continue
 			}
 		}

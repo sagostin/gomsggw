@@ -53,6 +53,7 @@ services:
       - "3000"
       - "2775"
       - "2566"
+      - "42661:42666"
     environment:
       - SERVER_ID=msggw1-1
   msggw2:
@@ -67,6 +68,7 @@ services:
       - "3000"
       - "2775"
       - "2566"
+      - "42662:42666"
     environment:
       - SERVER_ID=msggw1-2
   haproxy:

@@ -46,7 +46,7 @@ func ServeTCP(address string, handler Handler, config *tls.Config) (err error) {
 
 	if os.Getenv("HAPROXY_PROXY_PROTOCOL") == "true" {
 		proxyListener = &proxyproto.Listener{Listener: list}
-		defer proxyListener.Close()
+		/*defer proxyListener.Close()*/
 
 		// Wait for a connection and accept it
 		conn, err := proxyListener.Accept()
@@ -54,12 +54,12 @@ func ServeTCP(address string, handler Handler, config *tls.Config) (err error) {
 			return err
 		}
 
-		defer func(conn net.Conn) {
+		/*defer func(conn net.Conn) {
 			err := conn.Close()
 			if err != nil {
 				log.Fatal("couldn't close proxy connection")
 			}
-		}(conn)
+		}(conn)*/
 
 		// Print connection details
 		if conn.LocalAddr() == nil {

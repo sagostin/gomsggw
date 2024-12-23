@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"time"
 )
@@ -280,4 +281,49 @@ func (router *Router) ClientRouter() {
 			}
 		}
 	}
+}
+
+// updateClientPassword updates both the encrypted database password and decrypted in-memory password
+func (gateway *Gateway) updateClientPassword(clientID uint, newPassword string) error {
+	// First encrypt the new password
+	encryptedPassword, err := EncryptPassword(newPassword, gateway.EncryptionKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt new password: %w", err)
+	}
+
+	// Update the encrypted password in the database
+	if err := gateway.DB.Model(&Client{}).Where("id = ?", clientID).Update("password", encryptedPassword).Error; err != nil {
+		return fmt.Errorf("failed to update password in database: %w", err)
+	}
+
+	// Update the decrypted password in memory
+	gateway.mu.Lock()
+	defer gateway.mu.Unlock()
+
+	// Find the client by ID in the in-memory map
+	var targetClient *Client
+	for _, client := range gateway.Clients {
+		if client.ID == clientID {
+			targetClient = client
+			break
+		}
+	}
+
+	if targetClient == nil {
+		return fmt.Errorf("client not found in memory")
+	}
+
+	// Update the in-memory password with the decrypted version
+	targetClient.Password = newPassword
+
+	gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+		"Client.UpdatePassword",
+		fmt.Sprintf("Updated password for client %s", targetClient.Username),
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"client_id": clientID,
+		},
+	))
+
+	return nil
 }

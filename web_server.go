@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+// PasswordUpdateRequest defines the expected JSON request body
+type PasswordUpdateRequest struct {
+	NewPassword string `json:"new_password"`
+}
+
 // StatsResponse represents the overall statistics response.
 type StatsResponse struct {
 	SMPPConnectedClients int              `json:"smpp_connected_clients"`
@@ -306,6 +311,46 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			}
 
 			ctx.JSON(iris.Map{"status": "Clients and Numbers reloaded"})
+		})
+
+		// Add this inside the SetupClientRoutes function, within the clients Party group:
+		// Update client password
+		clients.Patch("/{id}/password", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID format"})
+				return
+			}
+
+			var passwordUpdate PasswordUpdateRequest
+			if err := ctx.ReadJSON(&passwordUpdate); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request data"})
+				return
+			}
+
+			// Validate the new password
+			if passwordUpdate.NewPassword == "" {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "New password is required"})
+				return
+			}
+
+			// Update the password
+			if err := gateway.updateClientPassword(uint(clientID), passwordUpdate.NewPassword); err != nil {
+				if err.Error() == "client not found in memory" {
+					ctx.StatusCode(iris.StatusNotFound)
+					ctx.JSON(iris.Map{"error": "Client not found"})
+					return
+				}
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": err.Error()})
+				return
+			}
+
+			ctx.JSON(iris.Map{"status": "Password updated successfully"})
 		})
 
 		// Add a new number to a client

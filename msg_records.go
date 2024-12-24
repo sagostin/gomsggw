@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"time"
 )
 
@@ -26,7 +28,7 @@ type MsgRecordDBItem struct {
 	From              string    `json:"from_number"`
 	ReceivedTimestamp time.Time `json:"received_timestamp"`
 	Type              string    `json:"type"`              // "mms" or "sms"
-	RedactedMessage   string    `json:"redacted_message"`  // Partially redacted message
+	MsgData           string    `json:"msg_data"`          // Partially redacted message
 	Carrier           string    `json:"carrier,omitempty"` // Carrier name (optional)
 	Internal          bool      `json:"internal"`          // Whether the message is internal
 	LogID             string    `json:"log_id"`
@@ -44,18 +46,28 @@ func PartiallyRedactMessage(message string) string {
 // InsertMsgQueueItem inserts a MsgQueueItem into the database.
 func (gateway *Gateway) InsertMsgQueueItem(item MsgQueueItem, clientID uint, carrier string, internal bool) error {
 	// Convert MsgQueueItem to MsgRecordDBItem with redacted message.
+
+	var msgData string
+
+	if item.Type == MsgQueueItemType.MMS {
+		hash := sha256.Sum256(item.Files[0].Content) // [32]byte array
+		msgData = hex.EncodeToString(hash[:])        // convert to hex string
+	} else if item.Type == MsgQueueItemType.SMS {
+		msgData = PartiallyRedactMessage(item.Message)
+	}
+
 	dbItem := &MsgRecordDBItem{
 		To:                item.To,
 		From:              item.From,
 		ClientID:          clientID,
 		ReceivedTimestamp: item.ReceivedTimestamp,
 		//QueuedTimestamp:   item.QueuedTimestamp,
-		Type:            string(item.Type),
-		RedactedMessage: PartiallyRedactMessage(item.Message),
-		Carrier:         carrier,
-		Internal:        internal,
-		LogID:           item.LogID,
-		ServerID:        gateway.ServerID,
+		Type:     string(item.Type),
+		MsgData:  msgData,
+		Carrier:  carrier,
+		Internal: internal,
+		LogID:    item.LogID,
+		ServerID: gateway.ServerID,
 	}
 
 	if err := gateway.DB.Create(dbItem).Error; err != nil {

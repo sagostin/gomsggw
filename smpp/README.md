@@ -2,6 +2,8 @@
 
 A complete implementation of SMPP v5 protocol, written in golang.
 
+https://github.com/CursedHardware/go-smpp/tree/master
+
 ## Key features
 
 - Message encoding auto-detection
@@ -16,20 +18,20 @@ A complete implementation of SMPP v5 protocol, written in golang.
 
 ## Caveats
 
-- Please read [the SMPP Specification Version 5](docs/SMPP_v5.pdf) first. [pdu](pdu) is not limited to any value range.
+- Please read [the SMPP Specification Version 5](https://github.com/CursedHardware/go-smpp/tree/master/docs/SMPP_v5.pdf) first. [pdu](https://github.com/CursedHardware/go-smpp/tree/master/pdu) is not limited to any value range.
 - If you do not like the default [session.go](session.go) implementation, you can easily replace it.
-- [Device-specific Caveats](docs/device-specific-caveats.md)
+- [Device-specific Caveats](https://github.com/CursedHardware/go-smpp/tree/master/docs/device-specific-caveats.md)
 
 ## Command line tools
 
-1. [smpp-receiver](cmd/smpp-receiver)
+1. [smpp-receiver](https://github.com/CursedHardware/go-smpp/tree/master/cmd/smpp-receiver)
 
    SMPP Simple Receiver tool
 
-2. [smpp-repl](cmd/smpp-repl)
+2. [smpp-repl](https://github.com/CursedHardware/go-smpp/tree/master/cmd/smpp-repl)
 
    SMPP Simple Test tool
 
 ## LICENSE
 
-This piece of software is released under [the MIT license](LICENSE).
+This piece of software is released under [the MIT license](https://github.com/CursedHardware/go-smpp/tree/master/LICENSE).

@@ -99,7 +99,7 @@ func (s *MM4Server) Start() error {
 	s.listener = proxyListener
 
 	// Start the cleanup goroutine
-	go s.cleanupInactiveClients(2*time.Minute, 1*time.Minute)
+	/*go s.cleanupInactiveClients(2*time.Minute, 1*time.Minute)*/
 
 	for {
 		conn, err := proxyListener.Accept()
@@ -110,7 +110,7 @@ func (s *MM4Server) Start() error {
 	}
 }
 
-// cleanupInactiveClients periodically removes inactive clients.
+/*// cleanupInactiveClients periodically removes inactive clients.
 func (s *MM4Server) cleanupInactiveClients(timeout time.Duration, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -138,7 +138,7 @@ func (s *MM4Server) cleanupInactiveClients(timeout time.Duration, interval time.
 			s.mu.Unlock()
 		}
 	}
-}
+}*/
 
 // handleConnection manages an individual SMTP session.
 func (s *MM4Server) handleConnection(conn net.Conn) {
@@ -195,10 +195,6 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 
 	if !exists {
 		// New connection
-		/*logf.Level = logrus.InfoLevel // server (mm4/smpp), success/failed (err), userid, ip
-		logf.Message = fmt.Sprintf(LogMessages.Authentication, logf.AdditionalData["type"], "success", client.Username, ip)
-		logf.Print()*/
-
 		lm.SendLog(lm.BuildLog(
 			"Server.MM4.HandleConnection",
 			"AuthSuccess",
@@ -208,11 +204,6 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 				"ip":     ip,
 			},
 		))
-
-		// Add to connectedClients map with current timestamp
-		s.mu.Lock()
-		s.connectedClients[hashedIP] = time.Now()
-		s.mu.Unlock()
 	} else {
 		// Existing connection
 		inactivityDuration := time.Since(lastActivity)
@@ -229,7 +220,7 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 				},
 			))
 		} else {
-			// Optional: Log regular reconnections
+			// Log regular reconnections
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.HandleConnection",
 				"MM4Reconnect",
@@ -243,6 +234,12 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		}
 	}
 
+	// ALWAYS update the last connection time, regardless of inactivity
+	s.mu.Lock()
+	s.connectedClients[hashedIP] = time.Now()
+	s.mu.Unlock()
+
+	// Create the session
 	session := &Session{
 		Conn:       conn,
 		Reader:     reader,

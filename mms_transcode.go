@@ -88,7 +88,6 @@ var compatibleTypes = map[string]bool{
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   true,
 }
 
-// processAndConvertFiles processes and converts files as needed.
 func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 	var processedFiles []MsgFile
 
@@ -98,74 +97,70 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 			continue
 		}
 
-		// Step 1: Decode the Base64 content to get raw data
 		decodedContent, err := decodeBase64(file.Content)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode Base64 content: %v", err)
 		}
 
-		// Step 2: Detect content type if it's octet-stream or unknown
 		if strings.Contains(file.ContentType, "application/octet-stream") || file.ContentType == "" {
-			detectedType := detectMIMEType(decodedContent)
-			file.ContentType = detectedType
+			file.ContentType = detectMIMEType(decodedContent)
 		}
 
 		var convertedContent []byte
 		var newType string
+		var newExt string
 
-		// Step 3: Process files based on their content type
 		switch {
 		case strings.HasPrefix(file.ContentType, "image/"):
 			if strings.Contains(file.ContentType, "jpeg") || strings.Contains(file.ContentType, "jpg") {
-				// Compress JPEG images to fit under 1MB
 				convertedContent, err = compressJPEG(decodedContent, int(maxImageSize))
-				if err != nil {
-					return nil, fmt.Errorf("failed to compress JPEG: %v", err)
-				}
 				newType = "image/jpeg"
+				newExt = ".jpg"
 			} else if strings.Contains(file.ContentType, "png") {
-				// Compress PNG images to fit under 1MB
 				convertedContent, err = compressPNG(decodedContent, int(maxImageSize))
-				if err != nil {
-					return nil, fmt.Errorf("failed to compress PNG: %v", err)
-				}
 				newType = "image/png"
+				newExt = ".png"
 			} else {
-				// Convert other image formats to PNG and compress
 				convertedContent, newType, err = convertImageToPNG(decodedContent)
-				if err != nil {
-					return nil, fmt.Errorf("failed to convert image to PNG: %v", err)
+				newExt = ".png"
+				if err == nil {
+					convertedContent, err = compressPNG(convertedContent, int(maxImageSize))
 				}
-				convertedContent, err = compressPNG(convertedContent, int(maxImageSize))
-				if err != nil {
-					return nil, fmt.Errorf("failed to compress converted PNG: %v", err)
-				}
+			}
+			if err != nil {
+				return nil, fmt.Errorf("failed to process image: %v", err)
 			}
 
 		case strings.HasPrefix(file.ContentType, "video/"):
-			// Compress video content and convert to 3GPP format
 			convertedContent, newType, err = processVideoContent(decodedContent)
+			newExt = ".3gp"
 			if err != nil {
 				return nil, fmt.Errorf("failed to process video: %v", err)
 			}
 
 		case strings.HasPrefix(file.ContentType, "audio/"):
-			// Compress audio content to fit under 5MB
 			convertedContent, newType, err = convertToMP3(decodedContent)
+			newExt = ".mp3"
 			if err != nil {
 				return nil, fmt.Errorf("failed to convert audio: %v", err)
 			}
 
 		default:
-			// Compress other file types to fit under 5MB
 			convertedContent, err = compressFile(decodedContent, int(maxFileSize))
 			if err != nil {
 				return nil, fmt.Errorf("failed to compress file: %v", err)
 			}
 			newType = file.ContentType
+			// Keep original extension if present
+			newExt = filepath.Ext(file.Filename)
 		}
 
-		// Step 4: Update the processed file
+		// Update filename with new extension if needed
+		baseName := strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename))
+		if newExt != "" {
+			file.Filename = baseName + newExt
+		}
+
 		file.Content = []byte(encodeToBase64(convertedContent))
 		file.ContentType = newType
 		file.Base64Data = encodeToBase64(convertedContent)

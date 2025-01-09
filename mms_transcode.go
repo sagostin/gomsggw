@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/google/uuid"
-	"github.com/sirupsen/logrus"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"image"
@@ -36,8 +35,8 @@ func (s *MM4Server) transcodeMedia() {
 
 		transId := primitive.NewObjectID().Hex()
 
-		ff, err := mm4Message.processAndConvertFiles()
-		if err != nil {
+		//ff, err := mm4Message.processAndConvertFiles()
+		/*if err != nil {
 			mm4Message.Files = nil
 			mm4Message.Content = nil // remove content to be safe
 
@@ -56,8 +55,8 @@ func (s *MM4Server) transcodeMedia() {
 				}, err,
 			))
 			continue
-		}
-		mm4Message.Files = ff
+		}*/
+		//mm4Message.Files = ff
 
 		msgItem := MsgQueueItem{
 			To:                mm4Message.To,

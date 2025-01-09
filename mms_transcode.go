@@ -133,7 +133,7 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 
 		case strings.HasPrefix(file.ContentType, "video/"):
 			convertedContent, newType, err = processVideoContent(decodedContent)
-			newExt = ".3gp"
+			newExt = ".3gpp"
 			if err != nil {
 				return nil, fmt.Errorf("failed to process video: %v", err)
 			}
@@ -156,10 +156,8 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 		}
 
 		// Update filename with new extension if needed
-		baseName := strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename))
-		if newExt != "" {
-			file.Filename = baseName + newExt
-		}
+		// baseName := strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename))
+		file.Filename = primitive.NewObjectID().Hex() + newExt
 
 		file.Content = []byte(encodeToBase64(convertedContent))
 		file.ContentType = newType

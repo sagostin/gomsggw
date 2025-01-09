@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"image"
@@ -33,10 +34,10 @@ func (s *MM4Server) transcodeMedia() {
 	for {
 		mm4Message := <-s.MediaTranscodeChan
 
-		transId := primitive.NewObjectID().Hex()
+		//transId := primitive.NewObjectID().Hex()
 
-		//ff, err := mm4Message.processAndConvertFiles()
-		/*if err != nil {
+		ff, err := mm4Message.processAndConvertFiles()
+		if err != nil {
 			mm4Message.Files = nil
 			mm4Message.Content = nil // remove content to be safe
 
@@ -51,11 +52,11 @@ func (s *MM4Server) transcodeMedia() {
 				logrus.ErrorLevel,
 				map[string]interface{}{
 					"mm4Message": mm4Message,
-					"logID":      transId,
+					"logID":      mm4Message.TransactionID,
 				}, err,
 			))
 			continue
-		}*/
+		}
 		//mm4Message.Files = ff
 
 		msgItem := MsgQueueItem{
@@ -63,8 +64,8 @@ func (s *MM4Server) transcodeMedia() {
 			From:              mm4Message.From,
 			ReceivedTimestamp: time.Now(),
 			Type:              MsgQueueItemType.MMS,
-			Files:             mm4Message.Files,
-			LogID:             transId,
+			Files:             ff,
+			LogID:             mm4Message.TransactionID,
 		}
 
 		s.gateway.Router.ClientMsgChan <- msgItem
@@ -132,7 +133,7 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 
 		case strings.HasPrefix(file.ContentType, "video/"):
 			convertedContent, newType, err = processVideoContent(decodedContent)
-			newExt = ".3gpp"
+			newExt = ".3gp"
 			if err != nil {
 				return nil, fmt.Errorf("failed to process video: %v", err)
 			}

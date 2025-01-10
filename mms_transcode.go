@@ -26,8 +26,8 @@ import (
 
 // Size limits
 const (
-	maxImageSize = 0.5 * 1024 * 1024 // 1 MB
-	maxFileSize  = 0.5 * 1024 * 1024 // 5 MB
+	maxImageSize = 1 * 1024 * 1024 // 1 MB
+	maxFileSize  = 1 * 1024 * 1024 // 5 MB
 )
 
 func (s *MM4Server) transcodeMedia() {
@@ -159,7 +159,7 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 		// baseName := strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename))
 		file.Filename = primitive.NewObjectID().Hex() + newExt
 
-		file.Content = []byte(encodeToBase64(convertedContent))
+		file.Content = convertedContent
 		file.ContentType = newType
 		file.Base64Data = encodeToBase64(convertedContent)
 		processedFiles = append(processedFiles, file)

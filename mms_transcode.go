@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -157,7 +156,7 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 
 		// Update filename with new extension if needed
 		// baseName := strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename))
-		file.Filename = primitive.NewObjectID().Hex() + newExt
+		file.Filename = uuid.New().String() + newExt
 
 		file.Content = convertedContent
 		file.ContentType = newType
@@ -177,8 +176,8 @@ func convertTo3GPP(content []byte, transcodeVideo, transcodeAudio bool) ([]byte,
 	}
 
 	// Generate unique file names for input and output
-	inputFile := filepath.Join(tempPath, uuid.New().String()+".mp4")
-	outputFile := filepath.Join(tempPath, uuid.New().String()+".3gp") // Use .3gp extension for 3GPP format
+	inputFile := filepath.Join(tempPath, uuid.New().String())
+	outputFile := filepath.Join(tempPath, uuid.New().String()) // Use .3gp extension for 3GPP format
 
 	// Save the input content to a temporary file
 	err := ioutil.WriteFile(inputFile, content, 0644)

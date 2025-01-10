@@ -64,7 +64,7 @@ func (gateway *Gateway) saveMsgFileMedia(file MsgFile) (uint, error) {
 	mediaFile := MediaFile{
 		FileName:    file.Filename,
 		ContentType: file.ContentType,
-		Base64Data:  string(file.Content),
+		Base64Data:  file.Base64Data,
 		UploadAt:    time.Now(),
 		ExpiresAt:   time.Now().Add(TTLDuration),
 	}

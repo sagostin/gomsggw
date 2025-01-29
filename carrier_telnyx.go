@@ -339,6 +339,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 				"logID":           sms.LogID,
 				"response_code":   resp.StatusCode,
 				"response_status": resp.Status,
+				"response_body":   string(bodyBytes), // Include response body for debugging
 			}, err,
 		))
 		return errors.New("failed to send SMS via Telnyx")

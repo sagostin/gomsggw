@@ -300,7 +300,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	bestCoding := coding.BestCoding(string(submitSM.Message.Message))
+	bestCoding := coding.BestSafeCoding(string(submitSM.Message.Message))
 
 	// todo fix this make better??
 	/*if bestCoding == coding.GSM7BitCoding {
@@ -309,8 +309,9 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 
 	if submitSM.Message.DataCoding == 8 { // UTF-16
 		bestCoding = coding.UCS2Coding
-	}
-	if submitSM.Message.DataCoding == 1 { // UTF-16
+	} else if submitSM.Message.DataCoding == 1 { // UTF-16
+		bestCoding = coding.ASCIICoding
+	} else {
 		bestCoding = coding.ASCIICoding
 	}
 

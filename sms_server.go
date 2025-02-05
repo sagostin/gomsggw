@@ -300,7 +300,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	bestCoding := coding.BestSafeCoding(string(submitSM.Message.Message))
+	encoding := coding.GSM7BitCoding
 
 	// todo fix this make better??
 	/*if bestCoding == coding.GSM7BitCoding {
@@ -308,28 +308,26 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}*/
 
 	if submitSM.Message.DataCoding == 8 { // UTF-16
-		bestCoding = coding.UCS2Coding
+		encoding = coding.UCS2Coding
 	} else if submitSM.Message.DataCoding == 1 { // UTF-16
-		bestCoding = coding.ASCIICoding
-	} else {
-		bestCoding = coding.GSM7BitCoding
+		encoding = coding.ASCIICoding
 	}
+
+	decodedMsg, _ := encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
 
 	//todo test if this is better? we may just need to parse the messages?
 
-	encodedMsg, _ := bestCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
-
-	if encodedMsg == "" {
+	if decodedMsg == "" {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
 			"Message contains no information",
 			logrus.WarnLevel,
 			map[string]interface{}{
-				"client":      client.Username,
-				"logID":       transId,
-				"encoded_msg": encodedMsg,
-				"submitsm":    submitSM,
-				"encoding":    bestCoding,
+				"client":     client.Username,
+				"logID":      transId,
+				"decodedMsg": decodedMsg,
+				"submitsm":   submitSM,
+				"encoding":   encoding,
 			},
 		))
 
@@ -354,7 +352,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		From:              submitSM.SourceAddr.String(),
 		ReceivedTimestamp: time.Now(),
 		Type:              MsgQueueItemType.SMS,
-		Message:           encodedMsg,
+		Message:           decodedMsg,
 		SkipNumberCheck:   false,
 		LogID:             transId,
 	}
@@ -366,9 +364,9 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		map[string]interface{}{
 			"client":      client.Username,
 			"logID":       transId,
-			"encoded_msg": encodedMsg,
+			"encoded_msg": decodedMsg,
 			"submitsm":    submitSM,
-			"encoding":    bestCoding,
+			"encoding":    encoding,
 		},
 	))
 

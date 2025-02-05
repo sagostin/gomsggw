@@ -303,7 +303,11 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	bestCoding := coding.BestSafeCoding(string(submitSM.Message.Message))
 
 	// todo fix this make better??
-	if bestCoding == coding.GSM7BitCoding {
+	/*if bestCoding == coding.GSM7BitCoding {
+		bestCoding = coding.ASCIICoding
+	}*/
+
+	if submitSM.Message.DataCoding == 0 || bestCoding == coding.GSM7BitCoding {
 		bestCoding = coding.ASCIICoding
 	}
 

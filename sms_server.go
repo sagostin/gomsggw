@@ -320,7 +320,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	if err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
-			"Failed to decode SMS bytes",
+			"Failed to decode SMS bytes, trying with GSM7",
 			logrus.ErrorLevel,
 			map[string]interface{}{
 				"client":     client.Username,
@@ -332,6 +332,23 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			},
 		))
 
+		// catch call to handle?
+		decodedMsg, err = coding.GSM7BitCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+		if err != nil {
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.HandleSubmitSM",
+				"Failed to decode SMS bytes, trying with GSM7",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"client":     client.Username,
+					"logID":      transId,
+					"decodedMsg": decodedMsg,
+					"submitsm":   submitSM,
+					"encoding":   encoding,
+					"error":      err.Error(),
+				},
+			))
+		}
 	}
 
 	//todo test if this is better? we may just need to parse the messages?

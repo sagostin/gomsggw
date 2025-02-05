@@ -308,7 +308,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}*/
 
 	if submitSM.Message.DataCoding == 0 || bestCoding == coding.GSM7BitCoding {
-		bestCoding = coding.ASCIICoding
+		bestCoding = coding.ASCIICoding // maybe?
 	}
 
 	encodedMsg, _ := bestCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))

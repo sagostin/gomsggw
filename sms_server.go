@@ -319,6 +319,19 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		LogID:             transId,
 	}
 
+	lm.SendLog(lm.BuildLog(
+		"Server.SMPP.HandleSubmitSM",
+		"Sending SMS to sending channel",
+		logrus.WarnLevel,
+		map[string]interface{}{
+			"client":       client.Username,
+			"logID":        transId,
+			"encoded_msg":  encodedMsg,
+			"submitsm_msg": submitSM.Message,
+			"encoding":     bestCoding,
+		},
+	))
+
 	/*logf.AddField("to", msgQueueItem.To)
 	logf.AddField("from", msgQueueItem.From)
 	logf.AddField("systemID", client.Username)*/

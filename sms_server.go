@@ -349,6 +349,21 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 				},
 			))
 		}
+
+		resp := submitSM.Resp()
+		err := session.Send(resp)
+		if err != nil {
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.HandleSubmitSM",
+				"SMPPPDUError",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"ip": session.Parent.RemoteAddr().String(),
+				}, err,
+			))
+		}
+
+		return
 	}
 
 	//todo test if this is better? we may just need to parse the messages?

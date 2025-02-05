@@ -404,7 +404,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 
 	// todo split messages here?
 
-	limit := 134
+	limit := 160
 	bestCoding := coding.BestSafeCoding(msg.Message)
 
 	segments := make([]string, 0)

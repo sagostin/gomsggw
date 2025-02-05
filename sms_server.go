@@ -300,7 +300,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	encoding := coding.GSM7BitCoding
+	encoding := coding.ASCIICoding
 
 	// todo fix this make better??
 	/*if bestCoding == coding.GSM7BitCoding {
@@ -320,7 +320,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	if err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
-			"Message contains no information",
+			"Failed to decode SMS bytes",
 			logrus.ErrorLevel,
 			map[string]interface{}{
 				"client":     client.Username,
@@ -328,7 +328,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 				"decodedMsg": decodedMsg,
 				"submitsm":   submitSM,
 				"encoding":   encoding,
-				"error":      err,
+				"error":      err.Error(),
 			},
 		))
 

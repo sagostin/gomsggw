@@ -313,6 +313,23 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 
 	encodedMsg, _ := bestCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
 
+	if encodedMsg == "" {
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleSubmitSM",
+			"Message contains no information",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"client":      client.Username,
+				"logID":       transId,
+				"encoded_msg": encodedMsg,
+				"submitsm":    submitSM,
+				"encoding":    bestCoding,
+			},
+		))
+
+		return
+	}
+
 	msgQueueItem := MsgQueueItem{
 		To:                submitSM.DestAddr.String(),
 		From:              submitSM.SourceAddr.String(),
@@ -328,11 +345,11 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		"Sending SMS to sending channel",
 		logrus.WarnLevel,
 		map[string]interface{}{
-			"client":       client.Username,
-			"logID":        transId,
-			"encoded_msg":  encodedMsg,
-			"submitsm_msg": submitSM.Message,
-			"encoding":     bestCoding,
+			"client":      client.Username,
+			"logID":       transId,
+			"encoded_msg": encodedMsg,
+			"submitsm":    submitSM,
+			"encoding":    bestCoding,
 		},
 	))
 

@@ -312,7 +312,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	} else if submitSM.Message.DataCoding == 1 { // UTF-16
 		bestCoding = coding.ASCIICoding
 	} else {
-		bestCoding = coding.ASCIICoding
+		bestCoding = coding.GSM7BitCoding
 	}
 
 	//todo test if this is better? we may just need to parse the messages?

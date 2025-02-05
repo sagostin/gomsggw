@@ -76,6 +76,7 @@ func (router *Router) ClientRouter() {
 							map[string]interface{}{
 								"toClient": toClient.Username,
 								"logID":    msg.LogID,
+								"msg":      msg,
 							}, err,
 						))
 
@@ -183,6 +184,7 @@ func (router *Router) ClientRouter() {
 						map[string]interface{}{
 							"toClient": toClient.Username,
 							"logID":    msg.LogID,
+							"msg":      msg,
 						}, err,
 					))
 

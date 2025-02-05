@@ -74,6 +74,7 @@ func (router *Router) CarrierRouter() {
 							map[string]interface{}{
 								"client": client.Username,
 								"logID":  msg.LogID,
+								"msg":    msg,
 							}, err,
 						))
 						marshal, _ := json.Marshal(msg)
@@ -128,6 +129,7 @@ func (router *Router) CarrierRouter() {
 							map[string]interface{}{
 								"client": client.Username,
 								"logID":  msg.LogID,
+								"msg":    msg,
 							}, err,
 						))
 						continue
@@ -210,6 +212,7 @@ func (router *Router) CarrierRouter() {
 						map[string]interface{}{
 							"client": client.Username,
 							"logID":  msg.LogID,
+							"msg":    msg,
 						}, err,
 					))
 					// todo maybe to add to queue via postgres?
@@ -250,6 +253,7 @@ func (router *Router) CarrierRouter() {
 							map[string]interface{}{
 								"client": client.Username,
 								"logID":  msg.LogID,
+								"msg":    msg,
 							}, err,
 						))
 

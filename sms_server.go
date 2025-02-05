@@ -300,7 +300,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	encoding := coding.ASCIICoding
+	encoding := coding.GSM7BitCoding
 
 	// todo fix this make better??
 	/*if bestCoding == coding.GSM7BitCoding {
@@ -315,7 +315,24 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		encoding = coding.NoCoding
 	}
 
-	decodedMsg, _ := encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	decodedMsg, err := encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+
+	if err != nil {
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleSubmitSM",
+			"Message contains no information",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"client":     client.Username,
+				"logID":      transId,
+				"decodedMsg": decodedMsg,
+				"submitsm":   submitSM,
+				"encoding":   encoding,
+				"error":      err,
+			},
+		))
+
+	}
 
 	//todo test if this is better? we may just need to parse the messages?
 
@@ -383,7 +400,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		logf.Print()*/
 
 	resp := submitSM.Resp()
-	err := session.Send(resp)
+	err = session.Send(resp)
 	if err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",

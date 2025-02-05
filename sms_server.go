@@ -307,9 +307,6 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		bestCoding = coding.ASCIICoding
 	}*/
 
-	if submitSM.Message.DataCoding == 0 { // UTF-16
-		bestCoding = coding.UCS2Coding
-	}
 	if submitSM.Message.DataCoding == 8 { // UTF-16
 		bestCoding = coding.UCS2Coding
 	}

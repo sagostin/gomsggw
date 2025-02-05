@@ -300,7 +300,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	encoding := coding.NoCoding
+	encoding := coding.ASCIICoding
 
 	// todo fix this make better??
 	/*if bestCoding == coding.GSM7BitCoding {
@@ -311,6 +311,8 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		encoding = coding.UCS2Coding
 	} else if submitSM.Message.DataCoding == 1 { // UTF-16
 		encoding = coding.ASCIICoding
+	} else if submitSM.Message.DataCoding != 0 {
+		encoding = coding.NoCoding
 	}
 
 	decodedMsg, _ := encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))

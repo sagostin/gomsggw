@@ -8,6 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -538,11 +539,11 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 
 	encoding := coding.ASCIICoding
 
-	limit := 160
+	limit, _ := strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT"))
 	bestCoding := coding.BestSafeCoding(smsMessage)
 	if bestCoding == coding.UCS2Coding {
 		encoding = coding.UCS2Coding
-		limit = 70
+		limit, _ = strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT_UTF16"))
 	}
 
 	segments := make([]string, 0)

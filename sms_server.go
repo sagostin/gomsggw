@@ -301,6 +301,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}*/
 
 	var decodedMsg = ""
+	smsMessage := cleanSMSMessage(decodedMsg)
 
 	if submitSM.Message.DataCoding != 0 {
 		encoding := coding.ASCIICoding
@@ -366,10 +367,11 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			"Message contains no information",
 			logrus.WarnLevel,
 			map[string]interface{}{
-				"client":     client.Username,
-				"logID":      transId,
-				"decodedMsg": decodedMsg,
-				"submitsm":   submitSM,
+				"client":      client.Username,
+				"logID":       transId,
+				"decoded_msg": decodedMsg,
+				"submitsm":    submitSM,
+				"clean_msg":   smsMessage,
 			},
 		))
 
@@ -406,8 +408,9 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		map[string]interface{}{
 			"client":      client.Username,
 			"logID":       transId,
-			"encoded_msg": decodedMsg,
+			"decoded_msg": decodedMsg,
 			"submitsm":    submitSM,
+			"clean_msg":   smsMessage,
 		},
 	))
 
@@ -478,6 +481,41 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 	h.server.removeSession(session)
 }
 
+// cleanSMSMessage removes unwanted characters from an SMS message string.
+// It removes:
+//   - the null character (0x00)
+//   - the escape character (0x1B)
+//   - control characters (runes below 32) except for newline (\n), carriage return (\r) and tab (\t)
+//   - the DEL character (0x7F)
+//   - invalid Unicode surrogate halves (0xD800–0xDFFF)
+func cleanSMSMessage(input string) string {
+	var output []rune
+	for _, r := range input {
+		// Remove null character.
+		if r == '\x00' {
+			continue
+		}
+		// Remove escape character.
+		if r == '\x1B' {
+			continue
+		}
+		// Remove control characters (below 32) except for newline, carriage return, and tab.
+		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
+			continue
+		}
+		// Remove DEL character.
+		if r == 127 {
+			continue
+		}
+		// Remove UTF-16 surrogate halves (invalid Unicode scalar values).
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue
+		}
+		output = append(output, r)
+	}
+	return string(output)
+}
+
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
 // On failure, it notifies via sendFailureChannel and enqueues the message.
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
@@ -496,20 +534,24 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 
 	// todo split messages here?
 
+	smsMessage := cleanSMSMessage(msg.Message)
+
+	encoding := coding.ASCIICoding
+
 	limit := 160
-	bestCoding := coding.BestSafeCoding(msg.Message)
+	bestCoding := coding.BestSafeCoding(smsMessage)
+	if bestCoding == coding.UCS2Coding {
+		encoding = coding.UCS2Coding
+		limit = 70
+	}
 
 	segments := make([]string, 0)
-
-	if bestCoding == coding.GSM7BitCoding {
-		bestCoding = coding.ASCIICoding
-	}
-	splitter := bestCoding.Splitter()
+	splitter := encoding.Splitter()
 
 	if splitter != nil {
-		segments = splitter.Split(msg.Message, limit)
+		segments = splitter.Split(smsMessage, limit)
 	} else {
-		segments = []string{msg.Message}
+		segments = []string{smsMessage}
 	}
 
 	encoder := bestCoding.Encoding().NewEncoder()

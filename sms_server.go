@@ -347,6 +347,8 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 				return
 			}*/
 	} else {
+		decodedMsg = string(submitSM.Message.Message) // fuk it lol yolo
+	} /* else {
 		packed := submitSM.Message.Message
 		decodedPacked, err := decodePackedGSM7(packed)
 		if err != nil {
@@ -355,7 +357,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			fmt.Println("Decoded packed GSM7:", decodedPacked)
 		}
 		decodedMsg = decodedPacked
-	}
+	}*/
 	//todo test if this is better? we may just need to parse the messages?
 
 	if decodedMsg == "" {

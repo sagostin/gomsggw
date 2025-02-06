@@ -332,8 +332,8 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			},
 		))
 
-		// catch call to handle?
-		decodedMsg, err = coding.GSM7BitCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+		// catch all to handle as no coding???
+		decodedMsg, err = coding.NoCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
 		if err != nil {
 			lm.SendLog(lm.BuildLog(
 				"Server.SMPP.HandleSubmitSM",

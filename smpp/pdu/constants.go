@@ -1,5 +1,5 @@
 package pdu
 
 const (
-	MaxShortMessageLength = 140
+	MaxShortMessageLength = 160
 )

@@ -300,7 +300,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	encoding := coding.GSM7BitCoding
+	encoding := coding.NoCoding
 
 	// todo fix this make better??
 	/*if bestCoding == coding.GSM7BitCoding {
@@ -311,8 +311,6 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		encoding = coding.UCS2Coding
 	} else if submitSM.Message.DataCoding == 1 { // UTF-16
 		encoding = coding.ASCIICoding
-	} else if submitSM.Message.DataCoding != 0 {
-		encoding = coding.NoCoding
 	}
 
 	decodedMsg, err := encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
@@ -331,24 +329,6 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 				"error":      err.Error(),
 			},
 		))
-
-		// catch all to handle as no coding???
-		decodedMsg, err = coding.NoCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
-		if err != nil {
-			lm.SendLog(lm.BuildLog(
-				"Server.SMPP.HandleSubmitSM",
-				"Failed to decode SMS bytes, trying with GSM7",
-				logrus.ErrorLevel,
-				map[string]interface{}{
-					"client":     client.Username,
-					"logID":      transId,
-					"decodedMsg": decodedMsg,
-					"submitsm":   submitSM,
-					"encoding":   encoding,
-					"error":      err.Error(),
-				},
-			))
-		}
 
 		resp := submitSM.Resp()
 		err := session.Send(resp)

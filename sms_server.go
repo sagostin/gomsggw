@@ -300,7 +300,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	encoding := coding.ASCIICoding
+	encoding := coding.GSM7BitCoding
 
 	// todo fix this make better??
 	/*if bestCoding == coding.GSM7BitCoding {

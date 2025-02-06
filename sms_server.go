@@ -554,7 +554,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		segments = []string{smsMessage}
 	}
 
-	encoder := bestCoding.Encoding().NewEncoder()
+	encoder := encoding.Encoding().NewEncoder()
 
 	for _, segment := range segments {
 		encoded, _ := encoder.Bytes([]byte(segment))
@@ -563,7 +563,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		submitSM := &pdu.DeliverSM{
 			SourceAddr: pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
 			DestAddr:   pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
-			Message:    pdu.ShortMessage{Message: encoded, DataCoding: bestCoding}, // todo fix encoding
+			Message:    pdu.ShortMessage{Message: encoded, DataCoding: encoding}, // todo fix encoding
 			RegisteredDelivery: pdu.RegisteredDelivery{
 				MCDeliveryReceipt: 1,
 			},

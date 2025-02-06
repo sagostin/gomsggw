@@ -300,52 +300,62 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	encoding := coding.NoCoding
+	var decodedMsg = ""
 
-	// todo fix this make better??
-	/*if bestCoding == coding.GSM7BitCoding {
-		bestCoding = coding.ASCIICoding
-	}*/
+	if submitSM.Message.DataCoding != 0 {
+		encoding := coding.ASCIICoding
 
-	if submitSM.Message.DataCoding == 8 { // UTF-16
-		encoding = coding.UCS2Coding
-	} else if submitSM.Message.DataCoding == 1 { // UTF-16
-		encoding = coding.ASCIICoding
-	}
+		// todo fix this make better??
+		/*if bestCoding == coding.GSM7BitCoding {
+			bestCoding = coding.ASCIICoding
+		}*/
 
-	decodedMsg, err := encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
-
-	if err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.SMPP.HandleSubmitSM",
-			"Failed to decode SMS bytes, trying with GSM7",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client":     client.Username,
-				"logID":      transId,
-				"decodedMsg": decodedMsg,
-				"submitsm":   submitSM,
-				"encoding":   encoding,
-				"error":      err.Error(),
-			},
-		))
-
-		resp := submitSM.Resp()
-		err := session.Send(resp)
-		if err != nil {
-			lm.SendLog(lm.BuildLog(
-				"Server.SMPP.HandleSubmitSM",
-				"SMPPPDUError",
-				logrus.ErrorLevel,
-				map[string]interface{}{
-					"ip": session.Parent.RemoteAddr().String(),
-				}, err,
-			))
+		if submitSM.Message.DataCoding == 8 { // UTF-16
+			encoding = coding.UCS2Coding
+		} else if submitSM.Message.DataCoding == 1 { // UTF-16
+			encoding = coding.ASCIICoding
 		}
+		decodedMsg, _ = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+		/*		if err != nil {
+				lm.SendLog(lm.BuildLog(
+					"Server.SMPP.HandleSubmitSM",
+					"Failed to decode SMS bytes, trying with GSM7",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"client":     client.Username,
+						"logID":      transId,
+						"decodedMsg": decodedMsg,
+						"submitsm":   submitSM,
+						"encoding":   encoding,
+						"error":      err.Error(),
+					},
+				))
 
-		return
+				resp := submitSM.Resp()
+				err := session.Send(resp)
+				if err != nil {
+					lm.SendLog(lm.BuildLog(
+						"Server.SMPP.HandleSubmitSM",
+						"SMPPPDUError",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"ip": session.Parent.RemoteAddr().String(),
+						}, err,
+					))
+				}
+
+				return
+			}*/
+	} else {
+		packed := submitSM.Message.Message
+		decodedPacked, err := decodePackedGSM7(packed)
+		if err != nil {
+			fmt.Println("Error decoding packed GSM7:", err)
+		} else {
+			fmt.Println("Decoded packed GSM7:", decodedPacked)
+		}
+		decodedMsg = decodedPacked
 	}
-
 	//todo test if this is better? we may just need to parse the messages?
 
 	if decodedMsg == "" {
@@ -358,7 +368,6 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 				"logID":      transId,
 				"decodedMsg": decodedMsg,
 				"submitsm":   submitSM,
-				"encoding":   encoding,
 			},
 		))
 
@@ -397,7 +406,6 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			"logID":       transId,
 			"encoded_msg": decodedMsg,
 			"submitsm":    submitSM,
-			"encoding":    encoding,
 		},
 	))
 
@@ -412,7 +420,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		logf.Print()*/
 
 	resp := submitSM.Resp()
-	err = session.Send(resp)
+	err := session.Send(resp)
 	if err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",

@@ -198,7 +198,7 @@ func (lm *LogManager) processLogChannel() {
 	defer lm.wg.Done()
 	for log := range lm.LogChannel {
 		labels := map[string]string{
-			"job":       "sms-mms-gateway",
+			"job":       os.Getenv("LOKI_JOB"),
 			"server_id": os.Getenv("SERVER_ID"),
 			"type":      log.Type,
 		}

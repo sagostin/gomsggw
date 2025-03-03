@@ -8,6 +8,7 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -300,24 +301,119 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}*/
 
-	bestCoding := coding.BestSafeCoding(string(submitSM.Message.Message))
+	var decodedMsg = ""
+	smsMessage := cleanSMSMessage(decodedMsg)
 
-	// todo fix this make better??
-	if bestCoding == coding.GSM7BitCoding {
-		bestCoding = coding.ASCIICoding
+	if submitSM.Message.DataCoding != 0 {
+		encoding := coding.ASCIICoding
+
+		// todo fix this make better??
+		/*if bestCoding == coding.GSM7BitCoding {
+			bestCoding = coding.ASCIICoding
+		}*/
+
+		if submitSM.Message.DataCoding == 8 { // UTF-16
+			encoding = coding.UCS2Coding
+		} else if submitSM.Message.DataCoding == 1 { // UTF-16
+			encoding = coding.ASCIICoding
+		}
+		decodedMsg, _ = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+		/*		if err != nil {
+				lm.SendLog(lm.BuildLog(
+					"Server.SMPP.HandleSubmitSM",
+					"Failed to decode SMS bytes, trying with GSM7",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"client":     client.Username,
+						"logID":      transId,
+						"decodedMsg": decodedMsg,
+						"submitsm":   submitSM,
+						"encoding":   encoding,
+						"error":      err.Error(),
+					},
+				))
+
+				resp := submitSM.Resp()
+				err := session.Send(resp)
+				if err != nil {
+					lm.SendLog(lm.BuildLog(
+						"Server.SMPP.HandleSubmitSM",
+						"SMPPPDUError",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"ip": session.Parent.RemoteAddr().String(),
+						}, err,
+					))
+				}
+
+				return
+			}*/
+	} else {
+		decodedMsg = string(submitSM.Message.Message) // fuk it lol yolo
+	} /* else {
+		packed := submitSM.Message.Message
+		decodedPacked, err := decodePackedGSM7(packed)
+		if err != nil {
+			fmt.Println("Error decoding packed GSM7:", err)
+		} else {
+			fmt.Println("Decoded packed GSM7:", decodedPacked)
+		}
+		decodedMsg = decodedPacked
+	}*/
+	//todo test if this is better? we may just need to parse the messages?
+
+	if decodedMsg == "" {
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleSubmitSM",
+			"Message contains no information",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"client":      client.Username,
+				"logID":       transId,
+				"decoded_msg": decodedMsg,
+				"submitsm":    submitSM,
+				"clean_msg":   smsMessage,
+			},
+		))
+
+		resp := submitSM.Resp()
+		err := session.Send(resp)
+		if err != nil {
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.HandleSubmitSM",
+				"SMPPPDUError",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"ip": session.Parent.RemoteAddr().String(),
+				}, err,
+			))
+		}
+
+		return
 	}
-
-	encodedMsg, _ := bestCoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
 
 	msgQueueItem := MsgQueueItem{
 		To:                submitSM.DestAddr.String(),
 		From:              submitSM.SourceAddr.String(),
 		ReceivedTimestamp: time.Now(),
 		Type:              MsgQueueItemType.SMS,
-		Message:           encodedMsg,
+		Message:           decodedMsg,
 		SkipNumberCheck:   false,
 		LogID:             transId,
 	}
+
+	lm.SendLog(lm.BuildLog(
+		"Server.SMPP.HandleSubmitSM",
+		"Sending SMS to sending channel",
+		logrus.WarnLevel,
+		map[string]interface{}{
+			"client":      client.Username,
+			"logID":       transId,
+			"decoded_msg": decodedMsg,
+			"submitsm":    submitSM,
+			"clean_msg":   smsMessage,
+		},
+	))
 
 	/*logf.AddField("to", msgQueueItem.To)
 	logf.AddField("from", msgQueueItem.From)
@@ -386,6 +482,41 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 	h.server.removeSession(session)
 }
 
+// cleanSMSMessage removes unwanted characters from an SMS message string.
+// It removes:
+//   - the null character (0x00)
+//   - the escape character (0x1B)
+//   - control characters (runes below 32) except for newline (\n), carriage return (\r) and tab (\t)
+//   - the DEL character (0x7F)
+//   - invalid Unicode surrogate halves (0xD800–0xDFFF)
+func cleanSMSMessage(input string) string {
+	var output []rune
+	for _, r := range input {
+		// Remove null character.
+		if r == '\x00' {
+			continue
+		}
+		// Remove escape character.
+		if r == '\x1B' {
+			continue
+		}
+		// Remove control characters (below 32) except for newline, carriage return, and tab.
+		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
+			continue
+		}
+		// Remove DEL character.
+		if r == 127 {
+			continue
+		}
+		// Remove UTF-16 surrogate halves (invalid Unicode scalar values).
+		if r >= 0xD800 && r <= 0xDFFF {
+			continue
+		}
+		output = append(output, r)
+	}
+	return string(output)
+}
+
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
 // On failure, it notifies via sendFailureChannel and enqueues the message.
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
@@ -404,23 +535,27 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 
 	// todo split messages here?
 
-	limit := 134
-	bestCoding := coding.BestSafeCoding(msg.Message)
+	smsMessage := cleanSMSMessage(msg.Message)
+
+	encoding := coding.ASCIICoding
+
+	limit, _ := strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT"))
+	bestCoding := coding.BestSafeCoding(smsMessage)
+	if bestCoding == coding.UCS2Coding {
+		encoding = coding.UCS2Coding
+		limit, _ = strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT_UTF16"))
+	}
 
 	segments := make([]string, 0)
-
-	if bestCoding == coding.GSM7BitCoding {
-		bestCoding = coding.ASCIICoding
-	}
-	splitter := bestCoding.Splitter()
+	splitter := encoding.Splitter()
 
 	if splitter != nil {
-		segments = splitter.Split(msg.Message, limit)
+		segments = splitter.Split(smsMessage, limit)
 	} else {
-		segments = []string{msg.Message}
+		segments = []string{smsMessage}
 	}
 
-	encoder := bestCoding.Encoding().NewEncoder()
+	encoder := encoding.Encoding().NewEncoder()
 
 	for _, segment := range segments {
 		encoded, _ := encoder.Bytes([]byte(segment))
@@ -429,7 +564,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		submitSM := &pdu.DeliverSM{
 			SourceAddr: pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
 			DestAddr:   pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
-			Message:    pdu.ShortMessage{Message: encoded, DataCoding: bestCoding}, // todo fix encoding
+			Message:    pdu.ShortMessage{Message: encoded, DataCoding: encoding}, // todo fix encoding
 			RegisteredDelivery: pdu.RegisteredDelivery{
 				MCDeliveryReceipt: 1,
 			},

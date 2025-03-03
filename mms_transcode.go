@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -26,15 +25,15 @@ import (
 
 // Size limits
 const (
-	maxImageSize = 0.5 * 1024 * 1024 // 1 MB
-	maxFileSize  = 0.5 * 1024 * 1024 // 5 MB
+	maxImageSize = 1 * 1024 * 1024 // 1 MB
+	maxFileSize  = 1 * 1024 * 1024 // 5 MB
 )
 
 func (s *MM4Server) transcodeMedia() {
 	for {
 		mm4Message := <-s.MediaTranscodeChan
 
-		transId := primitive.NewObjectID().Hex()
+		//transId := primitive.NewObjectID().Hex()
 
 		ff, err := mm4Message.processAndConvertFiles()
 		if err != nil {
@@ -52,20 +51,20 @@ func (s *MM4Server) transcodeMedia() {
 				logrus.ErrorLevel,
 				map[string]interface{}{
 					"mm4Message": mm4Message,
-					"logID":      transId,
+					"logID":      mm4Message.TransactionID,
 				}, err,
 			))
 			continue
 		}
-		mm4Message.Files = ff
+		//mm4Message.Files = ff
 
 		msgItem := MsgQueueItem{
 			To:                mm4Message.To,
 			From:              mm4Message.From,
 			ReceivedTimestamp: time.Now(),
 			Type:              MsgQueueItemType.MMS,
-			Files:             mm4Message.Files,
-			LogID:             transId,
+			Files:             ff,
+			LogID:             mm4Message.TransactionID,
 		}
 
 		s.gateway.Router.ClientMsgChan <- msgItem
@@ -133,7 +132,7 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 
 		case strings.HasPrefix(file.ContentType, "video/"):
 			convertedContent, newType, err = processVideoContent(decodedContent)
-			newExt = ".3gpp"
+			newExt = ".3gp"
 			if err != nil {
 				return nil, fmt.Errorf("failed to process video: %v", err)
 			}
@@ -157,9 +156,9 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 
 		// Update filename with new extension if needed
 		// baseName := strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename))
-		file.Filename = primitive.NewObjectID().Hex() + newExt
+		file.Filename = uuid.New().String() + newExt
 
-		file.Content = []byte(encodeToBase64(convertedContent))
+		file.Content = convertedContent
 		file.ContentType = newType
 		file.Base64Data = encodeToBase64(convertedContent)
 		processedFiles = append(processedFiles, file)
@@ -177,8 +176,8 @@ func convertTo3GPP(content []byte, transcodeVideo, transcodeAudio bool) ([]byte,
 	}
 
 	// Generate unique file names for input and output
-	inputFile := filepath.Join(tempPath, uuid.New().String()+".mp4")
-	outputFile := filepath.Join(tempPath, uuid.New().String()+".3gp") // Use .3gp extension for 3GPP format
+	inputFile := filepath.Join(tempPath, uuid.New().String())
+	outputFile := filepath.Join(tempPath, uuid.New().String()) // Use .3gp extension for 3GPP format
 
 	// Save the input content to a temporary file
 	err := ioutil.WriteFile(inputFile, content, 0644)

@@ -302,7 +302,6 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}*/
 
 	var decodedMsg = ""
-	smsMessage := cleanSMSMessage(decodedMsg)
 
 	if submitSM.Message.DataCoding != 0 {
 		encoding := coding.ASCIICoding
@@ -361,6 +360,8 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		decodedMsg = decodedPacked
 	}*/
 	//todo test if this is better? we may just need to parse the messages?
+
+	smsMessage := cleanSMSMessage(decodedMsg)
 
 	if decodedMsg == "" {
 		lm.SendLog(lm.BuildLog(

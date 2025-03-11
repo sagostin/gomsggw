@@ -41,9 +41,9 @@ services:
     networks:
       - smsgw-network
 
-  msggw:
+  msggw1:
     image: sms-mms-gw:latest
-    container_name: msggw
+    container_name: msggw1
     env_file:
       - .env
     restart: always

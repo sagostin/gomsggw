@@ -41,35 +41,32 @@ services:
     networks:
       - smsgw-network
 
-  msggw1:
+  msggw:
     image: sms-mms-gw:latest
-    container_name: msggw1
+    container_name: msggw
     env_file:
       - .env
     restart: always
     networks:
       - smsgw-network
     ports:
-      - "42661:42666"
-    expose:
-      - "42666"
-      - "3000"
-      - "2775"
-      - "2566"
-    environment:
-      - SERVER_ID=msggw1
-  haproxy:
-    image: haproxy:latest
-    container_name: haproxy
-    volumes:
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-    ports:
-      - "80:80"
+      - "80:3000"
       - "2775:2775"
       - "2566:2566"
-    networks:
-      - smsgw-network
-    restart: always
+    environment:
+      - SERVER_ID=msggw1
+#  haproxy:
+#    image: haproxy:latest
+#    container_name: haproxy
+#    volumes:
+#      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+#    ports:
+#      - "80:80"
+#      - "2775:2775"
+#      - "2566:2566"
+#    networks:
+#      - smsgw-network
+#    restart: always
 
 networks:
   smsgw-network:

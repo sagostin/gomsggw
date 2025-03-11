@@ -41,9 +41,9 @@ services:
     networks:
       - smsgw-network
 
-  msggw1:
+  msggw:
     image: sms-mms-gw:latest
-    container_name: msggw1
+    container_name: msggw
     env_file:
       - .env
     restart: always
@@ -57,24 +57,7 @@ services:
       - "2775"
       - "2566"
     environment:
-      - SERVER_ID=msggw1-1
-  msggw2:
-    image: sms-mms-gw:latest
-    container_name: msggw2
-    env_file:
-      - .env
-    restart: always
-    networks:
-      - smsgw-network
-    ports:
-      - "42662:42666"
-    expose:
-      - "42666"
-      - "3000"
-      - "2775"
-      - "2566"
-    environment:
-      - SERVER_ID=msggw1-2
+      - SERVER_ID=msggw1
   haproxy:
     image: haproxy:latest
     container_name: haproxy

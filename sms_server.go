@@ -584,7 +584,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		if err != nil {
 			return fmt.Errorf("error sending SubmitSM: %v", err)
 		}
-		// time.Sleep(500 * time.Millisecond)
+		time.Sleep(500 * time.Millisecond)
 	}
 	return nil
 }

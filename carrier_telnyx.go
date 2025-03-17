@@ -129,18 +129,19 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 
 	// Handle SMS if body is present
 	if strings.TrimSpace(body) != "" {
-		smsMessages := splitSMS(body, 140)
-		for _, smsBody := range smsMessages {
-			sms := MsgQueueItem{
-				To:                to,
-				From:              from,
-				ReceivedTimestamp: time.Now(),
-				Type:              MsgQueueItemType.SMS,
-				Message:           smsBody,
-				LogID:             messageID,
-			}
-			h.gateway.Router.CarrierMsgChan <- sms
+		/*smsMessages := splitSMS(body, 140)*/
+		sms := MsgQueueItem{
+			To:                to,
+			From:              from,
+			ReceivedTimestamp: time.Now(),
+			Type:              MsgQueueItemType.SMS,
+			Message:           body,
+			LogID:             messageID,
 		}
+		h.gateway.Router.CarrierMsgChan <- sms
+		/*for _, smsBody := range smsMessages {
+
+		}*/
 	}
 
 	// Respond with HTTP 200 OK

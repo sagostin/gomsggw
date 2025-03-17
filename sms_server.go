@@ -268,6 +268,9 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 }
 func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.SubmitSM) {
 	transId := primitive.NewObjectID().Hex()
+
+	//fmt.Println(submitSM.Header.Sequence)
+
 	// Find the client associated with this session
 	var client *Client
 	h.server.mu.RLock()
@@ -574,12 +577,14 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 			},
 		}
 
+		//fmt.Println(submitSM.Header.Sequence)
+
 		// Attempt to send the PDU
 		err = session.Send(submitSM)
 		if err != nil {
 			return fmt.Errorf("error sending SubmitSM: %v", err)
 		}
-		time.Sleep(250 * time.Millisecond)
+		// time.Sleep(500 * time.Millisecond)
 	}
 	return nil
 }

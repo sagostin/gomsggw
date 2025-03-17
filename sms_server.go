@@ -537,8 +537,6 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 
 	// cleanedContent := ValidateAndCleanSMS(msg.Message)
 
-	// todo split messages here?
-
 	smsMessage := cleanSMSMessage(msg.Message)
 
 	encoding := coding.ASCIICoding
@@ -578,13 +576,24 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		}
 
 		//fmt.Println(submitSM.Header.Sequence)
+		s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
+			"Server.SMPP.SendSMPP",
+			"DEBUG",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"ip":      session.Parent.RemoteAddr().String(),
+				"length":  limit,
+				"message": smsMessage,
+				"segment": segment,
+			}, err,
+		))
 
 		// Attempt to send the PDU
 		err = session.Send(submitSM)
 		if err != nil {
 			return fmt.Errorf("error sending SubmitSM: %v", err)
 		}
-		time.Sleep(500 * time.Millisecond)
+		//time.Sleep(500 * time.Millisecond)
 	}
 	return nil
 }

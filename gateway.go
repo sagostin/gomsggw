@@ -11,13 +11,13 @@ import (
 
 // Gateway handles SMS processing for different carriers
 type Gateway struct {
-	Carriers      map[string]CarrierHandler
-	CarrierUUIDs  map[string]Carrier
-	DB            *gorm.DB
-	SMPPServer    *SMPPServer
-	Router        *Router
-	MM4Server     *MM4Server
-	AMPQClient    *AMPQClient
+	Carriers     map[string]CarrierHandler
+	CarrierUUIDs map[string]Carrier
+	DB           *gorm.DB
+	SMPPServer   *SMPPServer
+	Router       *Router
+	MM4Server    *MM4Server
+	//AMPQClient    *AMPQClient
 	Clients       map[string]*Client
 	Numbers       map[string]*ClientNumber
 	LogManager    *LogManager

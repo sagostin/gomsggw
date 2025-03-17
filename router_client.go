@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"time"
@@ -40,7 +39,7 @@ func (router *Router) ClientRouter() {
 				if toClient != nil {
 					session, err := r.gateway.SMPPServer.findSmppSession(m.To)
 					if err != nil {
-						if m.Delivery != nil {
+						/*if m.Delivery != nil {
 							err := m.Delivery.Reject(true)
 							if err != nil {
 								break
@@ -54,7 +53,8 @@ func (router *Router) ClientRouter() {
 							m.QueuedTimestamp = time.Now()
 							err = r.gateway.AMPQClient.Publish("client", marshal)
 							break
-						}
+						}*/
+						m.Retry("failed to find smpp session", r.ClientMsgChan)
 						manager.SendLog(manager.BuildLog(
 							"r.Client.SMS",
 							"RouterFindSMPP",
@@ -81,7 +81,7 @@ func (router *Router) ClientRouter() {
 								}, err,
 							))
 
-							if m.Delivery != nil {
+							/*if m.Delivery != nil {
 								err := m.Delivery.Reject(true)
 								if err != nil {
 									break
@@ -96,9 +96,9 @@ func (router *Router) ClientRouter() {
 								m.QueuedTimestamp = time.Now()
 								err = r.gateway.AMPQClient.Publish("client", marshal)
 								break
-							}
+							}*/
+							m.Retry("failed to send smpp", r.ClientMsgChan)
 						} else {
-
 							var internal = fromClient != nil && toClient != nil
 							if fromClient != nil {
 								r.gateway.MsgRecordChan <- MsgRecord{
@@ -116,13 +116,12 @@ func (router *Router) ClientRouter() {
 									Internal:     internal,
 								}
 							}
-
-							if m.Delivery != nil {
+							/*if m.Delivery != nil {
 								err := m.Delivery.Ack(false)
 								if err != nil {
 									break
 								}
-							}
+							}*/
 						}
 						break
 					} else {
@@ -136,19 +135,21 @@ func (router *Router) ClientRouter() {
 							}, err,
 						))
 
-						if m.Delivery != nil {
+						m.Retry("failed to find smpp", r.ClientMsgChan)
+
+						/*if m.Delivery != nil {
 							err := m.Delivery.Nack(false, true)
 							if err != nil {
 								break
 							}
-						}
+						}*/
 						break
 					}
 				}
 
 				carrier, _ := r.gateway.getClientCarrier(m.From)
 				if carrier != "" {
-					marshal, err := json.Marshal(msg)
+					/*marshal, err := json.Marshal(msg)
 					if err != nil {
 						// todo
 						break
@@ -159,7 +160,8 @@ func (router *Router) ClientRouter() {
 					if err != nil {
 						// todo
 						break
-					}
+					}*/
+					r.CarrierMsgChan <- *m
 					break
 				} else {
 					manager.SendLog(manager.BuildLog(
@@ -189,7 +191,7 @@ func (router *Router) ClientRouter() {
 							}, err,
 						))
 
-						if m.Delivery != nil {
+						/*if m.Delivery != nil {
 							err := m.Delivery.Reject(true)
 							if err != nil {
 								break
@@ -203,7 +205,8 @@ func (router *Router) ClientRouter() {
 							m.QueuedTimestamp = time.Now()
 							err = r.gateway.AMPQClient.Publish("client", marshal)
 							break
-						}
+						}*/
+						m.Retry("failed to send mm4", r.ClientMsgChan)
 						// todo maybe to add to queue via postgres?
 						break
 					}
@@ -225,18 +228,18 @@ func (router *Router) ClientRouter() {
 							Internal:     internal,
 						}
 					}
-					if m.Delivery != nil {
+					/*if m.Delivery != nil {
 						err := m.Delivery.Ack(false)
 						if err != nil {
 							break
 						}
-					}
+					}*/
 					break
 				}
 
 				carrier, _ := r.gateway.getClientCarrier(m.From)
 				if carrier != "" {
-					marshal, err := json.Marshal(msg)
+					/*marshal, err := json.Marshal(msg)
 					if err != nil {
 						// todo
 						break
@@ -246,14 +249,15 @@ func (router *Router) ClientRouter() {
 						if err != nil {
 							break
 						}
-					}
+					}*/
 					// add to outbound carrier queue
 					m.QueuedTimestamp = time.Now()
-					err = r.gateway.AMPQClient.Publish("carrier", marshal)
+					r.CarrierMsgChan <- *m
+					/*err = r.gateway.AMPQClient.Publish("carrier", marshal)
 					if err != nil {
 						// todo
 						break
-					}
+					}*/
 					break
 				} else {
 					manager.SendLog(manager.BuildLog(
@@ -267,7 +271,9 @@ func (router *Router) ClientRouter() {
 					))
 				}
 
-				if m.Delivery != nil {
+				m.Retry("failed sending msg", r.ClientMsgChan)
+
+				/*if m.Delivery != nil {
 					err := m.Delivery.Reject(true)
 					if err != nil {
 						break
@@ -281,7 +287,7 @@ func (router *Router) ClientRouter() {
 					m.QueuedTimestamp = time.Now()
 					err = r.gateway.AMPQClient.Publish("client", marshal)
 					break
-				}
+				}*/
 			}
 		}(router, lm, &msg)
 	}

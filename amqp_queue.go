@@ -32,7 +32,40 @@ type MsgQueueItem struct {
 	Message           string       `json:"message"`
 	SkipNumberCheck   bool
 	LogID             string `json:"log_id"`
-	Delivery          *amqp.Delivery
+	//Delivery          *amqp.Delivery
+	Delivery *MsgQueueDelivery
+}
+
+type MsgQueueDelivery struct {
+	Error      string
+	RetryTime  time.Time
+	RetryCount int
+}
+
+func (msg *MsgQueueItem) Retry(err string, queue chan MsgQueueItem) {
+	// todo check if the retry count is already set, same with the time, etc.
+	if msg.Delivery == nil {
+		msg.Delivery = &MsgQueueDelivery{
+			Error:      "",
+			RetryTime:  time.Now(),
+			RetryCount: 0,
+		}
+	}
+
+	if msg.Delivery.RetryCount >= 3 {
+		// discard if already tried 3 times
+		return
+	}
+
+	msg.Delivery.RetryCount++
+
+	if err != "" {
+		msg.Delivery.Error = err
+	}
+	// sleep for retry
+	time.Sleep(10 * time.Second)
+	queue <- *msg
+	return
 }
 
 // MsgFile represents an individual file extracted from the MIME multipart message.

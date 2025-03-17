@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"github.com/sirupsen/logrus"
 )
 
@@ -25,12 +24,12 @@ func (router *Router) CarrierRouter() {
 				if client != nil {
 					session, err := r.gateway.SMPPServer.findSmppSession(m.To)
 					if err != nil {
-						if m.Delivery != nil {
+						/*if m.Delivery != nil{
 							manager.SendLog(manager.BuildLog(
 								"r.Carrier.SMS",
 								"RouterFindSMPP",
 								logrus.ErrorLevel,
-								map[string]interface{}{
+								map[string]interface{}{/
 									"client": client.Username,
 									"logID":  m.LogID,
 								}, err,
@@ -48,7 +47,7 @@ func (router *Router) CarrierRouter() {
 							}
 							err = r.gateway.AMPQClient.Publish("client", marshal)
 							break
-						}
+						}*/
 						manager.SendLog(manager.BuildLog(
 							"r.Carrier.SMS",
 							"RouterFindSMPP",
@@ -58,13 +57,14 @@ func (router *Router) CarrierRouter() {
 								"logID":  m.LogID,
 							}, err,
 						))
+						msg.Retry("failed to find smpp", r.CarrierMsgChan)
 						// todo maybe to add to queue via postgres?
 						break
 					}
 					if session != nil {
 						err := r.gateway.SMPPServer.sendSMPP(msg, session)
 						if err != nil {
-							if m.Delivery != nil {
+							/*if m.Delivery != nil {
 								err = m.Delivery.Ack(false)
 							}
 							manager.SendLog(manager.BuildLog(
@@ -78,7 +78,8 @@ func (router *Router) CarrierRouter() {
 								}, err,
 							))
 							marshal, _ := json.Marshal(msg)
-							_ = r.gateway.AMPQClient.Publish("client", marshal)
+							_ = r.gateway.AMPQClient.Publish("client", marshal)*/
+							msg.Retry("failed to send to smpp", r.ClientMsgChan)
 							break
 						} else {
 							r.gateway.MsgRecordChan <- MsgRecord{
@@ -87,21 +88,22 @@ func (router *Router) CarrierRouter() {
 								ClientID:     client.ID,
 								Internal:     false,
 							}
-							if m.Delivery != nil {
+							/*if m.Delivery != nil {
 								err := m.Delivery.Ack(false)
 								if err != nil {
 									break
 								}
-							}
+							}*/
 							break
 						}
 					} else {
-						if m.Delivery != nil {
+						/*if m.Delivery != nil {
 							err := m.Delivery.Nack(false, true)
 							if err != nil {
 								break
 							}
-						}
+						}*/
+						msg.Retry("failed to send to smpp", r.CarrierMsgChan)
 						break
 					}
 				}
@@ -119,9 +121,9 @@ func (router *Router) CarrierRouter() {
 						err := route.Handler.SendSMS(&msg)
 						if err != nil {
 							// todo log
-							if m.Delivery != nil {
+							/*if m.Delivery != nil {
 								err = m.Delivery.Reject(true)
-							}
+							}*/
 							manager.SendLog(manager.BuildLog(
 								"r.Carrier.SMS",
 								"RouterSendCarrier",
@@ -132,6 +134,7 @@ func (router *Router) CarrierRouter() {
 									"msg":    msg,
 								}, err,
 							))
+							msg.Retry("failed to send to smpp", r.CarrierMsgChan)
 							break
 						}
 						r.gateway.MsgRecordChan <- MsgRecord{
@@ -140,9 +143,9 @@ func (router *Router) CarrierRouter() {
 							ClientID:     client.ID,
 							Internal:     false,
 						}
-						if m.Delivery != nil {
+						/*if m.Delivery != nil {
 							err = m.Delivery.Ack(false)
-						}
+						}*/
 						break
 					}
 				} else {
@@ -170,12 +173,12 @@ func (router *Router) CarrierRouter() {
 				client, _ := r.findClientByNumber(m.To)
 
 				if m.Files == nil {
-					if m.Delivery != nil {
+					/*if m.Delivery != nil {
 						err := m.Delivery.Reject(false)
 						if err != nil {
 							break
 						}
-					}
+					}*/
 
 					manager.SendLog(manager.BuildLog(
 						"r.Carrier.MMS",
@@ -186,12 +189,13 @@ func (router *Router) CarrierRouter() {
 							"logID":  m.LogID,
 						},
 					))
+					break
 				}
 
 				if client != nil {
 					err := r.gateway.MM4Server.sendMM4(msg)
 					if err != nil {
-						if m.Delivery != nil {
+						/*if m.Delivery != nil {
 							err := m.Delivery.Reject(true)
 							if err != nil {
 								break
@@ -204,7 +208,7 @@ func (router *Router) CarrierRouter() {
 							}
 							err = r.gateway.AMPQClient.Publish("client", marshal)
 							break
-						}
+						}*/
 						manager.SendLog(manager.BuildLog(
 							"r.Carrier.MMS",
 							"RouterSendMM4",
@@ -215,6 +219,7 @@ func (router *Router) CarrierRouter() {
 								"msg":    msg,
 							}, err,
 						))
+						msg.Retry("failed to send mm4", r.ClientMsgChan)
 						// todo maybe to add to queue via postgres?
 						break
 					}
@@ -224,19 +229,18 @@ func (router *Router) CarrierRouter() {
 						ClientID:     client.ID,
 						Internal:     false,
 					}
-					if m.Delivery != nil {
+					/*if m.Delivery != nil {
 						err := m.Delivery.Ack(false)
 						if err != nil {
 							break
 						}
-					}
+					}*/
 					break
 				}
 
 				client, _ = r.findClientByNumber(m.From)
 				if client != nil {
 					// todo log & error invalid sender number
-
 				}
 
 				carrier, _ := r.gateway.getClientCarrier(m.From)
@@ -257,12 +261,7 @@ func (router *Router) CarrierRouter() {
 								}, err,
 							))
 
-							if m.Delivery != nil {
-								err := m.Delivery.Reject(true)
-								if err != nil {
-									break
-								}
-							}
+							msg.Retry("failed to send to carrier", r.CarrierMsgChan)
 							break
 						}
 						r.gateway.MsgRecordChan <- MsgRecord{
@@ -271,12 +270,12 @@ func (router *Router) CarrierRouter() {
 							ClientID:     client.ID,
 							Internal:     false,
 						}
-						if m.Delivery != nil {
+						/*if m.Delivery != nil {
 							err := m.Delivery.Ack(false)
 							if err != nil {
 								break
 							}
-						}
+						}*/
 						break
 
 					}

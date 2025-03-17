@@ -50,7 +50,7 @@ func main() {
 	}
 	// init log manager for startup
 
-	amqpServerURL := os.Getenv("AMQP_SERVER_URL")
+	/*amqpServerURL := os.Getenv("AMQP_SERVER_URL")
 	addr := amqpServerURL
 	// we don't need a from client because we directly place it in the to_carrier one
 	queues := []string{"carrier", "client"}
@@ -63,7 +63,7 @@ func main() {
 		}
 	}(ampqClient)
 
-	gateway.AMPQClient = ampqClient
+	gateway.AMPQClient = ampqClient*/
 
 	err = gateway.loadCarriers()
 	if err != nil {

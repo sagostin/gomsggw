@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -22,7 +21,7 @@ type Router struct {
 }
 
 func (router *Router) ClientMsgConsumer() {
-	for {
+	/*for {
 		client := router.gateway.AMPQClient
 		deliveries, err := client.ConsumeMessages("client")
 		if err != nil {
@@ -43,11 +42,12 @@ func (router *Router) ClientMsgConsumer() {
 			router.ClientMsgChan <- msgQueueItem
 			// todo only ack if was successful??
 		}
-	}
+	}*/
+	return
 }
 
 func (router *Router) CarrierMsgConsumer() {
-	for {
+	/*for {
 		client := router.gateway.AMPQClient
 		deliveries, err := client.ConsumeMessages("carrier")
 		if err != nil {
@@ -69,7 +69,8 @@ func (router *Router) CarrierMsgConsumer() {
 			router.CarrierMsgChan <- msgQueueItem
 			// todo only ack if was successful??
 		}
-	}
+	}*/
+	return
 }
 
 func (router *Router) AddRoute(routeType, endpoint string, handler CarrierHandler) {

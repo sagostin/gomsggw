@@ -581,10 +581,11 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 			"DEBUG",
 			logrus.DebugLevel,
 			map[string]interface{}{
-				"ip":      session.Parent.RemoteAddr().String(),
-				"length":  limit,
-				"message": smsMessage,
-				"segment": segment,
+				"ip":       session.Parent.RemoteAddr().String(),
+				"length":   limit,
+				"message":  smsMessage,
+				"segment":  segment,
+				"encoding": encoding.String(),
 			}, err,
 		))
 

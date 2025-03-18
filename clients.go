@@ -20,7 +20,7 @@ type ClientNumber struct {
 	ClientID             uint   `gorm:"index;not null" json:"client_id"`
 	Number               string `gorm:"unique;not null" json:"number"`
 	Carrier              string `json:"carrier"`
-	IgnoreStopCmdSending bool   `json:"ignore_stop_cmd_sending"`
+	IgnoreStopCmdSending bool   `json:"ignore_stop_cmd_sending" gorm:"default:false;not null"`
 	WebHook              string `json:"webhook"` // this is the spot to send the web hook request for if we "receive" from the carrier
 }
 

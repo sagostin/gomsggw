@@ -586,6 +586,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 				"message":  smsMessage,
 				"segment":  segment,
 				"encoding": encoding.String(),
+				"sequence": submitSM.Header.Sequence,
 			}, err,
 		))
 

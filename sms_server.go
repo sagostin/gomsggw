@@ -396,6 +396,22 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}
 
+	numData := h.server.gateway.getNumber(submitSM.SourceAddr.String())
+	if numData.IgnoreStopCmdSending && decodedMsg == "Reply STOP to end messages." {
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleSubmitSM",
+			"Dropping message because contains STOP and matches client number with rule.",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"ip":     session.Parent.RemoteAddr().String(),
+				"client": client.Username,
+				"from":   numData.Number,
+			},
+		))
+
+		return
+	}
+
 	msgQueueItem := MsgQueueItem{
 		To:                submitSM.DestAddr.String(),
 		From:              submitSM.SourceAddr.String(),

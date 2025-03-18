@@ -16,11 +16,12 @@ type Client struct {
 }
 
 type ClientNumber struct {
-	ID       uint   `gorm:"primaryKey" json:"id"`
-	ClientID uint   `gorm:"index;not null" json:"client_id"`
-	Number   string `gorm:"unique;not null" json:"number"`
-	Carrier  string `json:"carrier"`
-	WebHook  string `json:"webhook"` // this is the spot to send the web hook request for if we "receive" from the carrier
+	ID                   uint   `gorm:"primaryKey" json:"id"`
+	ClientID             uint   `gorm:"index;not null" json:"client_id"`
+	Number               string `gorm:"unique;not null" json:"number"`
+	Carrier              string `json:"carrier"`
+	IgnoreStopCmdSending bool   `json:"ignore_stop_cmd_sending"`
+	WebHook              string `json:"webhook"` // this is the spot to send the web hook request for if we "receive" from the carrier
 }
 
 // loadClients loads clients from the database, decrypts their credentials, and populates the in-memory map.

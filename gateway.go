@@ -143,6 +143,21 @@ func (gateway *Gateway) getClient(number string) *Client {
 	return nil
 }
 
+// getClient returns the client associated with a phone number.
+func (gateway *Gateway) getNumber(number string) *ClientNumber {
+	gateway.mu.RLock()
+	defer gateway.mu.RUnlock()
+
+	for _, client := range gateway.Clients {
+		for _, num := range client.Numbers {
+			if strings.Contains(number, num.Number) {
+				return &num
+			}
+		}
+	}
+	return nil
+}
+
 func (gateway *Gateway) getClientCarrier(number string) (string, error) {
 	for _, client := range gateway.Clients {
 		for _, num := range client.Numbers {

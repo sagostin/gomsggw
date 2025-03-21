@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"zultys-smpp-mm4/smpp"
 	"zultys-smpp-mm4/smpp/coding"
 	"zultys-smpp-mm4/smpp/pdu"
@@ -23,6 +24,9 @@ type SMPPServer struct {
 	mu               sync.RWMutex
 	reconnectChannel chan string
 	gateway          *Gateway
+
+	pendingAcks   map[int32]chan *pdu.DeliverSMResp
+	pendingAcksMu sync.Mutex
 }
 
 func (srv *SMPPServer) Start(gateway *Gateway) {
@@ -33,6 +37,8 @@ func (srv *SMPPServer) Start(gateway *Gateway) {
 	}
 
 	srv.gateway = gateway
+
+	srv.pendingAcks = make(map[int32]chan *pdu.DeliverSMResp)
 
 	/*srv.smsQueueCollection = gateway.MongoClient.Database(SMSQueueDBName).Collection(SMSQueueCollectionName)
 	 */
@@ -140,6 +146,20 @@ func (srv *SMPPServer) findAuthdSession(session *smpp.Session) error {
 	return fmt.Errorf("unable to find matching session")
 }
 
+func (s *SMPPServer) addPendingAck(seq int32) chan *pdu.DeliverSMResp {
+	ackCh := make(chan *pdu.DeliverSMResp, 1)
+	s.pendingAcksMu.Lock()
+	s.pendingAcks[seq] = ackCh
+	s.pendingAcksMu.Unlock()
+	return ackCh
+}
+
+func (s *SMPPServer) removePendingAck(seq int32) {
+	s.pendingAcksMu.Lock()
+	delete(s.pendingAcks, seq)
+	s.pendingAcksMu.Unlock()
+}
+
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	var lm = h.server.gateway.LogManager
 
@@ -159,6 +179,20 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 			))
 		}
 		h.handleSubmitSM(session, p)
+	case *pdu.DeliverSMResp:
+		seq := p.Header.Sequence
+		h.server.pendingAcksMu.Lock()
+		ackCh, exists := h.server.pendingAcks[seq]
+		h.server.pendingAcksMu.Unlock()
+		if exists {
+			// Send the response on the channel; use non-blocking send if needed.
+			select {
+			case ackCh <- packet.(*pdu.DeliverSMResp):
+			default:
+			}
+			// Optionally remove the channel now:
+			h.server.removePendingAck(seq)
+		}
 	case *pdu.DeliverSM:
 		h.handleDeliverSM(session, p)
 	case *pdu.Unbind:
@@ -502,39 +536,98 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 	h.server.removeSession(session)
 }
 
-// cleanSMSMessage removes unwanted characters from an SMS message string.
-// It removes:
-//   - the null character (0x00)
-//   - the escape character (0x1B)
-//   - control characters (runes below 32) except for newline (\n), carriage return (\r) and tab (\t)
-//   - the DEL character (0x7F)
-//   - invalid Unicode surrogate halves (0xD800–0xDFFF)
-func cleanSMSMessage(input string) string {
-	var output []rune
-	for _, r := range input {
-		// Remove null character.
-		if r == '\x00' {
-			continue
-		}
-		// Remove escape character.
-		if r == '\x1B' {
-			continue
-		}
-		// Remove control characters (below 32) except for newline, carriage return, and tab.
-		if r < 32 && r != '\n' && r != '\r' && r != '\t' {
-			continue
-		}
-		// Remove DEL character.
-		if r == 127 {
-			continue
-		}
-		// Remove UTF-16 surrogate halves (invalid Unicode scalar values).
-		if r >= 0xD800 && r <= 0xDFFF {
-			continue
-		}
-		output = append(output, r)
+// replacementMap defines replacements for non-standard characters.
+// For example, smart quotes are replaced with standard ones.
+var replacementMap = map[rune]string{
+	'\u2018': "'",   // Left single quotation mark
+	'\u2019': "'",   // Right single quotation mark
+	'\u201A': "'",   // Single low-9 quotation mark
+	'\u201C': "\"",  // Left double quotation mark
+	'\u201D': "\"",  // Right double quotation mark
+	'\u2013': "-",   // En dash replaced with hyphen
+	'\u2014': "-",   // Em dash replaced with hyphen
+	'\u2026': "...", // Ellipsis replaced with three dots
+}
+
+// isEmoji returns true if the rune falls within common emoji ranges.
+func isEmoji(r rune) bool {
+	// Emoticons (U+1F600 to U+1F64F)
+	if r >= 0x1F600 && r <= 0x1F64F {
+		return true
 	}
-	return string(output)
+	// Miscellaneous Symbols and Pictographs (U+1F300 to U+1F5FF)
+	if r >= 0x1F300 && r <= 0x1F5FF {
+		return true
+	}
+	// Transport & Map Symbols (U+1F680 to U+1F6FF)
+	if r >= 0x1F680 && r <= 0x1F6FF {
+		return true
+	}
+	// Miscellaneous Symbols (U+2600 to U+26FF)
+	if r >= 0x2600 && r <= 0x26FF {
+		return true
+	}
+	// Dingbats (U+2700 to U+27BF)
+	if r >= 0x2700 && r <= 0x27BF {
+		return true
+	}
+	// Supplemental Symbols and Pictographs (U+1F900 to U+1F9FF)
+	if r >= 0x1F900 && r <= 0x1F9FF {
+		return true
+	}
+	return false
+}
+
+// isGSMAllowed checks if a rune is allowed by our GSM whitelist.
+// Here we allow letters, digits, whitespace and a set of standard punctuation.
+func isGSMAllowed(r rune) bool {
+	// Allow letters, digits, and whitespace.
+	if unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) {
+		return true
+	}
+	// Allowed punctuation. Adjust this list as needed.
+	allowedPunct := ".,!?;:'\"-()[]{}"
+	if strings.ContainsRune(allowedPunct, r) {
+		return true
+	}
+	return false
+}
+
+// cleanSMSMessage processes the input message by:
+//  1. Removing unwanted control or invalid characters.
+//  2. Replacing non-standard characters with allowed equivalents when possible.
+//  3. Allowing genuine characters and emojis.
+func cleanSMSMessage(input string) string {
+	var output strings.Builder
+
+	for _, r := range input {
+		// Remove known unwanted characters.
+		if r == '\x00' || r == '\x1B' || (r < 32 && r != '\n' && r != '\r' && r != '\t') || r == 127 || (r >= 0xD800 && r <= 0xDFFF) {
+			continue
+		}
+
+		// Always allow emojis.
+		if isEmoji(r) {
+			output.WriteRune(r)
+			continue
+		}
+
+		// If the character is allowed by GSM, keep it.
+		if isGSMAllowed(r) {
+			output.WriteRune(r)
+			continue
+		}
+
+		// Otherwise, if a similar allowed replacement exists, use it.
+		if replacement, ok := replacementMap[r]; ok {
+			output.WriteString(replacement)
+			continue
+		}
+
+		// If no allowed replacement exists, the character is skipped.
+	}
+
+	return output.String()
 }
 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
@@ -577,41 +670,52 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 
 	for _, segment := range segments {
 		encoded, _ := encoder.Bytes([]byte(segment))
+		seq := nextSeq() // generate new sequence number
 
-		// Create the DeliverSM PDU with your specified values
+		// Create the PDU, setting its sequence
 		submitSM := &pdu.DeliverSM{
 			SourceAddr: pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
 			DestAddr:   pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
-			Message:    pdu.ShortMessage{Message: encoded, DataCoding: encoding}, // todo fix encoding
+			Message:    pdu.ShortMessage{Message: encoded, DataCoding: encoding},
 			RegisteredDelivery: pdu.RegisteredDelivery{
 				MCDeliveryReceipt: 1,
 			},
 			Header: pdu.Header{
-				Sequence: nextSeq(),
+				Sequence: seq,
 			},
 		}
 
-		//fmt.Println(submitSM.Header.Sequence)
-		s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
-			"Server.SMPP.SendSMPP",
-			"DEBUG",
-			logrus.DebugLevel,
-			map[string]interface{}{
-				"ip":       session.Parent.RemoteAddr().String(),
-				"length":   limit,
-				"message":  smsMessage,
-				"segment":  segment,
-				"encoding": encoding.String(),
-				"sequence": submitSM.Header.Sequence,
-			}, err,
-		))
+		// Register a pending ack channel
+		ackCh := s.addPendingAck(seq)
 
-		// Attempt to send the PDU
+		// Send the PDU
 		err = session.Send(submitSM)
 		if err != nil {
+			s.removePendingAck(seq)
 			return fmt.Errorf("error sending SubmitSM: %v", err)
 		}
-		//time.Sleep(500 * time.Millisecond)
+
+		// Wait for the ack with a timeout
+		select {
+		case respPDU := <-ackCh:
+			// Optionally, verify the response status here
+			if status := respPDU.Header.CommandStatus; status != 0 {
+				return fmt.Errorf("non-OK response for sequence %d: %d", seq, status)
+			}
+			s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
+				"Server.SMPP.HandleSubmitSM",
+				"found matching delivery ack resp",
+				logrus.WarnLevel,
+				map[string]interface{}{
+					"ip":       session.Parent.RemoteAddr().String(),
+					"sequence": seq,
+				},
+			))
+		case <-time.After(5 * time.Second): // adjust timeout as needed
+			s.removePendingAck(seq)
+			return fmt.Errorf("timeout waiting for ack for sequence %d", seq)
+		}
+		// Acknowledgment received; continue to next segment.
 	}
 	return nil
 }

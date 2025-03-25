@@ -328,23 +328,10 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}
 
-	/*route := h.server.findRoute(submitSM.SourceAddr.String(), submitSM.DestAddr.String())
-	if route == nil {
-		logf.Level = logrus.WarnLevel
-		logf.Message = fmt.Sprintf("no route found for source %s and destination %s", submitSM.SourceAddr, submitSM.DestAddr)
-		logf.Print()
-		return
-	}*/
-
 	var decodedMsg = ""
 
 	if submitSM.Message.DataCoding != 0 {
 		encoding := coding.ASCIICoding
-
-		// todo fix this make better??
-		/*if bestCoding == coding.GSM7BitCoding {
-			bestCoding = coding.ASCIICoding
-		}*/
 
 		if submitSM.Message.DataCoding == 8 { // UTF-16
 			encoding = coding.UCS2Coding
@@ -352,48 +339,9 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			encoding = coding.ASCIICoding
 		}
 		decodedMsg, _ = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
-		/*		if err != nil {
-				lm.SendLog(lm.BuildLog(
-					"Server.SMPP.HandleSubmitSM",
-					"Failed to decode SMS bytes, trying with GSM7",
-					logrus.ErrorLevel,
-					map[string]interface{}{
-						"client":     client.Username,
-						"logID":      transId,
-						"decodedMsg": decodedMsg,
-						"submitsm":   submitSM,
-						"encoding":   encoding,
-						"error":      err.Error(),
-					},
-				))
-
-				resp := submitSM.Resp()
-				err := session.Send(resp)
-				if err != nil {
-					lm.SendLog(lm.BuildLog(
-						"Server.SMPP.HandleSubmitSM",
-						"SMPPPDUError",
-						logrus.ErrorLevel,
-						map[string]interface{}{
-							"ip": session.Parent.RemoteAddr().String(),
-						}, err,
-					))
-				}
-
-				return
-			}*/
 	} else {
 		decodedMsg = string(submitSM.Message.Message) // fuk it lol yolo
-	} /* else {
-		packed := submitSM.Message.Message
-		decodedPacked, err := decodePackedGSM7(packed)
-		if err != nil {
-			fmt.Println("Error decoding packed GSM7:", err)
-		} else {
-			fmt.Println("Decoded packed GSM7:", decodedPacked)
-		}
-		decodedMsg = decodedPacked
-	}*/
+	}
 	//todo test if this is better? we may just need to parse the messages?
 
 	smsMessage := cleanSMSMessage(decodedMsg)
@@ -467,15 +415,13 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		},
 	))
 
-	/*logf.AddField("to", msgQueueItem.To)
-	logf.AddField("from", msgQueueItem.From)
-	logf.AddField("systemID", client.Username)*/
-
 	// send to message queue?
-	h.server.gateway.Router.ClientMsgChan <- msgQueueItem
-	/*	logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("sending to message queue")
-		logf.Print()*/
+	/*h.server.gateway.Router.ClientMsgChan <- msgQueueItem*/
+
+	// Compute conversation hash.
+	convoID := computeCorrelationKey(msgQueueItem.From, msgQueueItem.To)
+	// Add the message to the conversation manager.
+	h.server.gateway.ConvoManager.AddMessage(convoID, msgQueueItem, h.server.gateway.Router)
 
 	resp := submitSM.Resp()
 	err := session.Send(resp)

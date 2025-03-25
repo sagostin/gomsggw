@@ -60,6 +60,13 @@ type TelnyxMessageData struct {
 // Inbound handles incoming Telnyx webhooks for MMS and SMS messages.
 func (h *TelnyxHandler) Inbound(c iris.Context) error {
 	// Parse the Telnyx webhook JSON payload
+	/*getBody, err := c.GetBody()
+	if err != nil {
+		return err
+	}*/
+
+	/*fmt.Println("body: " + string(getBody))*/
+
 	var webhookPayload TelnyxWebhookPayload
 	if err := c.ReadBody(&webhookPayload); err != nil {
 		var lm = h.gateway.LogManager
@@ -89,7 +96,9 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 
 	if webhookPayload.Data.EventType != "message.received" {
 		// ignore delivery?? or log it?? todo
-		fmt.Println(webhookPayload)
+		if webhookPayload.Data.EventType == "message.sent" {
+			h.gateway.ConvoManager.HandleCarrierAck(webhookPayload.Data.Payload.ID, h.gateway.Router)
+		}
 		c.StatusCode(http.StatusOK)
 		return nil
 	}
@@ -152,7 +161,65 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 
 // TelnyxWebhookPayload represents the structure of Telnyx inbound webhook
 type TelnyxWebhookPayload struct {
-	Data TelnyxEventData `json:"data"`
+	Data struct {
+		EventType  string    `json:"event_type"`
+		ID         string    `json:"id"`
+		OccurredAt time.Time `json:"occurred_at"`
+		Payload    struct {
+			Cc          []interface{} `json:"cc"`
+			CompletedAt time.Time     `json:"completed_at"`
+			Cost        struct {
+				Amount   string `json:"amount"`
+				Currency string `json:"currency"`
+			} `json:"cost"`
+			CostBreakdown struct {
+				CarrierFee struct {
+					Amount   string `json:"amount"`
+					Currency string `json:"currency"`
+				} `json:"carrier_fee"`
+				Rate struct {
+					Amount   string `json:"amount"`
+					Currency string `json:"currency"`
+				} `json:"rate"`
+			} `json:"cost_breakdown"`
+			Direction string        `json:"direction"`
+			Encoding  string        `json:"encoding"`
+			Errors    []interface{} `json:"errors"`
+			From      struct {
+				Carrier     string `json:"carrier"`
+				LineType    string `json:"line_type"`
+				PhoneNumber string `json:"phone_number"`
+			} `json:"from"`
+			ID                    string        `json:"id"`
+			Media                 []TelnyxMedia `json:"media"`
+			MessagingProfileId    string        `json:"messaging_profile_id"`
+			OrganizationId        string        `json:"organization_id"`
+			Parts                 int           `json:"parts"`
+			ReceivedAt            time.Time     `json:"received_at"`
+			RecordType            string        `json:"record_type"`
+			SentAt                time.Time     `json:"sent_at"`
+			Tags                  []interface{} `json:"tags"`
+			TcrCampaignBillable   bool          `json:"tcr_campaign_billable"`
+			TcrCampaignId         interface{}   `json:"tcr_campaign_id"`
+			TcrCampaignRegistered interface{}   `json:"tcr_campaign_registered"`
+			Text                  string        `json:"text"`
+			To                    []struct {
+				Carrier     string `json:"carrier"`
+				LineType    string `json:"line_type"`
+				PhoneNumber string `json:"phone_number"`
+				Status      string `json:"status"`
+			} `json:"to"`
+			Type               string    `json:"type"`
+			ValidUntil         time.Time `json:"valid_until"`
+			WebhookFailoverUrl string    `json:"webhook_failover_url"`
+			WebhookUrl         string    `json:"webhook_url"`
+		} `json:"payload"`
+		RecordType string `json:"record_type"`
+	} `json:"data"`
+	Meta struct {
+		Attempt     int    `json:"attempt"`
+		DeliveredTo string `json:"delivered_to"`
+	} `json:"meta"`
 }
 
 type TelnyxEventData struct {

@@ -5,6 +5,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type Route struct {
@@ -121,7 +122,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				// add to outbound carrier queue
 				route := router.gateway.Router.findRouteByName("carrier", carrier)
 				if route != nil {
-					_, err := route.Handler.SendSMS(m)
+					ackID, err := route.Handler.SendSMS(m)
 					if err != nil {
 						lm.SendLog(lm.BuildLog(
 							"ROUTER.SMS",
@@ -136,6 +137,11 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 						// msg.Retry("failed to send to smpp", r.CarrierMsgChan)
 						return
 					}
+					// Compute the conversation hash.
+					convoID := computeCorrelationKey(m.From, m.To)
+					// Update the conversation queue with the expected ack.
+					router.gateway.ConvoManager.SetExpectedAck(convoID, ackID, router, 10*time.Second)
+
 					router.gateway.MsgRecordChan <- MsgRecord{
 						MsgQueueItem: *m,
 						Carrier:      carrier,

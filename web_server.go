@@ -315,7 +315,7 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 
 		// Add this inside the SetupClientRoutes function, within the clients Party group:
 		// Update client password
-		clients.Patch("/{id}/password", func(ctx iris.Context) {
+		/*clients.Patch("/{id}/password", func(ctx iris.Context) {
 			clientIDStr := ctx.Params().Get("id")
 			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
 			if err != nil {
@@ -351,7 +351,7 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			}
 
 			ctx.JSON(iris.Map{"status": "Password updated successfully"})
-		})
+		})*/
 
 		// Add a new number to a client
 		clients.Post("/{id}/numbers", func(ctx iris.Context) {

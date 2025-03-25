@@ -303,8 +303,6 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.SubmitSM) {
 	transId := primitive.NewObjectID().Hex()
 
-	//fmt.Println(submitSM.Header.Sequence)
-
 	// Find the client associated with this session
 	var client *Client
 	h.server.mu.RLock()

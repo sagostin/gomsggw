@@ -89,6 +89,7 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 
 	if webhookPayload.Data.EventType != "message.received" {
 		// ignore delivery?? or log it?? todo
+		fmt.Println(webhookPayload)
 		c.StatusCode(http.StatusOK)
 		return nil
 	}
@@ -254,7 +255,7 @@ func fetchMediaContentTelnyx(mediaURL string) ([]byte, error) {
 }
 
 // SendSMS sends an SMS message via Telnyx API
-func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
+func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 	// Construct the TelnyxMessage payload
 	message := TelnyxMessage{
 		From: sms.From,
@@ -276,7 +277,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 				"logID": sms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	// Create HTTP request
@@ -291,7 +292,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 				"logID": sms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	// Set headers
@@ -311,7 +312,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 				"logID": sms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -327,7 +328,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 				"logID": sms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -344,7 +345,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 				"msg":             sms,
 			}, err,
 		))
-		return errors.New("failed to send SMS via Telnyx")
+		return "", errors.New("failed to send SMS via Telnyx")
 	}
 
 	// Optionally, parse the response to get message ID
@@ -359,7 +360,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 				"logID": sms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	/*logf.Level = logrus.InfoLevel
@@ -369,11 +370,11 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) error {
 	logf.AddField("to", sms.To)
 	logf.Print()*/
 
-	return nil
+	return telnyxResp.Data.ID, nil
 }
 
 // SendMMS sends an MMS message via Telnyx API
-func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
+func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 	// Construct the TelnyxMessage payload
 	message := TelnyxMessage{
 		From:      mms.From,
@@ -402,7 +403,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 						"logID": mms.LogID,
 					}, err,
 				))
-				return err
+				return "", err
 			}
 
 			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
@@ -428,7 +429,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 				"logID": mms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	// Create HTTP request
@@ -443,7 +444,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 				"logID": mms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	// Set headers
@@ -463,7 +464,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 				"logID": mms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -479,7 +480,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 				"logID": mms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
@@ -496,7 +497,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 				"msg":             mms,
 			}, nil,
 		))
-		return errors.New("failed to send MMS via Telnyx")
+		return "", errors.New("failed to send MMS via Telnyx")
 	}
 
 	// Optionally, parse the response to get message ID
@@ -511,7 +512,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 				"logID": mms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	// Log success
@@ -530,5 +531,5 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) error {
 		}, nil,
 	))
 
-	return nil
+	return telnyxResp.Data.ID, nil
 }

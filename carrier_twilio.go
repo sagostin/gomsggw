@@ -208,7 +208,7 @@ func splitSMS(body string, maxBytes int) []string {
 
 	return smsSegments
 }
-func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) error {
+func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 	params := &twilioApi.CreateMessageParams{}
 	params.SetTo(sms.To)
 	params.SetFrom(sms.From)
@@ -227,7 +227,7 @@ func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) error {
 				"logID": sms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	/*	logf.Level = logrus.InfoLevel
@@ -238,10 +238,10 @@ func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) error {
 		logf.AddField("to", sms.To)
 		logf.Print()*/
 
-	return nil
+	return "", nil
 }
 
-func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
+func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 
 	params := &twilioApi.CreateMessageParams{}
 	// clean to & from
@@ -269,7 +269,7 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 						"logID": mms.LogID,
 					}, err,
 				))
-				return err
+				return "", err
 			}
 
 			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
@@ -290,8 +290,8 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 				"logID": mms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
-	return nil
+	return "", nil
 }

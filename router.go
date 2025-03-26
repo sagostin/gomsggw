@@ -134,9 +134,16 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 								"msg":    m.Message,
 							}, err,
 						))
+
+						retryChan := router.ClientMsgChan
+						if origin == "carrier" {
+							retryChan = router.CarrierMsgChan
+						}
+						m.Retry("failed to send SMPP to carrier", retryChan)
 						// msg.Retry("failed to send to smpp", r.CarrierMsgChan)
 						return
 					}
+
 					// Compute the conversation hash.
 					convoID := computeCorrelationKey(m.From, m.To)
 					// Update the conversation queue with the expected ack.
@@ -158,7 +165,11 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 	case MsgQueueItemType.MMS:
 		if toClient != nil {
 			if err := router.gateway.MM4Server.sendMM4(*m); err != nil {
-				m.Retry("failed to send MM4", router.ClientMsgChan)
+				retryChan := router.ClientMsgChan
+				if origin == "carrier" {
+					retryChan = router.CarrierMsgChan
+				}
+				m.Retry("failed to send MM4", retryChan)
 				lm.SendLog(lm.BuildLog("Router", "Failed to send MM4", logrus.ErrorLevel, map[string]interface{}{
 					"toClient": toClient.Username,
 					"logID":    m.LogID,
@@ -235,6 +246,11 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					"logID":  m.LogID,
 				},
 			))
+			retryChan := router.ClientMsgChan
+			if origin == "carrier" {
+				retryChan = router.CarrierMsgChan
+			}
+			m.Retry("failed to send MMS to carrier", retryChan)
 			return
 		}
 	}

@@ -129,7 +129,7 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 			From:              from,
 			ReceivedTimestamp: time.Now(),
 			Type:              MsgQueueItemType.MMS,
-			Files:             files,
+			files:             files,
 			SkipNumberCheck:   false,
 			LogID:             messageID,
 		}
@@ -145,7 +145,7 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 			From:              from,
 			ReceivedTimestamp: time.Now(),
 			Type:              MsgQueueItemType.SMS,
-			Message:           body,
+			message:           body,
 			LogID:             messageID,
 		}
 		h.gateway.Router.CarrierMsgChan <- sms
@@ -327,7 +327,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 	message := TelnyxMessage{
 		From: sms.From,
 		To:   sms.To,
-		Text: sms.Message,
+		Text: sms.message,
 		// MessagingProfileID: os.Getenv("TELNYX_MESSAGING_PROFILE_ID"), // If needed
 		// WebhookURL: "https://yourwebhook.url", // Optional
 	}
@@ -431,7 +431,7 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 	}
 
 	/*logf.Level = logrus.InfoLevel
-	logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", "telnyx", sms.From, sms.To)
+	logf.message = fmt.Sprintf(LogMessages.Transaction, "outbound", "telnyx", sms.From, sms.To)
 	logf.AddField("telnyxMessageID", telnyxResp.Data.ID)
 	logf.AddField("from", sms.From)
 	logf.AddField("to", sms.To)
@@ -453,8 +453,8 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 
 	var mediaUrls []string
 
-	if len(mms.Files) > 0 {
-		for _, i := range mms.Files {
+	if len(mms.files) > 0 {
+		for _, i := range mms.files {
 			if strings.Contains(i.ContentType, "application/smil") {
 				continue
 			}

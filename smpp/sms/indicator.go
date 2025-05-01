@@ -106,7 +106,7 @@ var failureCauseErrors = map[FailureCause]string{
 	0x02: "Cannot replace short message",
 	0x0F: "Unspecified TP-PID error",
 	0x10: "Data coding schema (alphabet not supported)",
-	0x11: "Message class not supported",
+	0x11: "message class not supported",
 	0x1F: "Unspecified TP-DCS error",
 	0x20: "Command cannot be actioned",
 	0x21: "Command unsupported",

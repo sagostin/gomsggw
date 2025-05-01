@@ -170,6 +170,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					retryChan = router.CarrierMsgChan
 				}
 				m.Retry("failed to send MM4", retryChan)
+
 				lm.SendLog(lm.BuildLog("Router", "Failed to send MM4", logrus.ErrorLevel, map[string]interface{}{
 					"toClient": toClient.Username,
 					"logID":    m.LogID,

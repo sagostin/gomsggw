@@ -50,10 +50,10 @@ func (gateway *Gateway) InsertMsgQueueItem(item MsgQueueItem, clientID uint, car
 	var msgData string
 
 	if item.Type == MsgQueueItemType.MMS {
-		hash := sha256.Sum256(item.Files[0].Content) // [32]byte array
+		hash := sha256.Sum256(item.files[0].Content) // [32]byte array
 		msgData = hex.EncodeToString(hash[:])        // convert to hex string
 	} else if item.Type == MsgQueueItemType.SMS {
-		msgData = PartiallyRedactMessage(item.Message)
+		msgData = PartiallyRedactMessage(item.message)
 	}
 
 	dbItem := &MsgRecordDBItem{

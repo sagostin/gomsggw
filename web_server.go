@@ -110,7 +110,7 @@ func (gateway *Gateway) basicAuthMiddleware(ctx iris.Context) {
 		/*logf := LoggingFormat{
 			Type:    "middleware_auth",
 			Level:   logrus.ErrorLevel,
-			Message: "API_KEY environment variable not set",
+			message: "API_KEY environment variable not set",
 		}
 		logf.Print()*/
 
@@ -465,7 +465,7 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 	}
 	logf.AddField("carrier", carrier)
 	logf.Level = logrus.WarnLevel
-	logf.Message = "Unknown carrier"
+	logf.message = "Unknown carrier"
 	logf.Print()
 	*/
 	// Respond with 404 Not Found
@@ -484,7 +484,7 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 		}
 		logf.AddField("error", "file ID is required")
 		logf.Level = logrus.ErrorLevel
-		logf.Message = "Missing file ID in request"
+		logf.message = "Missing file ID in request"
 		logf.Print()*/
 
 		// Respond with 400 Bad Request
@@ -503,7 +503,7 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 		/*logf.AddField("error", err.Error())
 		logf.AddField("fileID", fileID)
 		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to retrieve media file from MongoDB"
+		logf.message = "Failed to retrieve media file from MongoDB"
 		logf.Print()*/
 
 		// Respond with 404 Not Found
@@ -528,7 +528,7 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 		logf.AddField("error", err.Error())
 		logf.AddField("fileID", fileID)
 		logf.Level = logrus.ErrorLevel
-		logf.Message = "Failed to decode Base64 media data"
+		logf.message = "Failed to decode Base64 media data"
 		logf.Print()*/
 
 		// Respond with 500 Internal Server Error

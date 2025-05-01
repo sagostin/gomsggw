@@ -349,7 +349,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	if decodedMsg == "" {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
-			"Message contains no information",
+			"message contains no information",
 			logrus.WarnLevel,
 			map[string]interface{}{
 				"client":      client.Username,
@@ -397,7 +397,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		From:              submitSM.SourceAddr.String(),
 		ReceivedTimestamp: time.Now(),
 		Type:              MsgQueueItemType.SMS,
-		Message:           decodedMsg,
+		message:           decodedMsg,
 		SkipNumberCheck:   false,
 		LogID:             transId,
 	}
@@ -588,9 +588,9 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 	// Generate the next sequence number for the PDU
 	nextSeq := session.NextSequence
 
-	// cleanedContent := ValidateAndCleanSMS(msg.Message)
+	// cleanedContent := ValidateAndCleanSMS(msg.message)
 
-	smsMessage := cleanSMSMessage(msg.Message)
+	smsMessage := cleanSMSMessage(msg.message)
 
 	encoding := coding.ASCIICoding
 

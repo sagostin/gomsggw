@@ -17,8 +17,8 @@ const (
 func (gateway *Gateway) uploadMediaGetUrls(mms *MsgQueueItem) ([]string, error) {
 	var mediaUrls []string
 
-	if len(mms.Files) > 0 {
-		for _, i := range mms.Files {
+	if len(mms.files) > 0 {
+		for _, i := range mms.files {
 			if strings.Contains(i.ContentType, "application/smil") {
 				continue
 			}

@@ -12,70 +12,6 @@ import (
 
 // todo implement carrier delivery status queue in rabbitmq?
 
-type MsgQueueType string
-
-var MsgQueueItemType = struct {
-	SMS MsgQueueType
-	MMS MsgQueueType
-}{
-	SMS: "sms",
-	MMS: "mms",
-}
-
-type MsgQueueItem struct {
-	To                string       `json:"to_number"`
-	From              string       `json:"from_number"`
-	ReceivedTimestamp time.Time    `json:"received_timestamp"`
-	QueuedTimestamp   time.Time    `json:"queued_timestamp"`
-	Type              MsgQueueType `json:"type"`  // mms or sms
-	Files             []MsgFile    `json:"files"` // urls or encoded base64 strings
-	Message           string       `json:"message"`
-	SkipNumberCheck   bool
-	LogID             string `json:"log_id"`
-	//Delivery          *amqp.Delivery
-	Delivery *MsgQueueDelivery
-}
-
-type MsgQueueDelivery struct {
-	Error      string
-	RetryTime  time.Time
-	RetryCount int
-}
-
-func (msg *MsgQueueItem) Retry(err string, queue chan MsgQueueItem) {
-	// todo check if the retry count is already set, same with the time, etc.
-	if msg.Delivery == nil {
-		msg.Delivery = &MsgQueueDelivery{
-			Error:      "",
-			RetryTime:  time.Now(),
-			RetryCount: 0,
-		}
-	}
-
-	if msg.Delivery.RetryCount >= 3 {
-		// discard if already tried 3 times
-		return
-	}
-
-	msg.Delivery.RetryCount++
-
-	if err != "" {
-		msg.Delivery.Error = err
-	}
-	// sleep for retry
-	time.Sleep(10 * time.Second)
-	queue <- *msg
-	return
-}
-
-// MsgFile represents an individual file extracted from the MIME multipart message.
-type MsgFile struct {
-	Filename    string `json:"filename,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	Content     []byte `json:"content,omitempty"`
-	Base64Data  string `json:"base64_data,omitempty"`
-}
-
 // AMPQClient is the base struct for handling connection recovery, consumption, and publishing.
 type AMPQClient struct {
 	m               *sync.Mutex
@@ -273,7 +209,7 @@ func (client *AMPQClient) Publish(queueName string, data []byte) error {
 
 		confirm := <-client.notifyConfirm
 		if confirm.Ack {
-			client.logger.Printf("Message published to %s", queueName)
+			client.logger.Printf("message published to %s", queueName)
 			return nil
 		}
 	}

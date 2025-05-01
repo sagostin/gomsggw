@@ -324,7 +324,7 @@ func (s *Session) handleSession(srv *MM4Server) error {
 			if strings.ToLower(os.Getenv("MM4_DEBUG")) == "true" {
 				logf := LoggingFormat{Type: LogType.MM4 + "_" + LogType.DEBUG}
 				logf.Level = logrus.DebugLevel
-				logf.Message = fmt.Sprintf("IP: %s - C: %s", s.ClientIP, line)
+				logf.message = fmt.Sprintf("IP: %s - C: %s", s.ClientIP, line)
 				logf.Print()
 			}*/
 
@@ -441,8 +441,8 @@ func (s *Session) handleMM4Message() error {
 	// Check required MM4 headers
 	requiredHeaders := []string{
 		"X-Mms-3GPP-MMS-Version",
-		"X-Mms-Message-Type",
-		"X-Mms-Message-ID",
+		"X-Mms-message-Type",
+		"X-Mms-message-ID",
 		"X-Mms-Transaction-ID",
 		/*"Text-Type",*/
 		"From",
@@ -454,9 +454,9 @@ func (s *Session) handleMM4Message() error {
 		}
 	}
 
-	//_ := s.Headers.Get("X-Mms-Message-Type")
+	//_ := s.Headers.Get("X-Mms-message-Type")
 	transactionID := s.Headers.Get("X-Mms-Transaction-ID")
-	messageID := s.Headers.Get("X-Mms-Message-ID")
+	messageID := s.Headers.Get("X-Mms-message-ID")
 
 	mm4Message := &MM4Message{
 		From:          s.Headers.Get("From"),
@@ -485,13 +485,13 @@ func (s *Session) handleMM4Message() error {
 		From:              mm.From,
 		ReceivedTimestamp: time.Now(),
 		Type:              MsgQueueItemType.MMS,
-		Files:             mm.Files,
+		files:             mm.files,
 		LogID:             transId,
 	}
 
 	s.Server.gateway.Router.ClientMsgChan <- msgItem*/
 
-	writeResponse(s.Writer, "250 Message queued for processing")
+	writeResponse(s.Writer, "250 message queued for processing")
 
 	/*switch msgType {
 	case "MM4_forward.REQ":
@@ -571,7 +571,7 @@ func (m *MM4Message) parseMIMEParts() (*MM4Message, error) {
 
 // sendMM4 sends an MM4 message to a client over plain TCP with base64-encoded media.
 func (s *MM4Server) sendMM4(item MsgQueueItem) error {
-	if item.Files == nil {
+	if item.files == nil {
 		return fmt.Errorf("files are nil")
 	}
 
@@ -669,8 +669,8 @@ func (s *MM4Server) createMM4Message(msgItem MsgQueueItem) *MM4Message {
 	headers.Set("From", fmt.Sprintf("%s/TYPE=PLMN", msgItem.From))
 	headers.Set("MIME-Version", "1.0")
 	headers.Set("X-Mms-3GPP-Mms-Version", "6.10.0")
-	headers.Set("X-Mms-Message-Type", "MM4_forward.REQ")
-	headers.Set("X-Mms-Message-Id", fmt.Sprintf("<%s@%s>", msgItem.LogID, os.Getenv("MM4_MSG_ID_HOST"))) // todo Replace 'yourdomain.com' appropriately
+	headers.Set("X-Mms-message-Type", "MM4_forward.REQ")
+	headers.Set("X-Mms-message-Id", fmt.Sprintf("<%s@%s>", msgItem.LogID, os.Getenv("MM4_MSG_ID_HOST"))) // todo Replace 'yourdomain.com' appropriately
 	headers.Set("X-Mms-Transaction-Id", msgItem.LogID)
 	headers.Set("X-Mms-Ack-Request", "Yes")
 
@@ -684,7 +684,7 @@ func (s *MM4Server) createMM4Message(msgItem MsgQueueItem) *MM4Message {
 
 	files := make([]MsgFile, 0)
 
-	for _, f := range msgItem.Files {
+	for _, f := range msgItem.files {
 		files = append(files, MsgFile{
 			Filename:    f.Filename,
 			ContentType: f.ContentType,
@@ -695,7 +695,7 @@ func (s *MM4Server) createMM4Message(msgItem MsgQueueItem) *MM4Message {
 	return &MM4Message{
 		From:          msgItem.From,
 		To:            msgItem.To,
-		Content:       []byte(msgItem.Message),
+		Content:       []byte(msgItem.message),
 		Headers:       headers,
 		TransactionID: msgItem.LogID,
 		MessageID:     msgItem.LogID,
@@ -711,7 +711,7 @@ func (s *Session) sendCommand(cmd string) error {
 		line := strings.TrimSpace(cmd)
 		logf.Type = LogType.MM4 + "_" + LogType.DEBUG
 		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("IP: %s - C: %s", s.ClientIP, line)
+		logf.message = fmt.Sprintf("IP: %s - C: %s", s.ClientIP, line)
 		logf.Print()
 	}*/
 
@@ -739,7 +739,7 @@ func (s *Session) readResponse() (string, error) {
 	/*if strings.ToLower(os.Getenv("MM4_DEBUG")) == "true" {
 		logf.Type = LogType.MM4 + "_" + LogType.DEBUG
 		logf.Level = logrus.InfoLevel
-		logf.Message = fmt.Sprintf("IP: %s - S: %s", s.ClientIP, response)
+		logf.message = fmt.Sprintf("IP: %s - S: %s", s.ClientIP, response)
 		logf.Print()
 	}*/
 
@@ -844,7 +844,7 @@ func (s *Session) sendMM4Message() error {
 		return err
 	}
 
-	// Step 4: Building the MIME Multipart Message
+	// Step 4: Building the MIME Multipart message
 	var messageBuffer bytes.Buffer
 
 	// Step 4.1: Generate a Unique Boundary
@@ -859,13 +859,13 @@ func (s *Session) sendMM4Message() error {
 	// Step 4.3: Add Additional Headers
 	essentialHeaders := []string{
 		"X-Mms-3GPP-Mms-Version",
-		"X-Mms-Message-Type",
-		"X-Mms-Message-Id",
+		"X-Mms-message-Type",
+		"X-Mms-message-Id",
 		"X-Mms-Transaction-Id",
 		"X-Mms-Ack-Request",
 		"X-Mms-Originator-System",
 		"Date",
-		"Message-ID",
+		"message-ID",
 	}
 	for _, header := range essentialHeaders {
 		if value := s.Headers.Get(header); value != "" {
@@ -891,7 +891,7 @@ func (s *Session) sendMM4Message() error {
 		messageBuffer.WriteString("\r\n")
 	}
 
-	// Step 4.5: Add Media Files as MIME Parts
+	// Step 4.5: Add Media files as MIME Parts
 	for _, file := range s.Files {
 		if file.ContentType == "application/smil" {
 			continue // Skip the SMIL file if already added

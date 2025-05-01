@@ -131,7 +131,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 							map[string]interface{}{
 								"client": fromClient.Username,
 								"logID":  m.LogID,
-								"msg":    m.Message,
+								"msg":    m.message,
 							}, err,
 						))
 
@@ -211,7 +211,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 							map[string]interface{}{
 								"client": fromClient.Username,
 								"logID":  m.LogID,
-								"msg":    m.Message,
+								"msg":    m.message,
 							}, err,
 						))
 						return

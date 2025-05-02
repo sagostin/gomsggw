@@ -143,6 +143,18 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 						return
 					}
 
+					lm.SendLog(lm.BuildLog(
+						"Router.SMS",
+						"Successfully sent SMS",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"logID":     m.LogID,
+							"carrierID": ackID,
+							"from":      m.From,
+							"to":        m.To,
+						}, nil,
+					))
+
 					// Compute the conversation hash.
 					convoID := computeCorrelationKey(m.From, m.To)
 					// Update the conversation queue with the expected ack.
@@ -201,7 +213,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				// add to outbound carrier queue
 				route := router.gateway.Router.findRouteByName("carrier", carrier)
 				if route != nil {
-					_, err := route.Handler.SendMMS(m)
+					ackID, err := route.Handler.SendMMS(m)
 					if err != nil {
 						lm.SendLog(lm.BuildLog(
 							"ROUTER.MMS",
@@ -214,6 +226,19 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 						))
 						return
 					}
+
+					lm.SendLog(lm.BuildLog(
+						"Router.SMS",
+						"Successfully sent MMS",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"logID":     m.LogID,
+							"carrierID": ackID,
+							"from":      m.From,
+							"to":        m.To,
+						}, nil,
+					))
+
 					router.gateway.MsgRecordChan <- MsgRecord{
 						MsgQueueItem: *m,
 						Carrier:      carrier,

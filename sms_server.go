@@ -344,19 +344,19 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}
 	//todo test if this is better? we may just need to parse the messages?
 
-	smsMessage := cleanSMSMessage(decodedMsg)
+	// smsMessage := cleanSMSMessage(decodedMsg)
 
 	if decodedMsg == "" {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
 			"message contains no information",
-			logrus.WarnLevel,
+			logrus.DebugLevel,
 			map[string]interface{}{
-				"client":      client.Username,
-				"logID":       transId,
-				"decoded_msg": decodedMsg,
-				"submitsm":    submitSM,
-				"clean_msg":   smsMessage,
+				"client": client.Username,
+				"logID":  transId,
+				//"decoded_msg": decodedMsg,
+				"submitsm": submitSM,
+				//"clean_msg":   smsMessage,
 			},
 		))
 
@@ -381,7 +381,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
 			"Dropping message because contains STOP and matches client number with rule.",
-			logrus.WarnLevel,
+			logrus.DebugLevel,
 			map[string]interface{}{
 				"ip":     session.Parent.RemoteAddr().String(),
 				"client": client.Username,
@@ -405,13 +405,13 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	lm.SendLog(lm.BuildLog(
 		"Server.SMPP.HandleSubmitSM",
 		"Sending SMS to sending channel",
-		logrus.WarnLevel,
+		logrus.DebugLevel,
 		map[string]interface{}{
-			"client":      client.Username,
-			"logID":       transId,
-			"decoded_msg": decodedMsg,
-			"submitsm":    submitSM,
-			"clean_msg":   smsMessage,
+			"client": client.Username,
+			"logID":  transId,
+			//"decoded_msg": decodedMsg,
+			"submitsm": submitSM,
+			//"clean_msg":   smsMessage,
 		},
 	))
 
@@ -649,7 +649,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 			s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
 				"Server.SMPP.HandleSubmitSM",
 				"found matching delivery ack resp",
-				logrus.WarnLevel,
+				logrus.DebugLevel,
 				map[string]interface{}{
 					"ip":       session.Parent.RemoteAddr().String(),
 					"sequence": seq,

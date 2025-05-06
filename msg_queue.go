@@ -32,7 +32,8 @@ type MsgQueueDelivery struct {
 	RetryCount int
 }
 
-func (msg *MsgQueueItem) Retry(err string, queue chan MsgQueueItem) {
+// Retry returns true if discarded
+func (msg *MsgQueueItem) Retry(err string, queue chan MsgQueueItem) bool {
 	// todo check if the retry count is already set, same with the time, etc.
 	if msg.Delivery == nil {
 		msg.Delivery = &MsgQueueDelivery{
@@ -42,9 +43,18 @@ func (msg *MsgQueueItem) Retry(err string, queue chan MsgQueueItem) {
 		}
 	}
 
+	if msg.Delivery.RetryCount == 666 {
+		// black hole failure retries
+		return false
+	}
+
 	if msg.Delivery.RetryCount >= 3 {
 		// discard if already tried 3 times
-		return
+
+		// this will return true on discard, but we want to send the copy of the message pointer to a "failure"
+		// channel so that we can reverse the to/from and send an error to the client that sent it if the carrier fails
+
+		return true
 	}
 
 	msg.Delivery.RetryCount++
@@ -55,5 +65,5 @@ func (msg *MsgQueueItem) Retry(err string, queue chan MsgQueueItem) {
 	// sleep for retry
 	time.Sleep(10 * time.Second)
 	queue <- *msg
-	return
+	return false
 }

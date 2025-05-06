@@ -66,6 +66,12 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		return
 	}
 
+	// Retry on the channel where the message came from
+	retryChan := router.ClientMsgChan
+	if origin == "carrier" {
+		retryChan = router.CarrierMsgChan
+	}
+
 	// Process based on message type
 	switch m.Type {
 	case MsgQueueItemType.SMS:
@@ -73,29 +79,26 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 			// Try to send via SMPP
 			session, err := router.gateway.SMPPServer.findSmppSession(m.To)
 			if err != nil || session == nil {
-				// Retry on the channel where the message came from
-				retryChan := router.ClientMsgChan
-				if origin == "carrier" {
-					retryChan = router.CarrierMsgChan
-				}
-				m.Retry("failed to find SMPP session", retryChan)
+
 				lm.SendLog(lm.BuildLog("Router.SMS", "Failed to find SMPP session", logrus.ErrorLevel, map[string]interface{}{
 					"toClient": toClient.Username,
 					"logID":    m.LogID,
 				}, err))
+				if m.Retry("failed to find SMPP session", retryChan) {
+					// todo send error message back to sender if it is a found client as the sender
+				}
 				return
 			}
 			if err := router.gateway.SMPPServer.sendSMPP(*m, session); err != nil {
-				retryChan := router.ClientMsgChan
-				if origin == "carrier" {
-					retryChan = router.CarrierMsgChan
-				}
-				m.Retry("failed to send SMPP", retryChan)
+
 				lm.SendLog(lm.BuildLog("Router.SMS", "Failed to send via SMPP", logrus.ErrorLevel, map[string]interface{}{
 					"toClient": toClient.Username,
 					"logID":    m.LogID,
 					"msg":      m,
 				}, err))
+				if m.Retry("failed to send SMPP", retryChan) {
+					// todo send error message back to sender if it is a found client as the sender
+				}
 				return
 			}
 			// Record the successful send
@@ -133,13 +136,24 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 								"logID":  m.LogID,
 							}, err,
 						))
+						if m.Retry("failed to send SMPP to carrier", retryChan) {
+							// todo send error message back to sender if it is a found client as the sender
+							msg := &MsgQueueItem{
+								To:              m.From,
+								From:            m.To,
+								Type:            "sms",
+								message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
+								SkipNumberCheck: false,
+								LogID:           m.LogID,
+								Delivery: &MsgQueueDelivery{
+									Error:      "discard after first attempt",
+									RetryTime:  time.Now(),
+									RetryCount: 666,
+								},
+							}
 
-						retryChan := router.ClientMsgChan
-						if origin == "carrier" {
-							retryChan = router.CarrierMsgChan
+							router.CarrierMsgChan <- *msg
 						}
-						m.Retry("failed to send SMPP to carrier", retryChan)
-						// msg.Retry("failed to send to smpp", r.CarrierMsgChan)
 						return
 					}
 
@@ -176,16 +190,13 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 	case MsgQueueItemType.MMS:
 		if toClient != nil {
 			if err := router.gateway.MM4Server.sendMM4(*m); err != nil {
-				retryChan := router.ClientMsgChan
-				if origin == "carrier" {
-					retryChan = router.CarrierMsgChan
-				}
-				m.Retry("failed to send MM4", retryChan)
-
 				lm.SendLog(lm.BuildLog("Router", "Failed to send MM4: %s", logrus.ErrorLevel, map[string]interface{}{
 					"toClient": toClient.Username,
 					"logID":    m.LogID,
 				}, err))
+				if m.Retry("failed to send MM4", retryChan) {
+					// todo send error message back to sender if it is a found client as the sender
+				}
 				return
 			}
 			internal := (fromClient != nil && toClient != nil)
@@ -223,6 +234,25 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 								"logID":  m.LogID,
 							}, err,
 						))
+
+						if m.Retry("failed to send MMS to carrier", retryChan) {
+							msg := &MsgQueueItem{
+								To:              m.From,
+								From:            m.To,
+								Type:            "sms",
+								message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
+								SkipNumberCheck: false,
+								LogID:           m.LogID,
+								Delivery: &MsgQueueDelivery{
+									Error:      "discard after first attempt",
+									RetryTime:  time.Now(),
+									RetryCount: 666,
+								},
+							}
+
+							router.CarrierMsgChan <- *msg
+						}
+
 						return
 					}
 
@@ -269,11 +299,6 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					"logID":  m.LogID,
 				},
 			))
-			retryChan := router.ClientMsgChan
-			if origin == "carrier" {
-				retryChan = router.CarrierMsgChan
-			}
-			m.Retry("failed to send MMS to carrier", retryChan)
 			return
 		}
 	}

@@ -330,9 +330,9 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 
 	var decodedMsg = ""
 
-	if submitSM.Message.DataCoding != 0 {
-		encoding := coding.ASCIICoding
+	encoding := coding.GSM7BitCoding
 
+	if submitSM.Message.DataCoding != 0 {
 		if submitSM.Message.DataCoding == 8 { // UTF-16
 			encoding = coding.UCS2Coding
 		} else if submitSM.Message.DataCoding == 1 { // UTF-16
@@ -340,9 +340,36 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		}
 		decodedMsg, _ = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
 	} else {
-		decodedMsg = string(submitSM.Message.Message) // fuk it lol yolo
+		decodedMsg, _ = decodeUnpackedGSM7(submitSM.Message.Message)
 	}
+
+	gsmTestUnpack, err := decodeUnpackedGSM7(submitSM.Message.Message)
+	gsmTestPack, err := decodePackedGSM7(submitSM.Message.Message)
+
+	lm.SendLog(lm.BuildLog(
+		"Server.SMPP.HandleSubmitSM",
+		"SMS TESTER",
+		logrus.DebugLevel,
+		map[string]interface{}{
+			"ip":        session.Parent.RemoteAddr().String(),
+			"original":  string(submitSM.Message.Message),
+			"decoded":   decodedMsg,
+			"gsmPack":   gsmTestPack,
+			"gsmUnpack": gsmTestUnpack,
+			"coding":    submitSM.Message.DataCoding,
+		},
+	))
+
 	//todo test if this is better? we may just need to parse the messages?
+
+	lm.SendLog(lm.BuildLog(
+		"Server.SMPP.HandleSubmitSM",
+		"SMPPFindSession",
+		logrus.ErrorLevel,
+		map[string]interface{}{
+			"ip": session.Parent.RemoteAddr().String(),
+		},
+	))
 
 	// smsMessage := cleanSMSMessage(decodedMsg)
 
@@ -424,7 +451,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	h.server.gateway.ConvoManager.AddMessage(convoID, msgQueueItem, h.server.gateway.Router)
 
 	resp := submitSM.Resp()
-	err := session.Send(resp)
+	err = session.Send(resp)
 	if err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
@@ -585,38 +612,61 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		return fmt.Errorf("error finding SMPP session: %v", err)
 	}
 
-	// Generate the next sequence number for the PDU
 	nextSeq := session.NextSequence
+	//smsMessage := cleanSMSMessage(msg.message)
 
-	// cleanedContent := ValidateAndCleanSMS(msg.message)
-
-	smsMessage := cleanSMSMessage(msg.message)
-
-	encoding := coding.ASCIICoding
-
-	limit, _ := strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT"))
-	bestCoding := coding.BestSafeCoding(smsMessage)
-	if bestCoding == coding.UCS2Coding {
+	// Determine best encoding
+	encoding := coding.GSM7BitCoding
+	bestCoding := coding.BestSafeCoding(msg.message)
+	switch bestCoding {
+	case coding.UCS2Coding:
 		encoding = coding.UCS2Coding
-		limit, _ = strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT_UTF16"))
+	case coding.ASCIICoding:
+		encoding = coding.ASCIICoding
 	}
 
-	segments := make([]string, 0)
-	splitter := encoding.Splitter()
-
-	if splitter != nil {
-		segments = splitter.Split(smsMessage, limit)
+	// Character limit
+	limit := 160
+	if encoding == coding.UCS2Coding {
+		if l, err := strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT_UTF16")); err == nil {
+			limit = l
+		} else {
+			limit = 70
+		}
 	} else {
-		segments = []string{smsMessage}
+		if l, err := strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT")); err == nil {
+			limit = l
+		}
 	}
 
+	// Segmenting
+	var segments []string
+	if splitter := encoding.Splitter(); splitter != nil {
+		segments = splitter.Split(msg.message, limit)
+	} else {
+		segments = []string{msg.message}
+	}
+
+	// Encoder
 	encoder := encoding.Encoding().NewEncoder()
 
 	for _, segment := range segments {
-		encoded, _ := encoder.Bytes([]byte(segment))
-		seq := nextSeq() // generate new sequence number
+		var encoded []byte
+		if encoding == coding.GSM7BitCoding {
+			// Use unpacked → packed GSM7 logic
+			unpacked, err := encodeUnpackedGSM7(segment)
+			if err != nil {
+				return fmt.Errorf("GSM7 encode error: %v", err)
+			}
+			encoded = unpacked
+		} else {
+			encoded, err = encoder.Bytes([]byte(segment))
+			if err != nil {
+				return fmt.Errorf("encoding error: %v", err)
+			}
+		}
 
-		// Create the PDU, setting its sequence
+		seq := nextSeq()
 		submitSM := &pdu.DeliverSM{
 			SourceAddr: pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
 			DestAddr:   pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
@@ -629,38 +679,32 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 			},
 		}
 
-		// Register a pending ack channel
 		ackCh := s.addPendingAck(seq)
-
-		// Send the PDU
-		err = session.Send(submitSM)
-		if err != nil {
+		if err := session.Send(submitSM); err != nil {
 			s.removePendingAck(seq)
 			return fmt.Errorf("error sending SubmitSM: %v", err)
 		}
 
-		// Wait for the ack with a timeout
 		select {
 		case respPDU := <-ackCh:
-			// Optionally, verify the response status here
-			if status := respPDU.Header.CommandStatus; status != 0 {
-				return fmt.Errorf("non-OK response for sequence %d: %d", seq, status)
+			if respPDU.Header.CommandStatus != 0 {
+				return fmt.Errorf("non-OK response for sequence %d: %d", seq, respPDU.Header.CommandStatus)
 			}
 			s.gateway.LogManager.SendLog(s.gateway.LogManager.BuildLog(
-				"Server.SMPP.HandleSubmitSM",
-				"found matching delivery ack resp",
+				"Server.SMPP.sendSMPP",
+				"ack received",
 				logrus.DebugLevel,
 				map[string]interface{}{
 					"ip":       session.Parent.RemoteAddr().String(),
 					"sequence": seq,
 				},
 			))
-		case <-time.After(5 * time.Second): // adjust timeout as needed
+		case <-time.After(5 * time.Second):
 			s.removePendingAck(seq)
 			return fmt.Errorf("timeout waiting for ack for sequence %d", seq)
 		}
-		// Acknowledgment received; continue to next segment.
 	}
+
 	return nil
 }
 

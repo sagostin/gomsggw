@@ -8,7 +8,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -343,34 +342,20 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		decodedMsg, _ = decodeUnpackedGSM7(submitSM.Message.Message)
 	}
 
-	gsmTestUnpack, err := decodeUnpackedGSM7(submitSM.Message.Message)
-	gsmTestPack, err := decodePackedGSM7(submitSM.Message.Message)
-
-	lm.SendLog(lm.BuildLog(
+	/*lm.SendLog(lm.BuildLog(
 		"Server.SMPP.HandleSubmitSM",
 		"SMS TESTER",
 		logrus.DebugLevel,
 		map[string]interface{}{
-			"ip":        session.Parent.RemoteAddr().String(),
-			"original":  string(submitSM.Message.Message),
-			"decoded":   decodedMsg,
-			"gsmPack":   gsmTestPack,
-			"gsmUnpack": gsmTestUnpack,
-			"coding":    submitSM.Message.DataCoding,
+			"ip":       session.Parent.RemoteAddr().String(),
+			"original": string(submitSM.Message.Message),
+			"decoded":  decodedMsg,
+			"encoding": encoding,
+			"coding":   submitSM.Message.DataCoding,
 		},
-	))
+	))*/
 
 	//todo test if this is better? we may just need to parse the messages?
-
-	lm.SendLog(lm.BuildLog(
-		"Server.SMPP.HandleSubmitSM",
-		"SMPPFindSession",
-		logrus.ErrorLevel,
-		map[string]interface{}{
-			"ip": session.Parent.RemoteAddr().String(),
-		},
-	))
-
 	// smsMessage := cleanSMSMessage(decodedMsg)
 
 	if decodedMsg == "" {
@@ -429,7 +414,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		LogID:             transId,
 	}
 
-	lm.SendLog(lm.BuildLog(
+	/*lm.SendLog(lm.BuildLog(
 		"Server.SMPP.HandleSubmitSM",
 		"Sending SMS to sending channel",
 		logrus.DebugLevel,
@@ -440,7 +425,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 			"submitsm": submitSM,
 			//"clean_msg":   smsMessage,
 		},
-	))
+	))*/
 
 	// send to message queue?
 	/*h.server.gateway.Router.ClientMsgChan <- msgQueueItem*/
@@ -451,7 +436,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	h.server.gateway.ConvoManager.AddMessage(convoID, msgQueueItem, h.server.gateway.Router)
 
 	resp := submitSM.Resp()
-	err = session.Send(resp)
+	err := session.Send(resp)
 	if err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
@@ -616,53 +601,27 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 	//smsMessage := cleanSMSMessage(msg.message)
 
 	// Determine best encoding
-	encoding := coding.GSM7BitCoding
-	bestCoding := coding.BestSafeCoding(msg.message)
-	switch bestCoding {
-	case coding.UCS2Coding:
-		encoding = coding.UCS2Coding
-	case coding.ASCIICoding:
-		encoding = coding.ASCIICoding
-	}
-
-	// Character limit
-	limit := 160
-	if encoding == coding.UCS2Coding {
-		if l, err := strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT_UTF16")); err == nil {
-			limit = l
-		} else {
-			limit = 70
-		}
-	} else {
-		if l, err := strconv.Atoi(os.Getenv("SMS_CHAR_LIMIT")); err == nil {
-			limit = l
-		}
-	}
 
 	// Segmenting
-	var segments []string
-	if splitter := encoding.Splitter(); splitter != nil {
-		segments = splitter.Split(msg.message, limit)
-	} else {
-		segments = []string{msg.message}
-	}
+	// Pick the right DataCoding + split into SMS-legal parts
+	bestCoding := coding.BestSafeCoding(msg.message)
+	segments := coding.SplitSMS(msg.message, byte(bestCoding))
 
-	// Encoder
-	encoder := encoding.Encoding().NewEncoder()
+	encoder := bestCoding.Encoding().NewEncoder()
 
 	for _, segment := range segments {
 		var encoded []byte
-		if encoding == coding.GSM7BitCoding {
-			// Use unpacked → packed GSM7 logic
-			unpacked, err := encodeUnpackedGSM7(segment)
+		if bestCoding == coding.GSM7BitCoding {
+			var err error
+			encoded, err = encodeUnpackedGSM7(segment)
 			if err != nil {
-				return fmt.Errorf("GSM7 encode error: %v", err)
+				return fmt.Errorf("GSM7 encode error: %w", err)
 			}
-			encoded = unpacked
 		} else {
+			var err error
 			encoded, err = encoder.Bytes([]byte(segment))
 			if err != nil {
-				return fmt.Errorf("encoding error: %v", err)
+				return fmt.Errorf("encoding error: %w", err)
 			}
 		}
 
@@ -670,7 +629,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		submitSM := &pdu.DeliverSM{
 			SourceAddr: pdu.Address{TON: 0x01, NPI: 0x01, No: msg.From},
 			DestAddr:   pdu.Address{TON: 0x01, NPI: 0x01, No: msg.To},
-			Message:    pdu.ShortMessage{Message: encoded, DataCoding: encoding},
+			Message:    pdu.ShortMessage{Message: encoded, DataCoding: bestCoding},
 			RegisteredDelivery: pdu.RegisteredDelivery{
 				MCDeliveryReceipt: 1,
 			},

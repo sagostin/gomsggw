@@ -46,3 +46,30 @@ func (fn Splitter) Split(input string, limit int) (segments []string) {
 	}
 	return
 }
+
+// SplitSMS will split `msg` into the correct single- or multipart segments
+// based on SMS rules and the given DataCoding value.
+func SplitSMS(msg string, dataCoding byte) []string {
+	// pick your splitter
+	var sp Splitter
+	switch dataCoding {
+	case 8: // UCS-2/UTF-16
+		sp = _UTF16Splitter
+	case 1: // ASCII / 1-byte
+		sp = _1ByteSplitter
+	default: // GSM-7
+		sp = _7BitSplitter
+	}
+
+	const (
+		singleLimitBytes    = 140     // 1120 bits
+		multipartLimitBytes = 140 - 6 // 6-byte UDH overhead → 134 bytes
+	)
+
+	// if it fits in one SMS…
+	if sp.Len(msg) <= singleLimitBytes {
+		return []string{msg}
+	}
+	// otherwise chop into 134-byte pieces
+	return sp.Split(msg, multipartLimitBytes)
+}

@@ -5,6 +5,55 @@ import (
 	"fmt"
 )
 
+var gsm7DefaultMap = map[rune]byte{}
+var gsm7ExtMap = map[rune]byte{}
+
+func init() {
+	// Build reverse maps from your existing gsm7ReverseMap
+	for b, r := range gsm7ReverseMap {
+		gsm7DefaultMap[r] = b
+	}
+	for b, r := range gsm7ExtReverseMap {
+		gsm7ExtMap[r] = b
+	}
+}
+
+func encodeUnpackedGSM7(input string) ([]byte, error) {
+	var result []byte
+	for _, r := range input {
+		if b, ok := gsm7DefaultMap[r]; ok {
+			result = append(result, b)
+		} else if eb, ok := gsm7ExtMap[r]; ok {
+			result = append(result, 0x1B, eb)
+		} else {
+			return nil, fmt.Errorf("rune %q not in GSM7 charset", r)
+		}
+	}
+	return result, nil
+}
+
+func packSeptets(septets []byte) []byte {
+	var packed []byte
+	var carry uint8 = 0
+	var carryBits uint = 0
+
+	for _, septet := range septets {
+		byteVal := (septet << carryBits) | carry
+		packed = append(packed, byteVal&0xFF)
+		carry = septet >> (8 - carryBits)
+		carryBits++
+		if carryBits == 7 {
+			packed = append(packed, carry)
+			carry = 0
+			carryBits = 0
+		}
+	}
+	if carryBits > 0 {
+		packed = append(packed, carry)
+	}
+	return packed
+}
+
 // --- Reverse Mapping Tables ---
 // gsm7ReverseMap maps GSM‑7 default table codes (0x00–0x7F) to runes.
 var gsm7ReverseMap = map[byte]rune{

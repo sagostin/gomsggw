@@ -10,8 +10,8 @@ import (
 	"io"
 )
 
-// EncryptPassword encrypts a plaintext password using AES-256 with the provided PSK.
-func EncryptPassword(password, psk string) (string, error) {
+// EncryptAES256 encrypts a plaintext password using AES-256 with the provided PSK.
+func EncryptAES256(password, psk string) (string, error) {
 	// Convert PSK to 32 bytes (AES-256 key size)
 	key := []byte(psk)
 	if len(key) > 32 {
@@ -46,8 +46,8 @@ func EncryptPassword(password, psk string) (string, error) {
 	return base64.StdEncoding.EncodeToString(combined), nil
 }
 
-// DecryptPassword decrypts an AES-256 encrypted password using the provided PSK.
-func DecryptPassword(encryptedBase64, psk string) (string, error) {
+// DecryptAES256 decrypts an AES-256 encrypted password using the provided PSK.
+func DecryptAES256(encryptedBase64, psk string) (string, error) {
 	// Convert PSK to 32 bytes (AES-256 key size)
 	key := []byte(psk)
 	if len(key) > 32 {

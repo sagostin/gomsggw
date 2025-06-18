@@ -25,6 +25,8 @@ type Gateway struct {
 	MsgRecordChan chan MsgRecord
 	ServerID      string
 	EncryptionKey string // PSK for encryption/decryption
+	// AckTracker for carrier acknowledgments.
+	ConvoManager *ConvoManager
 }
 
 type MsgRecord struct {
@@ -90,6 +92,8 @@ func NewGateway() (*Gateway, error) {
 		ServerID:      os.Getenv("SERVER_ID"),
 		DB:            db,
 	}
+
+	gateway.ConvoManager = NewConvoManager()
 
 	gateway.Router.gateway = gateway
 

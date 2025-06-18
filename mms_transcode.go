@@ -29,6 +29,14 @@ const (
 	maxFileSize  = 1 * 1024 * 1024 // 5 MB
 )
 
+// MsgFile represents an individual file extracted from the MIME multipart message.
+type MsgFile struct {
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Content     []byte `json:"content,omitempty"`
+	Base64Data  string `json:"base64_data,omitempty"`
+}
+
 func (s *MM4Server) transcodeMedia() {
 	for {
 		mm4Message := <-s.MediaTranscodeChan
@@ -54,16 +62,33 @@ func (s *MM4Server) transcodeMedia() {
 					"logID":      mm4Message.TransactionID,
 				}, err,
 			))
+
+			msg := &MsgQueueItem{
+				To:              mm4Message.From,
+				From:            mm4Message.To,
+				Type:            "sms",
+				message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + mm4Message.TransactionID,
+				SkipNumberCheck: false,
+				LogID:           mm4Message.TransactionID,
+				Delivery: &MsgQueueDelivery{
+					Error:      "discard after first attempt",
+					RetryTime:  time.Now(),
+					RetryCount: 666,
+				},
+			}
+
+			s.gateway.Router.CarrierMsgChan <- *msg
+
 			continue
 		}
-		//mm4Message.Files = ff
+		//mm4Message.files = ff
 
 		msgItem := MsgQueueItem{
 			To:                mm4Message.To,
 			From:              mm4Message.From,
 			ReceivedTimestamp: time.Now(),
 			Type:              MsgQueueItemType.MMS,
-			Files:             ff,
+			files:             ff,
 			LogID:             mm4Message.TransactionID,
 		}
 

@@ -17,8 +17,8 @@ const (
 func (gateway *Gateway) uploadMediaGetUrls(mms *MsgQueueItem) ([]string, error) {
 	var mediaUrls []string
 
-	if len(mms.Files) > 0 {
-		for _, i := range mms.Files {
+	if len(mms.files) > 0 {
+		for _, i := range mms.files {
 			if strings.Contains(i.ContentType, "application/smil") {
 				continue
 			}
@@ -44,18 +44,21 @@ type MediaFile struct {
 	ExpiresAt   time.Time `gorm:"index" json:"expires_at"`
 }
 
-func (gateway *Gateway) cleanUpExpiredMediaFiles() {
-	ticker := time.NewTicker(24 * time.Hour) // Adjust the interval as needed
+func (gateway *Gateway) cleanUpExpiredMediaFiles(interval time.Duration) {
+	// Run cleanup immediately
+	err := gateway.DB.Where("expires_at < ?", time.Now()).Delete(&MediaFile{}).Error
+	if err != nil {
+		fmt.Printf("Failed to clean up expired media files: %v\n", err)
+	}
+
+	// Create a ticker that fires at the specified interval
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			err := gateway.DB.Where("expires_at < ?", time.Now()).Delete(&MediaFile{}).Error
-			if err != nil {
-				// Log the error
-				fmt.Printf("Failed to clean up expired media files: %v\n", err)
-			}
+	for range ticker.C {
+		err := gateway.DB.Where("expires_at < ?", time.Now()).Delete(&MediaFile{}).Error
+		if err != nil {
+			fmt.Printf("Failed to clean up expired media files: %v\n", err)
 		}
 	}
 }

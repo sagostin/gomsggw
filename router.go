@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type Route struct {
@@ -20,57 +22,286 @@ type Router struct {
 	MessageAckStatus chan MsgQueueItem
 }
 
-func (router *Router) ClientMsgConsumer() {
-	/*for {
-		client := router.gateway.AMPQClient
-		deliveries, err := client.ConsumeMessages("client")
-		if err != nil {
-			continue
+// UnifiedRouter listens on both client and carrier channels and processes messages.
+func (router *Router) UnifiedRouter() {
+	for {
+		select {
+		case msg := <-router.ClientMsgChan:
+			// "client" origin
+			go router.processMessage(&msg, "client")
+		case msg := <-router.CarrierMsgChan:
+			// "carrier" origin
+			go router.processMessage(&msg, "carrier")
 		}
-
-		for delivery := range deliveries {
-			var msgQueueItem MsgQueueItem
-			err := json.Unmarshal(delivery.Body, &msgQueueItem)
-			if err != nil {
-				client.logger.Error(err)
-				continue
-			}
-			msgQueueItem.Delivery = &delivery
-
-			//client.logger.Printf("Received message (%v) from %s", delivery.DeliveryTag, delivery.Body)
-
-			router.ClientMsgChan <- msgQueueItem
-			// todo only ack if was successful??
-		}
-	}*/
-	return
+	}
 }
 
-func (router *Router) CarrierMsgConsumer() {
-	/*for {
-		client := router.gateway.AMPQClient
-		deliveries, err := client.ConsumeMessages("carrier")
-		if err != nil {
-			//client.logger.Error(err)
-			continue
-		}
+// processMessage handles a message from either channel.
+func (router *Router) processMessage(m *MsgQueueItem, origin string) {
+	lm := router.gateway.LogManager
 
-		for delivery := range deliveries {
-			var msgQueueItem MsgQueueItem
-			err := json.Unmarshal(delivery.Body, &msgQueueItem)
-			if err != nil {
-				client.logger.Error(err)
-				continue
+	// Format numbers
+	to, _ := FormatToE164(m.To)
+	m.To = to
+	from, _ := FormatToE164(m.From)
+	m.From = from
+
+	// Lookup clients
+	toClient, _ := router.findClientByNumber(m.To)
+	fromClient, _ := router.findClientByNumber(m.From)
+
+	if origin == "client" && fromClient == nil {
+		lm.SendLog(lm.BuildLog("Router", "Invalid sender number", logrus.ErrorLevel, map[string]interface{}{
+			"logID": m.LogID,
+			"from":  m.From,
+		}))
+		return
+	}
+	// If both client lookups fail, log and return.
+	if origin == "carrier" && toClient == nil {
+		lm.SendLog(lm.BuildLog("Router", "Invalid destination number", logrus.ErrorLevel, map[string]interface{}{
+			"logID": m.LogID,
+			"from":  m.From,
+		}))
+		return
+	}
+
+	// Retry on the channel where the message came from
+	retryChan := router.ClientMsgChan
+	if origin == "carrier" {
+		retryChan = router.CarrierMsgChan
+	}
+
+	// Process based on message type
+	switch m.Type {
+	case MsgQueueItemType.SMS:
+		if toClient != nil {
+			// Try to send via SMPP
+			session, err := router.gateway.SMPPServer.findSmppSession(m.To)
+			if err != nil || session == nil {
+
+				lm.SendLog(lm.BuildLog("Router.SMS", "Failed to find SMPP session", logrus.ErrorLevel, map[string]interface{}{
+					"toClient": toClient.Username,
+					"logID":    m.LogID,
+				}, err))
+				if m.Retry("failed to find SMPP session", retryChan) {
+					// todo send error message back to sender if it is a found client as the sender
+				}
+				return
 			}
-			msgQueueItem.Delivery = &delivery
+			if err := router.gateway.SMPPServer.sendSMPP(*m, session); err != nil {
 
-			//client.logger.Printf("Received message (%v) from carrier %s", delivery.DeliveryTag, delivery.Body)
+				lm.SendLog(lm.BuildLog("Router.SMS", "Failed to send via SMPP", logrus.ErrorLevel, map[string]interface{}{
+					"toClient": toClient.Username,
+					"logID":    m.LogID,
+					"msg":      m,
+				}, err))
+				if m.Retry("failed to send SMPP", retryChan) {
+					// todo send error message back to sender if it is a found client as the sender
+				}
+				return
+			}
+			// Record the successful send
+			internal := (fromClient != nil && toClient != nil)
+			if fromClient != nil {
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem: *m,
+					Carrier:      "from_client",
+					ClientID:     fromClient.ID,
+					Internal:     internal,
+				}
+			}
+			if toClient != nil {
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem: *m,
+					Carrier:      "to_client",
+					ClientID:     toClient.ID,
+					Internal:     internal,
+				}
+			}
+		} else {
+			carrier, _ := router.gateway.getClientCarrier(m.From)
+			if carrier != "" {
+				// add to outbound carrier queue
+				route := router.gateway.Router.findRouteByName("carrier", carrier)
+				if route != nil {
+					ackID, err := route.Handler.SendSMS(m)
+					if err != nil {
+						lm.SendLog(lm.BuildLog(
+							"ROUTER.SMS",
+							"RouterSendCarrier",
+							logrus.ErrorLevel,
+							map[string]interface{}{
+								"client": fromClient.Username,
+								"logID":  m.LogID,
+							}, err,
+						))
+						if m.Retry("failed to send SMPP to carrier", retryChan) {
+							// todo send error message back to sender if it is a found client as the sender
+							msg := &MsgQueueItem{
+								To:              m.From,
+								From:            m.To,
+								Type:            "sms",
+								message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
+								SkipNumberCheck: false,
+								LogID:           m.LogID,
+								Delivery: &MsgQueueDelivery{
+									Error:      "discard after first attempt",
+									RetryTime:  time.Now(),
+									RetryCount: 666,
+								},
+							}
 
-			router.CarrierMsgChan <- msgQueueItem
-			// todo only ack if was successful??
+							router.CarrierMsgChan <- *msg
+						}
+						return
+					}
+
+					lm.SendLog(lm.BuildLog(
+						"Router.SMS",
+						"Successfully sent SMS",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"logID":     m.LogID,
+							"carrierID": ackID,
+							"from":      m.From,
+							"to":        m.To,
+						}, nil,
+					))
+
+					// Compute the conversation hash.
+					convoID := computeCorrelationKey(m.From, m.To)
+					// Update the conversation queue with the expected ack.
+					router.gateway.ConvoManager.SetExpectedAck(convoID, ackID, router, 10*time.Second)
+
+					router.gateway.MsgRecordChan <- MsgRecord{
+						MsgQueueItem: *m,
+						Carrier:      carrier,
+						ClientID:     fromClient.ID,
+						Internal:     false,
+					}
+					/*if m.Delivery != nil {
+						err = m.Delivery.Ack(false)
+					}*/
+					return
+				}
+			}
 		}
-	}*/
-	return
+	case MsgQueueItemType.MMS:
+		if toClient != nil {
+			if err := router.gateway.MM4Server.sendMM4(*m); err != nil {
+				lm.SendLog(lm.BuildLog("Router", "Failed to send MM4: %s", logrus.ErrorLevel, map[string]interface{}{
+					"toClient": toClient.Username,
+					"logID":    m.LogID,
+				}, err))
+				if m.Retry("failed to send MM4", retryChan) {
+					// todo send error message back to sender if it is a found client as the sender
+				}
+				return
+			}
+			internal := (fromClient != nil && toClient != nil)
+			if fromClient != nil {
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem: *m,
+					Carrier:      "from_client",
+					ClientID:     fromClient.ID,
+					Internal:     internal,
+				}
+			}
+			if toClient != nil {
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem: *m,
+					Carrier:      "to_client",
+					ClientID:     toClient.ID,
+					Internal:     internal,
+				}
+			}
+		} else {
+			// For MMS, if no client is found, try routing via carrier
+			carrier, _ := router.gateway.getClientCarrier(m.From)
+			if carrier != "" {
+				// add to outbound carrier queue
+				route := router.gateway.Router.findRouteByName("carrier", carrier)
+				if route != nil {
+					ackID, err := route.Handler.SendMMS(m)
+					if err != nil {
+						lm.SendLog(lm.BuildLog(
+							"ROUTER.MMS",
+							"RouterSendCarrier",
+							logrus.ErrorLevel,
+							map[string]interface{}{
+								"client": fromClient.Username,
+								"logID":  m.LogID,
+							}, err,
+						))
+
+						if m.Retry("failed to send MMS to carrier", retryChan) {
+							msg := &MsgQueueItem{
+								To:              m.From,
+								From:            m.To,
+								Type:            "sms",
+								message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
+								SkipNumberCheck: false,
+								LogID:           m.LogID,
+								Delivery: &MsgQueueDelivery{
+									Error:      "discard after first attempt",
+									RetryTime:  time.Now(),
+									RetryCount: 666,
+								},
+							}
+
+							router.CarrierMsgChan <- *msg
+						}
+
+						return
+					}
+
+					lm.SendLog(lm.BuildLog(
+						"Router.SMS",
+						"Successfully sent MMS",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"logID":     m.LogID,
+							"carrierID": ackID,
+							"from":      m.From,
+							"to":        m.To,
+						}, nil,
+					))
+
+					router.gateway.MsgRecordChan <- MsgRecord{
+						MsgQueueItem: *m,
+						Carrier:      carrier,
+						ClientID:     fromClient.ID,
+						Internal:     false,
+					}
+					return
+
+				}
+			} else {
+				lm.SendLog(lm.BuildLog(
+					"ROUTER.MMS",
+					"RouterFindCarrier",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"client": fromClient.Username,
+						"logID":  m.LogID,
+					},
+				))
+			}
+
+			// throw error?
+			lm.SendLog(lm.BuildLog(
+				"ROUTER.MMS",
+				"RouterSendFailed",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"client": fromClient.Username,
+					"logID":  m.LogID,
+				},
+			))
+			return
+		}
+	}
 }
 
 func (router *Router) AddRoute(routeType, endpoint string, handler CarrierHandler) {

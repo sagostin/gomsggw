@@ -47,8 +47,8 @@ type BaseCarrierHandler struct {
 // CarrierHandler interface for different carrier handlers
 type CarrierHandler interface {
 	Inbound(c iris.Context) error
-	SendSMS(sms *MsgQueueItem) error
-	SendMMS(sms *MsgQueueItem) error
+	SendSMS(sms *MsgQueueItem) (string, error)
+	SendMMS(sms *MsgQueueItem) (string, error)
 	Name() string
 	/*UUID()
 	Password()
@@ -70,11 +70,11 @@ func (gateway *Gateway) loadCarriers() error {
 	// Initialize carrier handlers based on their type
 	for _, carrier := range carriers {
 		// Decrypt sensitive fields
-		decryptedUsername, err := DecryptPassword(carrier.Username, gateway.EncryptionKey)
+		decryptedUsername, err := DecryptAES256(carrier.Username, gateway.EncryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt username for carrier %s: %w", carrier.Name, err)
 		}
-		decryptedPassword, err := DecryptPassword(carrier.Password, gateway.EncryptionKey)
+		decryptedPassword, err := DecryptAES256(carrier.Password, gateway.EncryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt password for carrier %s: %w", carrier.Name, err)
 		}
@@ -105,11 +105,11 @@ func (gateway *Gateway) loadCarriers() error {
 // addCarrier adds a new carrier to the database and initializes its handler.
 func (gateway *Gateway) addCarrier(carrier *Carrier) error {
 	// Encrypt sensitive fields
-	encryptedUsername, err := EncryptPassword(carrier.Username, gateway.EncryptionKey)
+	encryptedUsername, err := EncryptAES256(carrier.Username, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt username: %w", err)
 	}
-	encryptedPassword, err := EncryptPassword(carrier.Password, gateway.EncryptionKey)
+	encryptedPassword, err := EncryptAES256(carrier.Password, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt password: %w", err)
 	}
@@ -125,11 +125,11 @@ func (gateway *Gateway) addCarrier(carrier *Carrier) error {
 	}
 
 	// Decrypt fields for handler initialization
-	decryptedUsername, err := DecryptPassword(carrier.Username, gateway.EncryptionKey)
+	decryptedUsername, err := DecryptAES256(carrier.Username, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt username after encryption: %w", err)
 	}
-	decryptedPassword, err := DecryptPassword(carrier.Password, gateway.EncryptionKey)
+	decryptedPassword, err := DecryptAES256(carrier.Password, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt password after encryption: %w", err)
 	}

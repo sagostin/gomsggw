@@ -37,11 +37,11 @@ func (gateway *Gateway) loadClients() error {
 
 	for _, client := range clients {
 		// Decrypt Username and Password
-		decryptedUsername, err := DecryptPassword(client.Username, gateway.EncryptionKey)
+		decryptedUsername, err := DecryptAES256(client.Username, gateway.EncryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt username for client %s: %w", client.Name, err)
 		}
-		decryptedPassword, err := DecryptPassword(client.Password, gateway.EncryptionKey)
+		decryptedPassword, err := DecryptAES256(client.Password, gateway.EncryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt password for client %s: %w", client.Name, err)
 		}
@@ -80,11 +80,11 @@ func (gateway *Gateway) loadNumbers() error {
 // addClient encrypts the client's credentials and stores the client in the database and in-memory map.
 func (gateway *Gateway) addClient(client *Client) error {
 	// Encrypt Username and Password
-	encryptedUsername, err := EncryptPassword(client.Username, gateway.EncryptionKey)
+	encryptedUsername, err := EncryptAES256(client.Username, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt username: %w", err)
 	}
-	encryptedPassword, err := EncryptPassword(client.Password, gateway.EncryptionKey)
+	encryptedPassword, err := EncryptAES256(client.Password, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt password: %w", err)
 	}
@@ -98,11 +98,11 @@ func (gateway *Gateway) addClient(client *Client) error {
 	}
 
 	// Decrypt credentials for in-memory map
-	decryptedUsername, err := DecryptPassword(client.Username, gateway.EncryptionKey)
+	decryptedUsername, err := DecryptAES256(client.Username, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt username after encryption: %w", err)
 	}
-	decryptedPassword, err := DecryptPassword(client.Password, gateway.EncryptionKey)
+	decryptedPassword, err := DecryptAES256(client.Password, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to decrypt password after encryption: %w", err)
 	}

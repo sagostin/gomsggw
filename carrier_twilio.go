@@ -74,7 +74,7 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 			From:              from,
 			ReceivedTimestamp: time.Now(),
 			Type:              MsgQueueItemType.MMS,
-			Files:             files,
+			files:             files,
 			SkipNumberCheck:   false,
 			LogID:             transId,
 		}
@@ -91,7 +91,7 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 				From:              from,
 				ReceivedTimestamp: time.Now(),
 				Type:              MsgQueueItemType.SMS,
-				Message:           smsBody,
+				message:           smsBody,
 				LogID:             transId,
 			}
 			h.gateway.Router.CarrierMsgChan <- sms
@@ -208,11 +208,11 @@ func splitSMS(body string, maxBytes int) []string {
 
 	return smsSegments
 }
-func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) error {
+func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 	params := &twilioApi.CreateMessageParams{}
 	params.SetTo(sms.To)
 	params.SetFrom(sms.From)
-	params.SetBody(sms.Message)
+	params.SetBody(sms.message)
 
 	// todo support for MMS??
 
@@ -227,21 +227,21 @@ func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) error {
 				"logID": sms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
 	/*	logf.Level = logrus.InfoLevel
 		// direction, carrier, type (mms/sms), sid/msid, from, to
-		logf.Message = fmt.Sprintf(LogMessages.Transaction, "outbound", logf.AdditionalData["carrier"], sms.From, sms.To)
+		logf.message = fmt.Sprintf(LogMessages.Transaction, "outbound", logf.AdditionalData["carrier"], sms.From, sms.To)
 		logf.AddField("messageSid", *msg.Sid)
 		logf.AddField("from", sms.From)
 		logf.AddField("to", sms.To)
 		logf.Print()*/
 
-	return nil
+	return "", nil
 }
 
-func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
+func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 
 	params := &twilioApi.CreateMessageParams{}
 	// clean to & from
@@ -252,8 +252,8 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 
 	var mediaUrls []string
 
-	if len(mms.Files) > 0 {
-		for _, i := range mms.Files {
+	if len(mms.files) > 0 {
+		for _, i := range mms.files {
 			if strings.Contains(i.ContentType, "application/smil") {
 				continue
 			}
@@ -269,7 +269,7 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 						"logID": mms.LogID,
 					}, err,
 				))
-				return err
+				return "", err
 			}
 
 			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
@@ -290,8 +290,8 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) error {
 				"logID": mms.LogID,
 			}, err,
 		))
-		return err
+		return "", err
 	}
 
-	return nil
+	return "", nil
 }

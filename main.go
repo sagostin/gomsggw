@@ -11,6 +11,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"strings"
+	"time"
 )
 
 var trustedProxies []string
@@ -147,12 +148,10 @@ func main() {
 		}
 	}()
 
-	go gateway.Router.ClientRouter()
-	go gateway.Router.CarrierRouter()
-	go gateway.Router.ClientMsgConsumer()
-	go gateway.Router.CarrierMsgConsumer()
-
+	go gateway.Router.UnifiedRouter()
 	go gateway.processMsgRecords()
+
+	go gateway.cleanUpExpiredMediaFiles(15 * time.Minute)
 
 	// Start server
 	webListen := os.Getenv("WEB_LISTEN")

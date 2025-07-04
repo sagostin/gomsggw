@@ -327,6 +327,8 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}
 
+	// todo check source / destination numbers are valid? or not empty i guess
+
 	var decodedMsg = ""
 
 	encoding := coding.GSM7BitCoding

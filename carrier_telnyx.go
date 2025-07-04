@@ -420,6 +420,8 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 				"logID":           sms.LogID,
 				"response_code":   resp.StatusCode,
 				"response_status": resp.Status,
+				"to":              sms.To,
+				"from":            sms.From,
 				"response_body":   string(bodyBytes), // Include response body for debugging
 			}, err,
 		))
@@ -560,8 +562,9 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 				"logID":           mms.LogID,
 				"response_code":   resp.StatusCode,
 				"response_status": resp.Status,
+				"to":              mms.To,
+				"from":            mms.From,
 				"response_body":   string(bodyBytes), // Include response body for debugging
-				"msg":             mms,
 			}, nil,
 		))
 		return "", errors.New("failed to send MMS via Telnyx")

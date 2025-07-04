@@ -80,6 +80,7 @@ func (gateway *Gateway) loadNumbers() error {
 // addClient encrypts the client's credentials and stores the client in the database and in-memory map.
 func (gateway *Gateway) addClient(client *Client) error {
 	// Encrypt Username and Password
+	// todo remove username encryption?
 	encryptedUsername, err := EncryptAES256(client.Username, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt username: %w", err)

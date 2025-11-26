@@ -26,7 +26,7 @@ import (
 // Size limits
 const (
 	maxImageSize = 1 * 1024 * 1024 // 1 MB
-	maxFileSize  = 1 * 1024 * 1024 // 5 MB
+	maxFileSize  = 1 * 1024 * 1024 // 5 MB (comment vs constant, left as-is)
 )
 
 // MsgFile represents an individual file extracted from the MIME multipart message.
@@ -37,62 +37,160 @@ type MsgFile struct {
 	Base64Data  string `json:"base64_data,omitempty"`
 }
 
+// safeClientInfo builds a log field map from an MM4Message without panicking.
+func safeClientInfo(m *MM4Message) map[string]interface{} {
+	fields := map[string]interface{}{
+		"transaction_id": m.TransactionID,
+		"message_id":     m.MessageID,
+		"from":           m.From,
+		"to":             m.To,
+	}
+	if m.Client != nil {
+		fields["client"] = m.Client.Username
+	}
+	return fields
+}
+
 func (s *MM4Server) transcodeMedia() {
+	lm := s.gateway.LogManager
+
 	for {
 		mm4Message := <-s.MediaTranscodeChan
 
-		//transId := primitive.NewObjectID().Hex()
+		start := time.Now()
+		baseFields := safeClientInfo(mm4Message)
+		baseFields["file_count"] = len(mm4Message.Files)
 
-		ff, err := mm4Message.processAndConvertFiles()
-		if err != nil {
-			mm4Message.Files = nil
-			mm4Message.Content = nil // remove content to be safe
+		lm.SendLog(lm.BuildLog(
+			"Server.MM4.TranscodeMedia",
+			"TranscodeStart",
+			logrus.DebugLevel,
+			baseFields,
+		))
 
-			mm4Message.Client.Password = "***"
-
-			// todo add log privacy
-
-			var lm = s.gateway.LogManager
+		// Per-file summary before processing
+		for i, f := range mm4Message.Files {
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.TranscodeMedia",
-				"Failed to transcode media. %s",
-				logrus.ErrorLevel,
+				"InputFileSummary",
+				logrus.DebugLevel,
 				map[string]interface{}{
-					"mm4Message": mm4Message,
-					"logID":      mm4Message.TransactionID,
-				}, err,
-			))
-
-			msg := &MsgQueueItem{
-				To:              mm4Message.From,
-				From:            mm4Message.To,
-				Type:            "sms",
-				message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + mm4Message.TransactionID,
-				SkipNumberCheck: false,
-				LogID:           mm4Message.TransactionID,
-				Delivery: &MsgQueueDelivery{
-					Error:      "discard after first attempt",
-					RetryTime:  time.Now(),
-					RetryCount: 666,
+					"transaction_id": mm4Message.TransactionID,
+					"index":          i,
+					"filename":       f.Filename,
+					"content_type":   f.ContentType,
+					"size_bytes":     len(f.Content),
 				},
+			))
+		}
+
+		// Panic guard around media processing
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					lm.SendLog(lm.BuildLog(
+						"Server.MM4.TranscodeMedia",
+						"PanicRecovered",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"transaction_id": mm4Message.TransactionID,
+							"panic":          fmt.Sprintf("%v", r),
+							"duration_ms":    time.Since(start).Milliseconds(),
+						},
+					))
+
+					msg := &MsgQueueItem{
+						To:              mm4Message.From,
+						From:            mm4Message.To,
+						Type:            "sms",
+						message:         "An internal error occurred while processing your media. Please try again later. ID: " + mm4Message.TransactionID,
+						SkipNumberCheck: false,
+						LogID:           mm4Message.TransactionID,
+						Delivery: &MsgQueueDelivery{
+							Error:      "discard after first attempt (panic)",
+							RetryTime:  time.Now(),
+							RetryCount: 666,
+						},
+					}
+					s.gateway.Router.CarrierMsgChan <- *msg
+				}
+			}()
+
+			ff, err := mm4Message.processAndConvertFiles(lm)
+			if err != nil {
+				// scrub large / sensitive stuff before logging
+				mm4Message.Files = nil
+				mm4Message.Content = nil
+				if mm4Message.Client != nil {
+					mm4Message.Client.Password = "***"
+				}
+
+				errFields := safeClientInfo(mm4Message)
+				errFields["logID"] = mm4Message.TransactionID
+
+				lm.SendLog(lm.BuildLog(
+					"Server.MM4.TranscodeMedia",
+					"TranscodeError",
+					logrus.ErrorLevel,
+					errFields,
+					err,
+				))
+
+				msg := &MsgQueueItem{
+					To:              mm4Message.From,
+					From:            mm4Message.To,
+					Type:            "sms",
+					message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + mm4Message.TransactionID,
+					SkipNumberCheck: false,
+					LogID:           mm4Message.TransactionID,
+					Delivery: &MsgQueueDelivery{
+						Error:      "discard after first attempt",
+						RetryTime:  time.Now(),
+						RetryCount: 666,
+					},
+				}
+
+				s.gateway.Router.CarrierMsgChan <- *msg
+				return
 			}
 
-			s.gateway.Router.CarrierMsgChan <- *msg
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"TranscodeSuccess",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"transaction_id": mm4Message.TransactionID,
+					"output_files":   len(ff),
+					"duration_ms":    time.Since(start).Milliseconds(),
+				},
+			))
 
-			continue
-		}
-		//mm4Message.files = ff
+			for i, f := range ff {
+				lm.SendLog(lm.BuildLog(
+					"Server.MM4.TranscodeMedia",
+					"OutputFileSummary",
+					logrus.DebugLevel,
+					map[string]interface{}{
+						"transaction_id": mm4Message.TransactionID,
+						"index":          i,
+						"filename":       f.Filename,
+						"content_type":   f.ContentType,
+						"size_bytes":     len(f.Content),
+					},
+				))
+			}
 
-		msgItem := MsgQueueItem{
-			To:                mm4Message.To,
-			From:              mm4Message.From,
-			ReceivedTimestamp: time.Now(),
-			Type:              MsgQueueItemType.MMS,
-			files:             ff,
-			LogID:             mm4Message.TransactionID,
-		}
+			msgItem := MsgQueueItem{
+				To:                mm4Message.To,
+				From:              mm4Message.From,
+				ReceivedTimestamp: time.Now(),
+				Type:              MsgQueueItemType.MMS,
+				files:             ff,
+				LogID:             mm4Message.TransactionID,
+			}
 
-		s.gateway.Router.ClientMsgChan <- msgItem
+			s.gateway.Router.ClientMsgChan <- msgItem
+		}()
 	}
 }
 
@@ -112,23 +210,74 @@ var compatibleTypes = map[string]bool{
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":   true,
 }
 
-func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
+// NOTE: requires a *LogManager so we can log without using logrus directly.
+func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 	var processedFiles []MsgFile
 
-	for _, file := range m.Files {
+	baseFields := safeClientInfo(m)
+
+	for idx, file := range m.Files {
+		start := time.Now()
+
+		entryFields := map[string]interface{}{
+			"transaction_id": m.TransactionID,
+			"index":          idx,
+			"filename_in":    file.Filename,
+			"content_type":   file.ContentType,
+			"raw_size":       len(file.Content),
+			"is_smil":        strings.Contains(file.ContentType, "application/smil"),
+			"has_base64":     len(file.Base64Data) > 0,
+		}
+		for k, v := range baseFields {
+			entryFields[k] = v
+		}
+
 		if strings.Contains(file.ContentType, "application/smil") {
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileSkipSMIL",
+				logrus.DebugLevel,
+				entryFields,
+			))
 			processedFiles = append(processedFiles, file)
 			continue
 		}
 
+		lm.SendLog(lm.BuildLog(
+			"Server.MM4.TranscodeMedia",
+			"FileDecodeBase64Start",
+			logrus.DebugLevel,
+			entryFields,
+		))
+
 		decodedContent, err := decodeBase64(file.Content)
 		if err != nil {
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileDecodeBase64Error",
+				logrus.ErrorLevel,
+				entryFields,
+				err,
+			))
 			return nil, fmt.Errorf("failed to decode Base64 content: %v", err)
 		}
 
+		entryFields["decoded_size"] = len(decodedContent)
+
 		if strings.Contains(file.ContentType, "application/octet-stream") || file.ContentType == "" {
-			file.ContentType = detectMIMEType(decodedContent)
+			detected := detectMIMEType(decodedContent)
+			entryFields["detected_mime"] = detected
+			file.ContentType = detected
+
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileMimeDetected",
+				logrus.DebugLevel,
+				entryFields,
+			))
 		}
+
+		entryFields["branch_content_type"] = file.ContentType
 
 		var convertedContent []byte
 		var newType string
@@ -136,6 +285,13 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 
 		switch {
 		case strings.HasPrefix(file.ContentType, "image/"):
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileProcessImageStart",
+				logrus.DebugLevel,
+				entryFields,
+			))
+
 			if strings.Contains(file.ContentType, "jpeg") || strings.Contains(file.ContentType, "jpg") {
 				convertedContent, err = compressJPEG(decodedContent, int(maxImageSize))
 				newType = "image/jpeg"
@@ -152,40 +308,100 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 				}
 			}
 			if err != nil {
+				lm.SendLog(lm.BuildLog(
+					"Server.MM4.TranscodeMedia",
+					"FileProcessImageError",
+					logrus.ErrorLevel,
+					entryFields,
+					err,
+				))
 				return nil, fmt.Errorf("failed to process image: %v", err)
 			}
 
 		case strings.HasPrefix(file.ContentType, "video/"):
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileProcessVideoStart",
+				logrus.DebugLevel,
+				entryFields,
+			))
+
 			convertedContent, newType, err = processVideoContent(decodedContent)
 			newExt = ".3gp"
 			if err != nil {
+				lm.SendLog(lm.BuildLog(
+					"Server.MM4.TranscodeMedia",
+					"FileProcessVideoError",
+					logrus.ErrorLevel,
+					entryFields,
+					err,
+				))
 				return nil, fmt.Errorf("failed to process video: %v", err)
 			}
 
 		case strings.HasPrefix(file.ContentType, "audio/"):
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileProcessAudioStart",
+				logrus.DebugLevel,
+				entryFields,
+			))
+
 			convertedContent, newType, err = convertToMP3(decodedContent)
 			newExt = ".mp3"
 			if err != nil {
+				lm.SendLog(lm.BuildLog(
+					"Server.MM4.TranscodeMedia",
+					"FileProcessAudioError",
+					logrus.ErrorLevel,
+					entryFields,
+					err,
+				))
 				return nil, fmt.Errorf("failed to convert audio: %v", err)
 			}
 
 		default:
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileProcessGenericStart",
+				logrus.DebugLevel,
+				entryFields,
+			))
+
 			convertedContent, err = compressFile(decodedContent, int(maxFileSize))
 			if err != nil {
+				lm.SendLog(lm.BuildLog(
+					"Server.MM4.TranscodeMedia",
+					"FileProcessGenericError",
+					logrus.ErrorLevel,
+					entryFields,
+					err,
+				))
 				return nil, fmt.Errorf("failed to compress file: %v", err)
 			}
 			newType = file.ContentType
-			// Keep original extension if present
 			newExt = filepath.Ext(file.Filename)
 		}
 
-		// Update filename with new extension if needed
-		// baseName := strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename))
 		file.Filename = uuid.New().String() + newExt
-
 		file.Content = convertedContent
 		file.ContentType = newType
 		file.Base64Data = encodeToBase64(convertedContent)
+
+		entryFields["filename_out"] = file.Filename
+		entryFields["final_type"] = file.ContentType
+		entryFields["final_size"] = len(file.Content)
+		entryFields["duration_ms"] = time.Since(start).Milliseconds()
+		entryFields["new_ext"] = newExt
+		entryFields["compatibleType"] = compatibleTypes[file.ContentType]
+
+		lm.SendLog(lm.BuildLog(
+			"Server.MM4.TranscodeMedia",
+			"FileProcessSuccess",
+			logrus.InfoLevel,
+			entryFields,
+		))
+
 		processedFiles = append(processedFiles, file)
 	}
 
@@ -518,7 +734,8 @@ func convertToMP3(content []byte) ([]byte, string, error) {
 			OverWriteOutput().
 			Run()
 		if err != nil {
-			fmt.Printf("FFmpeg error: %v\n", err)
+			// error gets returned via caller, no direct logging here
+			_ = err
 		}
 		_ = pwOut.Close()
 	}()

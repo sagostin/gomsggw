@@ -12,6 +12,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"io"
+	"log"
 	"math/rand"
 	"mime"
 	"mime/multipart"
@@ -36,7 +37,7 @@ type MM4Message struct {
 	TransactionID string
 }
 
-// MM4Server represents the SMTP/MM4 server.
+// MM4Server represents the SMTP server.
 type MM4Server struct {
 	Addr               string
 	routing            *Router
@@ -48,10 +49,8 @@ type MM4Server struct {
 	MediaTranscodeChan chan *MM4Message
 }
 
-// Start begins listening for incoming SMTP/MM4 connections.
+// Start begins listening for incoming SMTP connections.
 func (s *MM4Server) Start() error {
-	lm := s.gateway.LogManager
-
 	s.connectedClients = make(map[string]time.Time)
 	s.MediaTranscodeChan = make(chan *MM4Message)
 
@@ -59,78 +58,92 @@ func (s *MM4Server) Start() error {
 
 	listen, err := net.Listen("tcp", s.Addr)
 	if err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.Start",
-			"ListenError",
-			logrus.FatalLevel,
-			map[string]interface{}{
-				"addr": s.Addr,
-			}, err,
-		))
 		return err
 	}
+	//s.listener = listen
 	defer listen.Close()
 
 	var proxyListener net.Listener
+
 	if os.Getenv("HAPROXY_PROXY_PROTOCOL") == "true" {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.Start",
-			"UsingProxyProtocol",
-			logrus.InfoLevel,
-			map[string]interface{}{
-				"addr": s.Addr,
-			},
-		))
 		proxyListener = &proxyproto.Listener{Listener: listen}
+		defer proxyListener.Close()
+
+		// Wait for a connection and accept it
+		conn, err := proxyListener.Accept()
+		if err != nil {
+			return err
+		}
+
+		defer func(conn net.Conn) {
+			err := conn.Close()
+			if err != nil {
+				log.Fatal("couldn't close proxy connection")
+			}
+		}(conn)
+
+		// Print connection details
+		if conn.LocalAddr() == nil {
+			log.Fatal("couldn't retrieve local address")
+		}
+		log.Printf("local address: %q", conn.LocalAddr().String())
+
+		if conn.RemoteAddr() == nil {
+			log.Fatal("couldn't retrieve remote address")
+		}
+		log.Printf("remote address: %q", conn.RemoteAddr().String())
 	} else {
 		proxyListener = listen
 	}
 
 	s.listener = proxyListener
 
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.Start",
-		"MM4ServerListening",
-		logrus.InfoLevel,
-		map[string]interface{}{
-			"addr": s.Addr,
-		},
-	))
+	// Start the cleanup goroutine
+	/*go s.cleanupInactiveClients(2*time.Minute, 1*time.Minute)*/
 
 	for {
 		conn, err := proxyListener.Accept()
 		if err != nil {
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				lm.SendLog(lm.BuildLog(
-					"Server.MM4.Start",
-					"AcceptTemporaryError",
-					logrus.WarnLevel,
-					map[string]interface{}{
-						"addr": s.Addr,
-					}, err,
-				))
-				continue
-			}
-
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.Start",
-				"AcceptFatalError",
-				logrus.ErrorLevel,
-				map[string]interface{}{
-					"addr": s.Addr,
-				}, err,
-			))
 			return err
 		}
-
 		go s.handleConnection(conn)
 	}
 }
 
-// handleConnection manages an individual SMTP/MM4 session.
+/*// cleanupInactiveClients periodically removes inactive clients.
+func (s *MM4Server) cleanupInactiveClients(timeout time.Duration, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			s.mu.Lock()
+			for hashedIP, lastActivity := range s.connectedClients {
+				if now.Sub(lastActivity) > timeout {
+					var lm = s.gateway.LogManager
+					lm.SendLog(lm.BuildLog(
+						"Server.MM4.CleanInactive",
+						"MM4RemoveInactiveClient",
+						logrus.InfoLevel,
+						map[string]interface{}{
+							"client": hashedIP,
+						},
+					))
+
+					delete(s.connectedClients, hashedIP)
+				}
+			}
+			s.mu.Unlock()
+		}
+	}
+}*/
+
+// handleConnection manages an individual SMTP session.
 func (s *MM4Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	lm := s.gateway.LogManager
+	var lm = s.gateway.LogManager
 
 	remoteAddr := conn.RemoteAddr().String()
 	ip, _, err := net.SplitHostPort(remoteAddr)
@@ -138,25 +151,14 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		lm.SendLog(lm.BuildLog(
 			"Server.MM4.HandleConnection",
 			"ParseAddressError",
-			logrus.ErrorLevel,
+			logrus.InfoLevel,
 			map[string]interface{}{
-				"remoteAddr": remoteAddr,
-			}, err,
+				"client": "unknown",
+			},
 		))
 		return
 	}
 	hashedIP := hashIP(ip)
-
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.HandleConnection",
-		"ConnectionAccepted",
-		logrus.InfoLevel,
-		map[string]interface{}{
-			"ip":         ip,
-			"remoteAddr": remoteAddr,
-			"hashedIP":   hashedIP,
-		},
-	))
 
 	// Increase buffer size to handle large headers
 	reader := bufio.NewReaderSize(conn, 65536) // 64 KB buffer
@@ -171,25 +173,18 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		writeResponse(writer, "550 Access denied")
 
 		if isTrustedProxy(ip, trustedProxies) {
+			return
+		} else {
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.HandleConnection",
-				"AccessDeniedTrustedProxy",
+				"AuthFailed",
 				logrus.WarnLevel,
 				map[string]interface{}{
-					"ip": ip,
+					"client": "unknown",
+					"ip":     ip,
 				},
 			))
-			return
 		}
-
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.HandleConnection",
-			"AuthFailedUnknownIP",
-			logrus.WarnLevel,
-			map[string]interface{}{
-				"ip": ip,
-			},
-		))
 		return
 	}
 
@@ -202,7 +197,7 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		// New connection
 		lm.SendLog(lm.BuildLog(
 			"Server.MM4.HandleConnection",
-			"AuthSuccessNewConnection",
+			"AuthSuccess",
 			logrus.InfoLevel,
 			map[string]interface{}{
 				"client": client.Username,
@@ -213,9 +208,10 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		// Existing connection
 		inactivityDuration := time.Since(lastActivity)
 		if inactivityDuration > 2*time.Minute {
+			// Log an alert for reconnecting after inactivity
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.HandleConnection",
-				"ReconnectAfterInactivity",
+				"MM4ReconnectInactivity",
 				logrus.InfoLevel,
 				map[string]interface{}{
 					"client":             client.Username,
@@ -224,10 +220,11 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 				},
 			))
 		} else {
+			// Log regular reconnections
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.HandleConnection",
-				"Reconnect",
-				logrus.DebugLevel,
+				"MM4Reconnect",
+				logrus.InfoLevel,
 				map[string]interface{}{
 					"client":             client.Username,
 					"ip":                 ip,
@@ -255,22 +252,12 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		mongo:      s.mongo,
 	}
 
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.HandleConnection",
-		"SessionStarted",
-		logrus.DebugLevel,
-		map[string]interface{}{
-			"client": client.Username,
-			"ip":     ip,
-		},
-	))
-
 	// Handle the session
 	if err := session.handleSession(s); err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.MM4.HandleConnection",
-			"SessionError",
-			logrus.ErrorLevel,
+			"MM4SessionError",
+			logrus.InfoLevel,
 			map[string]interface{}{
 				"client": client.Username,
 				"ip":     ip,
@@ -278,16 +265,6 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		))
 		writeResponse(writer, "451 Internal server error")
 	}
-
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.HandleConnection",
-		"SessionEnded",
-		logrus.DebugLevel,
-		map[string]interface{}{
-			"client": client.Username,
-			"ip":     ip,
-		},
-	))
 }
 
 // getClientByIP returns the client associated with the given IP address.
@@ -295,9 +272,13 @@ func (s *MM4Server) getClientByIP(ip string) *Client {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	// Loop through the clients to find a matching IP address
 	for _, client := range s.gateway.Clients {
 		if client.Address == ip {
+			//log.Printf(ip, " ", client.Address)
 			return client
+		} else {
+			//log.Printf(ip, " ", client.Address)
 		}
 	}
 	return nil
@@ -309,7 +290,7 @@ func hashIP(ip string) string {
 	return fmt.Sprintf("%x", hash)
 }
 
-// Session represents an SMTP/MM4 session.
+// Session represents an SMTP session.
 type Session struct {
 	Conn       net.Conn
 	Reader     *bufio.Reader
@@ -329,48 +310,25 @@ type Session struct {
 
 // handleSession processes SMTP commands from the client.
 func (s *Session) handleSession(srv *MM4Server) error {
-	lm := s.Server.gateway.LogManager
-
 	for {
+		// Read client input
 		line, err := s.Reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				lm.SendLog(lm.BuildLog(
-					"Server.MM4.Session",
-					"ClientDisconnectedEOF",
-					logrus.DebugLevel,
-					map[string]interface{}{
-						"client": s.Client.Username,
-						"ip":     s.ClientIP,
-					},
-				))
-				return nil
+				return nil // AMPQClient closed the connection
 			}
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.Session",
-				"ReadLineError",
-				logrus.ErrorLevel,
-				map[string]interface{}{
-					"client": s.Client.Username,
-					"ip":     s.ClientIP,
-				}, err,
-			))
 			return err
 		}
-
 		line = strings.TrimSpace(line)
+		/*
+			if strings.ToLower(os.Getenv("MM4_DEBUG")) == "true" {
+				logf := LoggingFormat{Type: LogType.MM4 + "_" + LogType.DEBUG}
+				logf.Level = logrus.DebugLevel
+				logf.message = fmt.Sprintf("IP: %s - C: %s", s.ClientIP, line)
+				logf.Print()
+			}*/
 
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.Session",
-			"CommandReceived",
-			logrus.DebugLevel,
-			map[string]interface{}{
-				"client":  s.Client.Username,
-				"ip":      s.ClientIP,
-				"command": line,
-			},
-		))
-
+		// Handle the command
 		if err := s.handleCommand(line, srv); err != nil {
 			return err
 		}
@@ -379,8 +337,7 @@ func (s *Session) handleSession(srv *MM4Server) error {
 
 // handleCommand processes a single SMTP command.
 func (s *Session) handleCommand(line string, srv *MM4Server) error {
-	lm := s.Server.gateway.LogManager
-
+	// Split command and arguments
 	parts := strings.SplitN(line, " ", 2)
 	cmd := strings.ToUpper(parts[0])
 	var arg string
@@ -393,37 +350,18 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 	srv.connectedClients[s.IPHash] = time.Now()
 	srv.mu.Unlock()
 
+	// Handle commands
 	switch cmd {
 	case "HELO", "EHLO":
 		writeResponse(s.Writer, "250 Hello")
 	case "MAIL":
 		if err := s.handleMail(arg); err != nil {
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.HandleCommand",
-				"MAILError",
-				logrus.WarnLevel,
-				map[string]interface{}{
-					"client": s.Client.Username,
-					"ip":     s.ClientIP,
-					"arg":    arg,
-				}, err,
-			))
 			writeResponse(s.Writer, fmt.Sprintf("550 %v", err))
 		} else {
 			writeResponse(s.Writer, "250 OK")
 		}
 	case "RCPT":
 		if err := s.handleRcpt(arg); err != nil {
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.HandleCommand",
-				"RCPTErrror",
-				logrus.WarnLevel,
-				map[string]interface{}{
-					"client": s.Client.Username,
-					"ip":     s.ClientIP,
-					"arg":    arg,
-				}, err,
-			))
 			writeResponse(s.Writer, fmt.Sprintf("550 %v", err))
 		} else {
 			writeResponse(s.Writer, "250 OK")
@@ -431,18 +369,19 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 	case "DATA":
 		writeResponse(s.Writer, "354 End data with <CR><LF>.<CR><LF>")
 		if err := s.handleData(); err != nil {
+			var lm = s.Server.gateway.LogManager
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.HandleCommand",
-				"HandleDataError",
-				logrus.ErrorLevel,
+				"HandleData",
+				logrus.InfoLevel,
 				map[string]interface{}{
 					"client": s.Client.Username,
 					"ip":     s.ClientIP,
-				}, err,
+				},
 			))
 			writeResponse(s.Writer, fmt.Sprintf("554 %v", err))
 		} else {
-			writeResponse(s.Writer, "250 message queued for processing")
+			writeResponse(s.Writer, "250 OK")
 		}
 	case "NOOP":
 		writeResponse(s.Writer, "250 OK")
@@ -450,17 +389,6 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 		writeResponse(s.Writer, "221 Bye")
 		return errors.New("client disconnected")
 	default:
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.HandleCommand",
-			"UnknownCommand",
-			logrus.DebugLevel,
-			map[string]interface{}{
-				"client": s.Client.Username,
-				"ip":     s.ClientIP,
-				"cmd":    cmd,
-				"arg":    arg,
-			},
-		))
 		writeResponse(s.Writer, fmt.Sprintf("502 Command not implemented: %s", cmd))
 	}
 	return nil
@@ -487,6 +415,7 @@ func (s *Session) handleRcpt(arg string) error {
 
 // handleData processes the DATA command and reads message content.
 func (s *Session) handleData() error {
+	// Use textproto.Reader to handle large messages and dot-stuffing
 	tp := textproto.NewReader(s.Reader)
 
 	// Read headers
@@ -509,36 +438,25 @@ func (s *Session) handleData() error {
 
 // handleMM4Message processes the MM4 message based on its type.
 func (s *Session) handleMM4Message() error {
-	lm := s.Server.gateway.LogManager
-
+	// Check required MM4 headers
 	requiredHeaders := []string{
-		/*"X-Mms-3GPP-MMS-Version",*/
-		/*"X-Mms-message-Type",*/
+		"X-Mms-3GPP-MMS-Version",
+		"X-Mms-message-Type",
 		"X-Mms-message-ID",
 		"X-Mms-Transaction-ID",
+		/*"Text-Type",*/
 		"From",
 		"To",
 	}
-
 	for _, header := range requiredHeaders {
 		if s.Headers.Get(header) == "" {
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.handleMM4Message",
-				"MissingRequiredHeader",
-				logrus.WarnLevel,
-				map[string]interface{}{
-					"client": s.Client.Username,
-					"ip":     s.ClientIP,
-					"header": header,
-				},
-			))
 			return fmt.Errorf("missing required header: %s", header)
 		}
 	}
 
+	//_ := s.Headers.Get("X-Mms-message-Type")
 	transactionID := s.Headers.Get("X-Mms-Transaction-ID")
 	messageID := s.Headers.Get("X-Mms-message-ID")
-	msgType := s.Headers.Get("X-Mms-message-Type")
 
 	mm4Message := &MM4Message{
 		From:          s.Headers.Get("From"),
@@ -549,57 +467,53 @@ func (s *Session) handleMM4Message() error {
 		TransactionID: transactionID,
 		MessageID:     messageID,
 	}
+	// Existing header checks..
 
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.handleMM4Message",
-		"MM4MessageReceived",
-		logrus.InfoLevel,
-		map[string]interface{}{
-			"client":        s.Client.Username,
-			"ip":            s.ClientIP,
-			"transactionID": transactionID,
-			"messageID":     messageID,
-			"msgType":       msgType,
-		},
-	))
+	// todo IMPORTANT convert octet stream to other file?? uerm
 
 	// Parse MIME parts to extract files
 	mm, err := mm4Message.parseMIMEParts()
+
 	if err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.handleMM4Message",
-			"ParseMIMEPartsError",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client":        s.Client.Username,
-				"ip":            s.ClientIP,
-				"transactionID": transactionID,
-				"messageID":     messageID,
-			}, err,
-		))
 		return fmt.Errorf("failed to parse MIME parts: %v", err)
 	}
 
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.handleMM4Message",
-		"MM4QueuedForTranscode",
-		logrus.DebugLevel,
-		map[string]interface{}{
-			"client":        s.Client.Username,
-			"ip":            s.ClientIP,
-			"transactionID": transactionID,
-			"messageID":     messageID,
-			"fileCount":     len(mm.Files),
-		},
-	))
-
 	s.Server.MediaTranscodeChan <- mm
 
+	/*msgItem := MsgQueueItem{
+		To:                mm.To,
+		From:              mm.From,
+		ReceivedTimestamp: time.Now(),
+		Type:              MsgQueueItemType.MMS,
+		files:             mm.files,
+		LogID:             transId,
+	}
+
+	s.Server.gateway.Router.ClientMsgChan <- msgItem*/
+
+	writeResponse(s.Writer, "250 message queued for processing")
+
+	/*switch msgType {
+	case "MM4_forward.REQ":
+		s.Server.msgToClientChannel <- mm4Message
+	case "MM4_forward.RES":
+		// Handle MM4_forward.RES if necessary
+		// log.Println("Received MM4_forward.RES")
+	case "MM4_read_reply_report.REQ":
+		// Handle MM4_read_reply_report.REQ if necessary
+		// Println("Received MM4_read_reply_report.REQ")
+	case "MM4_read_reply_report.RES":
+		// Handle MM4_read_reply_report.RES if necessary
+		// log.Println("Received MM4_read_reply_report.RES")
+	default:
+		// log.Printf("Unknown MM4 message type: %s", msgType)
+	}*/
 	return nil
 }
 
 // parseMIMEParts parses the MIME multipart content to extract files.
 func (m *MM4Message) parseMIMEParts() (*MM4Message, error) {
+	// Use the Headers to get the Msg-Type
 	contentType := m.Headers.Get("Content-Type")
 	if contentType == "" {
 		return nil, fmt.Errorf("missing Content-Type header")
@@ -607,15 +521,16 @@ func (m *MM4Message) parseMIMEParts() (*MM4Message, error) {
 
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Content-Type: %v", err)
+		return nil, fmt.Errorf("failed to parse Msg-Type: %v", err)
 	}
 
 	if strings.HasPrefix(mediaType, "multipart/") {
 		boundary := params["boundary"]
 		if boundary == "" {
-			return nil, fmt.Errorf("no boundary parameter in Content-Type")
+			return nil, fmt.Errorf("no boundary parameter in Msg-Type")
 		}
 
+		// Create a multipart reader
 		reader := multipart.NewReader(bytes.NewReader(m.Content), boundary)
 		for {
 			part, err := reader.NextPart()
@@ -626,11 +541,13 @@ func (m *MM4Message) parseMIMEParts() (*MM4Message, error) {
 				return nil, fmt.Errorf("failed to read part: %v", err)
 			}
 
+			// Read the part
 			var buf bytes.Buffer
 			if _, err := io.Copy(&buf, part); err != nil {
 				return nil, fmt.Errorf("failed to read part content: %v", err)
 			}
 
+			// Create a MsgFile struct
 			file := MsgFile{
 				Filename:    part.FileName(),
 				ContentType: part.Header.Get("Content-Type"),
@@ -639,6 +556,8 @@ func (m *MM4Message) parseMIMEParts() (*MM4Message, error) {
 			m.Files = append(m.Files, file)
 		}
 	} else {
+		// Not a multipart message
+		// Handle as a single part
 		file := MsgFile{
 			Filename:    "",
 			ContentType: mediaType,
@@ -652,57 +571,37 @@ func (m *MM4Message) parseMIMEParts() (*MM4Message, error) {
 
 // sendMM4 sends an MM4 message to a client over plain TCP with base64-encoded media.
 func (s *MM4Server) sendMM4(item MsgQueueItem) error {
-	lm := s.gateway.LogManager
-
 	if item.files == nil {
 		return fmt.Errorf("files are nil")
 	}
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	newStr := strings.Replace(item.To, "+", "", -1)
+
+	// Find the client by destination IP
 	client := s.gateway.getClient(newStr)
+
 	if client == nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"NoClientForDestination",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"to": item.To,
-			},
-		))
 		return fmt.Errorf("no client found for destination number: %s", item.To)
 	}
 
-	port := "25" // TODO: configurable
+	// Use default MM4 port if not specified
+	port := "25" // Default SMTP port todo
+
+	// Combine address and port
 	address := net.JoinHostPort(client.Address, port)
 
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.sendMM4",
-		"ConnectingToClientMM4",
-		logrus.InfoLevel,
-		map[string]interface{}{
-			"client": client.Username,
-			"addr":   address,
-			"to":     item.To,
-			"from":   item.From,
-		},
-	))
-
+	// Establish a plain TCP connection to the client's MM4 server with a timeout
 	conn, err := net.DialTimeout("tcp", address, 10*time.Second)
 	if err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"ConnectError",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client": client.Username,
-				"addr":   address,
-			}, err,
-		))
 		return fmt.Errorf("failed to connect to client's MM4 server at %s", address)
 	}
 	defer conn.Close()
 
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
+	// Set read and write deadlines to prevent hanging
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
@@ -719,145 +618,46 @@ func (s *MM4Server) sendMM4(item MsgQueueItem) error {
 		From:    mm4Message.From,
 		To:      []string{mm4Message.To},
 		Data:    mm4Message.Content,
-		Files:   mm4Message.Files,
+		Files:   mm4Message.Files, // Include media file (only 1)
 	}
 
 	// Read server's initial response
 	response, err := session.readResponse()
 	if err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"GreetingReadError",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client": client.Username,
-				"addr":   address,
-			}, err,
-		))
 		return fmt.Errorf("failed to read server greeting: %v", err)
 	}
 	if !strings.HasPrefix(response, "220") {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"UnexpectedGreeting",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client":    client.Username,
-				"addr":      address,
-				"response":  response,
-				"stage":     "greeting",
-				"direction": "recv",
-			},
-		))
 		return fmt.Errorf("unexpected server greeting: %s", response)
 	}
 
-	// EHLO
+	// Send EHLO command
 	if err := session.sendCommand("EHLO localhost"); err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"EHLOSendError",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client": client.Username,
-				"addr":   address,
-			}, err,
-		))
 		return err
 	}
 	response, err = session.readResponse()
 	if err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"EHLOReadError",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client": client.Username,
-				"addr":   address,
-			}, err,
-		))
 		return err
 	}
 	if !strings.HasPrefix(response, "250") {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"EHLOFailed",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client":   client.Username,
-				"addr":     address,
-				"response": response,
-			},
-		))
 		return fmt.Errorf("EHLO command failed: %s", response)
 	}
 
-	// Send MM4 DATA
+	// Proceed to send the MM4 message
 	if err := session.sendMM4Message(); err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"SendMM4Error",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client": client.Username,
-				"addr":   address,
-			}, err,
-		))
-		return fmt.Errorf("send MM4 failed: %v", err)
+		return fmt.Errorf("send MM4 failed: %s", response)
 	}
 
-	// QUIT
+	// Send QUIT command to terminate the session gracefully
 	if err := session.sendCommand("QUIT"); err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"QUITSendError",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client": client.Username,
-				"addr":   address,
-			}, err,
-		))
-		return fmt.Errorf("send QUIT failed: %v", err)
+		return fmt.Errorf("send QUIT failed: %s", response)
 	}
 	response, err = session.readResponse()
 	if err != nil {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"QUITReadError",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client": client.Username,
-				"addr":   address,
-			}, err,
-		))
 		return err
 	}
 	if !strings.HasPrefix(response, "221") {
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4",
-			"QUITFailed",
-			logrus.ErrorLevel,
-			map[string]interface{}{
-				"client":   client.Username,
-				"addr":     address,
-				"response": response,
-			},
-		))
 		return fmt.Errorf("QUIT command failed: %s", response)
 	}
-
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.sendMM4",
-		"MM4SendSuccess",
-		logrus.InfoLevel,
-		map[string]interface{}{
-			"client": client.Username,
-			"addr":   address,
-			"to":     item.To,
-			"from":   item.From,
-			"files":  len(item.files),
-		},
-	))
 
 	return nil
 }
@@ -870,18 +670,20 @@ func (s *MM4Server) createMM4Message(msgItem MsgQueueItem) *MM4Message {
 	headers.Set("MIME-Version", "1.0")
 	headers.Set("X-Mms-3GPP-Mms-Version", "6.10.0")
 	headers.Set("X-Mms-message-Type", "MM4_forward.REQ")
-	headers.Set("X-Mms-message-Id", fmt.Sprintf("<%s@%s>", msgItem.LogID, os.Getenv("MM4_MSG_ID_HOST")))
+	headers.Set("X-Mms-message-Id", fmt.Sprintf("<%s@%s>", msgItem.LogID, os.Getenv("MM4_MSG_ID_HOST"))) // todo Replace 'yourdomain.com' appropriately
 	headers.Set("X-Mms-Transaction-Id", msgItem.LogID)
 	headers.Set("X-Mms-Ack-Request", "Yes")
 
-	originatorSystem := os.Getenv("MM4_ORIGINATOR_SYSTEM")
+	originatorSystem := os.Getenv("MM4_ORIGINATOR_SYSTEM") // e.g., "system@108.165.150.61"
 	if originatorSystem == "" {
-		originatorSystem = "system@yourdomain.com"
+		originatorSystem = "system@yourdomain.com" // Fallback or default value
 	}
 	headers.Set("X-Mms-Originator-System", originatorSystem)
 	headers.Set("Date", time.Now().UTC().Format(time.RFC1123Z))
+	// Msg-Type will be set in sendMM4Message based on whether SMIL is included or not
 
-	files := make([]MsgFile, 0, len(msgItem.files))
+	files := make([]MsgFile, 0)
+
 	for _, f := range msgItem.files {
 		files = append(files, MsgFile{
 			Filename:    f.Filename,
@@ -903,24 +705,22 @@ func (s *MM4Server) createMM4Message(msgItem MsgQueueItem) *MM4Message {
 
 // sendCommand sends a command to the SMTP/MM4 server.
 func (s *Session) sendCommand(cmd string) error {
-	lm := s.Server.gateway.LogManager
+	/*logf := LoggingFormat{Type: LogType.MM4}
 
-	line := strings.TrimSpace(cmd)
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.sendCommand",
-		"CommandSend",
-		logrus.DebugLevel,
-		map[string]interface{}{
-			"client": s.Client.Username,
-			"ip":     s.ClientIP,
-			"cmd":    line,
-		},
-	))
+	if strings.ToLower(os.Getenv("MM4_DEBUG")) == "true" {
+		line := strings.TrimSpace(cmd)
+		logf.Type = LogType.MM4 + "_" + LogType.DEBUG
+		logf.Level = logrus.InfoLevel
+		logf.message = fmt.Sprintf("IP: %s - C: %s", s.ClientIP, line)
+		logf.Print()
+	}*/
 
-	if _, err := s.Writer.WriteString(cmd + "\r\n"); err != nil {
-		return fmt.Errorf("failed to send command '%s': %v", cmd, err)
+	_, err := s.Writer.WriteString(cmd + "\r\n")
+	if err != nil {
+		return fmt.Errorf("failed to send command '%s'", cmd)
 	}
-	if err := s.Writer.Flush(); err != nil {
+	err = s.Writer.Flush()
+	if err != nil {
 		return fmt.Errorf("failed to flush command '%s': %v", cmd, err)
 	}
 	return nil
@@ -928,7 +728,7 @@ func (s *Session) sendCommand(cmd string) error {
 
 // readResponse reads the server's response after sending a command.
 func (s *Session) readResponse() (string, error) {
-	lm := s.Server.gateway.LogManager
+	/*logf := LoggingFormat{Type: LogType.MM4}*/
 
 	response, err := s.Reader.ReadString('\n')
 	if err != nil {
@@ -936,23 +736,24 @@ func (s *Session) readResponse() (string, error) {
 	}
 	response = strings.TrimSpace(response)
 
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.readResponse",
-		"ResponseReceived",
-		logrus.DebugLevel,
-		map[string]interface{}{
-			"client":   s.Client.Username,
-			"ip":       s.ClientIP,
-			"response": response,
-		},
-	))
+	/*if strings.ToLower(os.Getenv("MM4_DEBUG")) == "true" {
+		logf.Type = LogType.MM4 + "_" + LogType.DEBUG
+		logf.Level = logrus.InfoLevel
+		logf.message = fmt.Sprintf("IP: %s - S: %s", s.ClientIP, response)
+		logf.Print()
+	}*/
 
-	if len(response) >= 3 {
-		codeStr := response[:3]
-		code, err := strconv.Atoi(codeStr)
-		if err == nil && code >= 400 {
-			return response, fmt.Errorf("server responded with error: %s", response)
-		}
+	// Check for SMTP error codes (4xx and 5xx)
+	if len(response) < 3 {
+		return response, nil
+	}
+	codeStr := response[:3]
+	code, err := strconv.Atoi(codeStr)
+	if err != nil {
+		return response, nil
+	}
+	if code >= 400 {
+		return response, fmt.Errorf("server responded with error: %s", response)
 	}
 	return response, nil
 }
@@ -989,6 +790,7 @@ func generateSMIL(files []MsgFile) ([]byte, error) {
 			smilBuffer.WriteString(fmt.Sprintf("<img src=\"%s\" region=\"Image\"/>\n", file.Filename))
 			smilBuffer.WriteString("</par>\n")
 		}
+		// Add more media types (e.g., audio, video) as needed
 	}
 
 	smilBuffer.WriteString("</body>\n")
@@ -998,13 +800,11 @@ func generateSMIL(files []MsgFile) ([]byte, error) {
 }
 
 func (s *Session) sendMM4Message() error {
-	lm := s.Server.gateway.LogManager
-
 	if len(s.Files) <= 0 {
 		return fmt.Errorf("no files found")
 	}
 
-	// MAIL FROM
+	// Step 1: MAIL FROM Command
 	mailFromCmd := fmt.Sprintf("MAIL FROM:<%s>", s.From)
 	if err := s.sendCommand(mailFromCmd); err != nil {
 		return err
@@ -1017,22 +817,22 @@ func (s *Session) sendMM4Message() error {
 		return fmt.Errorf("MAIL FROM command failed: %s", response)
 	}
 
-	// RCPT TO
+	// Step 2: RCPT TO Commands
 	for _, recipient := range s.To {
 		rcptToCmd := fmt.Sprintf("RCPT TO:<%s>", recipient)
 		if err := s.sendCommand(rcptToCmd); err != nil {
 			return err
 		}
-		response, err = s.readResponse()
+		response, err := s.readResponse()
 		if err != nil {
 			return err
 		}
 		if !strings.HasPrefix(response, "250") {
-			return fmt.Errorf("RCPT TO command failed for %s: %s", recipient, response)
+			return err
 		}
 	}
 
-	// DATA
+	// Step 3: DATA Command
 	if err := s.sendCommand("DATA"); err != nil {
 		return err
 	}
@@ -1041,19 +841,22 @@ func (s *Session) sendMM4Message() error {
 		return err
 	}
 	if !strings.HasPrefix(response, "354") {
-		return fmt.Errorf("DATA command failed: %s", response)
+		return err
 	}
 
+	// Step 4: Building the MIME Multipart message
 	var messageBuffer bytes.Buffer
 
+	// Step 4.1: Generate a Unique Boundary
 	boundary := generateBoundary()
 
-	// Headers
+	// Step 4.2: Construct the Headers
 	messageBuffer.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(s.To, ", ")))
 	messageBuffer.WriteString(fmt.Sprintf("From: %s\r\n", s.From))
 	messageBuffer.WriteString(fmt.Sprintf("Content-Type: multipart/related; boundary=\"%s\"\r\n", boundary))
 	messageBuffer.WriteString("MIME-Version: 1.0\r\n")
 
+	// Step 4.3: Add Additional Headers
 	essentialHeaders := []string{
 		"X-Mms-3GPP-Mms-Version",
 		"X-Mms-message-Type",
@@ -1070,15 +873,16 @@ func (s *Session) sendMM4Message() error {
 		}
 	}
 
-	messageBuffer.WriteString("\r\n")
+	messageBuffer.WriteString("\r\n") // End of headers
 
-	// SMIL part
+	// Step 4.4: Generate and Add the SMIL Part
 	if len(s.Files) > 0 {
 		smilContent, err := generateSMIL(s.Files)
 		if err != nil {
 			return err
 		}
 
+		// Add SMIL part
 		messageBuffer.WriteString(fmt.Sprintf("--%s\r\n", boundary))
 		messageBuffer.WriteString("Content-Id: <0.smil>\r\n")
 		messageBuffer.WriteString("Content-Type: application/smil; name=\"0.smil\"\r\n")
@@ -1087,12 +891,13 @@ func (s *Session) sendMM4Message() error {
 		messageBuffer.WriteString("\r\n")
 	}
 
-	// Media parts
-	for i, file := range s.Files {
+	// Step 4.5: Add Media files as MIME Parts
+	for _, file := range s.Files {
 		if file.ContentType == "application/smil" {
-			continue
+			continue // Skip the SMIL file if already added
 		}
 
+		// Add media file as MIME part
 		contentID := generateContentID()
 
 		messageBuffer.WriteString(fmt.Sprintf("--%s\r\n", boundary))
@@ -1103,61 +908,42 @@ func (s *Session) sendMM4Message() error {
 		messageBuffer.WriteString("Content-Transfer-Encoding: base64\r\n")
 		messageBuffer.WriteString("\r\n")
 
+		// Encode the file content in base64 with line breaks every 76 characters
 		encoded := base64.StdEncoding.EncodeToString(file.Content)
-		for j := 0; j < len(encoded); j += 76 {
-			end := j + 76
+		for i := 0; i < len(encoded); i += 76 {
+			end := i + 76
 			if end > len(encoded) {
 				end = len(encoded)
 			}
-			messageBuffer.WriteString(encoded[j:end] + "\r\n")
+			messageBuffer.WriteString(encoded[i:end] + "\r\n")
 		}
-
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.sendMM4Message",
-			"AttachedFile",
-			logrus.DebugLevel,
-			map[string]interface{}{
-				"client":      s.Client.Username,
-				"ip":          s.ClientIP,
-				"index":       i,
-				"filename":    file.Filename,
-				"contentType": file.ContentType,
-				"sizeBytes":   len(file.Content),
-			},
-		))
 	}
 
+	// End the multipart message
 	messageBuffer.WriteString(fmt.Sprintf("--%s--\r\n", boundary))
+
+	// Terminate the DATA section with a single dot
 	messageBuffer.WriteString(".\r\n")
 
+	// Step 5: Send the message data
 	msgData := messageBuffer.String()
-	if _, err := s.Writer.WriteString(msgData); err != nil {
+	_, err = s.Writer.WriteString(msgData)
+	if err != nil {
 		return err
 	}
-	if err := s.Writer.Flush(); err != nil {
+	err = s.Writer.Flush()
+	if err != nil {
 		return err
 	}
 
+	// Step 6: Read server's response after sending data
 	response, err = s.readResponse()
 	if err != nil {
 		return err
 	}
 	if !strings.HasPrefix(response, "250") {
-		return fmt.Errorf("DATA final response not 250: %s", response)
+		return err
 	}
-
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.sendMM4Message",
-		"MessageSent",
-		logrus.InfoLevel,
-		map[string]interface{}{
-			"client":    s.Client.Username,
-			"ip":        s.ClientIP,
-			"to":        s.To,
-			"from":      s.From,
-			"fileCount": len(s.Files),
-		},
-	))
 
 	return nil
 }
@@ -1179,7 +965,7 @@ func generateBoundary() string {
 
 // writeResponse sends a response to the client.
 func writeResponse(writer *bufio.Writer, response string) {
-	// low-level helper; MM4-specific logging happens at call sites
+	/*log.Printf("S: %s", response)*/
 	writer.WriteString(response + "\r\n")
 	writer.Flush()
 }

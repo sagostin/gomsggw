@@ -93,6 +93,28 @@ func NewSimpleHandler(server *SMPPServer) *SimpleHandler {
 	return &SimpleHandler{server: server}
 }
 
+// getSessionClientInfo returns (username, *Client) for a given session, if known.
+func (srv *SMPPServer) getSessionClientInfo(session *smpp.Session) (string, *Client) {
+	if srv == nil || session == nil || srv.gateway == nil {
+		return "", nil
+	}
+
+	srv.mu.RLock()
+	defer srv.mu.RUnlock()
+
+	for username, sess := range srv.conns {
+		if sess == session {
+			if srv.gateway.Clients != nil {
+				if c, ok := srv.gateway.Clients[username]; ok {
+					return username, c
+				}
+			}
+			return username, nil
+		}
+	}
+	return "", nil
+}
+
 func (srv *SMPPServer) removeSession(session *smpp.Session) {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
@@ -111,12 +133,21 @@ func (srv *SMPPServer) removeSession(session *smpp.Session) {
 				if session != nil && session.Parent != nil && session.Parent.RemoteAddr() != nil {
 					ip = session.Parent.RemoteAddr().String()
 				}
+
+				clientName := ""
+				if srv.gateway != nil && srv.gateway.Clients != nil {
+					if c, ok := srv.gateway.Clients[username]; ok && c != nil {
+						clientName = c.Username
+					}
+				}
+
 				lm.SendLog(lm.BuildLog(
 					"Server.SMPP.removeSession",
 					"SessionRemoved",
 					logrus.InfoLevel,
 					map[string]interface{}{
 						"username": username,
+						"client":   clientName,
 						"ip":       ip,
 					},
 				))
@@ -134,12 +165,20 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 		ip = session.Parent.RemoteAddr().String()
 	}
 
+	username, client := h.server.getSessionClientInfo(session)
+	clientName := ""
+	if client != nil {
+		clientName = client.Username
+	}
+
 	lm.SendLog(lm.BuildLog(
 		"Server.SMPP.Serve",
 		"SessionStarted",
 		logrus.InfoLevel,
 		map[string]interface{}{
-			"ip": ip,
+			"ip":       ip,
+			"username": username,
+			"client":   clientName,
 		},
 	))
 
@@ -154,7 +193,9 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 			"SessionClosed",
 			logrus.InfoLevel,
 			map[string]interface{}{
-				"ip": ip,
+				"ip":       ip,
+				"username": username,
+				"client":   clientName,
 			},
 		))
 	}()
@@ -168,12 +209,20 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 			return
 		case packet, ok := <-session.PDU():
 			if !ok {
+				username, client := h.server.getSessionClientInfo(session)
+				clientName := ""
+				if client != nil {
+					clientName = client.Username
+				}
+
 				lm.SendLog(lm.BuildLog(
 					"Server.SMPP.Serve",
 					"PDUChannelClosed",
 					logrus.DebugLevel,
 					map[string]interface{}{
-						"ip": ip,
+						"ip":       ip,
+						"username": username,
+						"client":   clientName,
 					},
 				))
 				return
@@ -197,13 +246,21 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 			err := session.EnquireLink(pingCtx, 15*time.Second, 5*time.Second)
 			cancel()
 
+			username, client := h.server.getSessionClientInfo(session)
+			clientName := ""
+			if client != nil {
+				clientName = client.Username
+			}
+
 			if err != nil {
 				lm.SendLog(lm.BuildLog(
 					"Server.SMPP.EnquireLink",
 					"SMPPEnquireLinkError",
 					logrus.WarnLevel,
 					map[string]interface{}{
-						"ip": session.Parent.RemoteAddr().String(),
+						"ip":       session.Parent.RemoteAddr().String(),
+						"username": username,
+						"client":   clientName,
 					}, err,
 				))
 				// Stop pinging on error; the main loop / library will handle closing.
@@ -215,7 +272,9 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 				"EnquireLinkOK",
 				logrus.DebugLevel,
 				map[string]interface{}{
-					"ip": session.Parent.RemoteAddr().String(),
+					"ip":       session.Parent.RemoteAddr().String(),
+					"username": username,
+					"client":   clientName,
 				},
 			))
 		}
@@ -238,6 +297,12 @@ func (s *SMPPServer) removePendingAck(seq int32) {
 
 func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	lm := h.server.gateway.LogManager
+
+	username, client := h.server.getSessionClientInfo(session)
+	clientName := ""
+	if client != nil {
+		clientName = client.Username
+	}
 
 	switch p := packet.(type) {
 	case *pdu.BindTransceiver:
@@ -267,53 +332,51 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 		h.handleUnbind(session, p)
 
 	case *pdu.UnbindResp:
-		// We initiated an Unbind and the peer acknowledged it.
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandlePDU",
 			"SMPPUnbindRespReceived",
 			logrus.DebugLevel,
 			map[string]interface{}{
 				"ip":             session.Parent.RemoteAddr().String(),
+				"username":       username,
+				"client":         clientName,
 				"go_type":        "*pdu.UnbindResp",
 				"command_status": p.Header.CommandStatus,
 				"sequence":       p.Header.Sequence,
 			},
 		))
-		// Optional: if your session lifecycle expects close after UnbindResp:
-		// _ = session.Close(context.Background())
-		// h.server.removeSession(session)
 
 	case *pdu.EnquireLinkResp:
-		// Keepalive response from the peer. Just log it so we don't treat it as "unhandled".
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandlePDU",
 			"SMPPEnquireLinkRespReceived",
 			logrus.DebugLevel,
 			map[string]interface{}{
 				"ip":             session.Parent.RemoteAddr().String(),
+				"username":       username,
+				"client":         clientName,
 				"go_type":        "*pdu.EnquireLinkResp",
 				"command_status": p.Header.CommandStatus,
 				"sequence":       p.Header.Sequence,
 			},
 		))
-		// If you ever track per-session last-activity timestamps, this is a good place to bump them.
 
 	case pdu.Responsable:
-		// Generic request PDUs we can auto-respond to.
 		if err := session.Send(p.Resp()); err != nil {
 			lm.SendLog(lm.BuildLog(
 				"Server.SMPP.HandlePDU",
 				"SMPPResponsableError",
 				logrus.ErrorLevel,
 				map[string]interface{}{
-					"ip":      session.Parent.RemoteAddr().String(),
-					"go_type": fmt.Sprintf("%T", packet),
+					"ip":       session.Parent.RemoteAddr().String(),
+					"username": username,
+					"client":   clientName,
+					"go_type":  fmt.Sprintf("%T", packet),
 				}, err,
 			))
 		}
 
 	default:
-		// Try to extract header info if the PDU exposes it.
 		var cmdID uint32
 		var seq uint32
 
@@ -333,10 +396,11 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 			logrus.WarnLevel,
 			map[string]interface{}{
 				"ip":         session.Parent.RemoteAddr().String(),
+				"username":   username,
+				"client":     clientName,
 				"go_type":    fmt.Sprintf("%T", packet),
 				"command_id": cmdID,
 				"sequence":   seq,
-				// "pdu": fmt.Sprintf("%#v", packet), // enable if you need full dump
 			},
 		))
 	}
@@ -356,7 +420,6 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 	// Helper to send a bind_resp with a given status and then close the session.
 	sendBindError := func(status uint32, reason string, logErr error) {
 		resp := bindReq.Resp()
-		//resp.Header.CommandStatus = status
 		_ = session.Send(resp)
 		_ = session.Close(context.Background())
 
@@ -388,11 +451,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		return
 	}
 
-	// Auth success
 	resp := bindReq.Resp()
-	// resp.Header.CommandStatus should already be 0 (ESME_ROK), but we can be explicit if needed.
-	// resp.Header.CommandStatus = 0
-
 	if err = session.Send(resp); err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleBind",
@@ -407,6 +466,13 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		return
 	}
 
+	clientName := ""
+	if h.server.gateway != nil && h.server.gateway.Clients != nil {
+		if c, ok := h.server.gateway.Clients[username]; ok && c != nil {
+			clientName = c.Username
+		}
+	}
+
 	lm.SendLog(lm.BuildLog(
 		"Server.SMPP.HandleBind",
 		"AuthSuccess",
@@ -414,6 +480,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		map[string]interface{}{
 			"ip":       ip,
 			"username": username,
+			"client":   clientName,
 		},
 	))
 
@@ -427,6 +494,7 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 			map[string]interface{}{
 				"ip":       ip,
 				"username": username,
+				"client":   clientName,
 			},
 		))
 		_ = oldSession.Close(context.Background())
@@ -463,9 +531,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 				"ip": session.Parent.RemoteAddr().String(),
 			},
 		))
-		// Optional: send back a SubmitSMResp with an error status instead of silent return.
 		resp := submitSM.Resp()
-		//resp.Header.CommandStatus = 0x0000000D // ESME_RINVDSTADR (for example)
 		_ = session.Send(resp)
 		return
 	}
@@ -576,27 +642,58 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 }
 
 func (h *SimpleHandler) handleDeliverSM(session *smpp.Session, deliverSM *pdu.DeliverSM) {
-	logf := LoggingFormat{Type: "handleDeliverSM"}
+	lm := h.server.gateway.LogManager
+
+	username, client := h.server.getSessionClientInfo(session)
+	clientName := ""
+	if client != nil {
+		clientName = client.Username
+	}
 
 	resp := deliverSM.Resp()
 	err := session.Send(resp)
 	if err != nil {
-		logf.Level = logrus.ErrorLevel
-		logf.Message = "error sending DeliverSM response"
-		logf.Error = err
-		logf.Print()
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleDeliverSM",
+			"DeliverSMRespSendError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"ip":       session.Parent.RemoteAddr().String(),
+				"username": username,
+				"client":   clientName,
+			}, err,
+		))
+	} else {
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleDeliverSM",
+			"DeliverSMRespSent",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"ip":       session.Parent.RemoteAddr().String(),
+				"username": username,
+				"client":   clientName,
+			},
+		))
 	}
 }
 
 func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) {
 	lm := h.server.gateway.LogManager
 
+	username, client := h.server.getSessionClientInfo(session)
+	clientName := ""
+	if client != nil {
+		clientName = client.Username
+	}
+
 	lm.SendLog(lm.BuildLog(
 		"Server.SMPP.HandleUnbind",
 		"ReceivedUnbind",
 		logrus.InfoLevel,
 		map[string]interface{}{
-			"ip": session.Parent.RemoteAddr().String(),
+			"ip":       session.Parent.RemoteAddr().String(),
+			"username": username,
+			"client":   clientName,
 		},
 	))
 
@@ -607,7 +704,9 @@ func (h *SimpleHandler) handleUnbind(session *smpp.Session, unbind *pdu.Unbind) 
 			"SMPPPDUError",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"ip": session.Parent.RemoteAddr().String(),
+				"ip":       session.Parent.RemoteAddr().String(),
+				"username": username,
+				"client":   clientName,
 			}, err,
 		))
 	}
@@ -720,6 +819,12 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		return fmt.Errorf("error finding SMPP session: %v", err)
 	}
 
+	username, client := s.getSessionClientInfo(session)
+	clientName := ""
+	if client != nil {
+		clientName = client.Username
+	}
+
 	nextSeq := session.NextSequence
 
 	// Determine best encoding + segmenting
@@ -737,9 +842,11 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"GSM7EncodeError",
 					logrus.ErrorLevel,
 					map[string]interface{}{
-						"to":      msg.To,
-						"from":    msg.From,
-						"segment": i,
+						"to":       msg.To,
+						"from":     msg.From,
+						"segment":  i,
+						"username": username,
+						"client":   clientName,
 					}, err,
 				))
 				return fmt.Errorf("GSM7 encode error: %w", err)
@@ -752,9 +859,11 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"EncodingError",
 					logrus.ErrorLevel,
 					map[string]interface{}{
-						"to":      msg.To,
-						"from":    msg.From,
-						"segment": i,
+						"to":       msg.To,
+						"from":     msg.From,
+						"segment":  i,
+						"username": username,
+						"client":   clientName,
 					}, err,
 				))
 				return fmt.Errorf("encoding error: %w", err)
@@ -784,6 +893,8 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 				"segment":   i,
 				"sequence":  seq,
 				"num_parts": len(segments),
+				"username":  username,
+				"client":    clientName,
 			},
 		))
 
@@ -798,6 +909,8 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"to":       msg.To,
 					"from":     msg.From,
 					"sequence": seq,
+					"username": username,
+					"client":   clientName,
 				}, err,
 			))
 			return fmt.Errorf("error sending SubmitSM: %v", err)
@@ -815,6 +928,8 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 						"from":          msg.From,
 						"sequence":      seq,
 						"commandStatus": respPDU.Header.CommandStatus,
+						"username":      username,
+						"client":        clientName,
 					},
 				))
 				return fmt.Errorf("non-OK response for sequence %d: %d", seq, respPDU.Header.CommandStatus)
@@ -828,6 +943,8 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"sequence": seq,
 					"to":       msg.To,
 					"from":     msg.From,
+					"username": username,
+					"client":   clientName,
 				},
 			))
 		case <-time.After(5 * time.Second):
@@ -840,6 +957,8 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"to":       msg.To,
 					"from":     msg.From,
 					"sequence": seq,
+					"username": username,
+					"client":   clientName,
 				},
 			))
 			return fmt.Errorf("timeout waiting for ack for sequence %d", seq)

@@ -419,10 +419,13 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 	srv.connectedClients[s.IPHash] = time.Now()
 	srv.mu.Unlock()
 
-	s.debugLog("ParsedCommand", map[string]interface{}{
-		"cmd": cmd,
-		"arg": arg,
-	})
+	if cmd != "NOOP" {
+		// to many noops lol
+		s.debugLog("ParsedCommand", map[string]interface{}{
+			"cmd": cmd,
+			"arg": arg,
+		})
+	}
 
 	switch cmd {
 	case "HELO", "EHLO":

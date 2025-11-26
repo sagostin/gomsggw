@@ -239,7 +239,6 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		// Existing connection
 		inactivityDuration := time.Since(lastActivity)
 		if inactivityDuration > 2*time.Minute {
-			// Log an alert for reconnecting after inactivity
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.HandleConnection",
 				"MM4ReconnectInactivity",
@@ -252,7 +251,6 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 				},
 			))
 		} else {
-			// Log regular reconnections
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.HandleConnection",
 				"MM4Reconnect",
@@ -350,11 +348,8 @@ type Session struct {
 	mongo      *mongo.Client
 }
 
-// debugLog is a helper to send debug logs when MM4_DEBUG is enabled.
+// debugLog is a helper to send debug logs via LogManager.
 func (s *Session) debugLog(action string, fields map[string]interface{}) {
-	if strings.ToLower(os.Getenv("MM4_DEBUG")) != "true" {
-		return
-	}
 	lm := s.Server.gateway.LogManager
 	base := map[string]interface{}{
 		"ip":         s.ClientIP,
@@ -401,7 +396,6 @@ func (s *Session) handleSession(srv *MM4Server) error {
 			"raw": line,
 		})
 
-		// Handle the command
 		if err := s.handleCommand(line, srv); err != nil {
 			s.debugLog("CommandHandlerError", map[string]interface{}{
 				"line":  line,
@@ -414,7 +408,6 @@ func (s *Session) handleSession(srv *MM4Server) error {
 
 // handleCommand processes a single SMTP command.
 func (s *Session) handleCommand(line string, srv *MM4Server) error {
-	// Split command and arguments
 	parts := strings.SplitN(line, " ", 2)
 	cmd := strings.ToUpper(parts[0])
 	var arg string
@@ -422,7 +415,6 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 		arg = parts[1]
 	}
 
-	// Update the timestamp with current time
 	srv.mu.Lock()
 	srv.connectedClients[s.IPHash] = time.Now()
 	srv.mu.Unlock()
@@ -464,7 +456,7 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 				"HandleData",
 				logrus.InfoLevel,
 				map[string]interface{}{
-					"client": s.Client.Username,
+					"client": safeClientUsername(s.Client),
 					"ip":     s.ClientIP,
 				},
 				err,
@@ -544,7 +536,7 @@ func (s *Session) handleData() error {
 
 	// Handle MM4 message
 	if err := s.handleMM4Message(); err != nil {
-		// 🔴 Catch-all dump for anything that bubbles up
+		// Catch-all dump for anything that bubbles up
 		s.dumpFullMM4("handle_mm4_message_error")
 		return err
 	}
@@ -553,7 +545,6 @@ func (s *Session) handleData() error {
 
 // handleMM4Message processes the MM4 message based on its type.
 func (s *Session) handleMM4Message() error {
-	// Check required MM4 headers
 	requiredHeaders := []string{
 		"X-Mms-3GPP-MMS-Version",
 		"X-Mms-message-Type",
@@ -564,7 +555,6 @@ func (s *Session) handleMM4Message() error {
 	}
 	for _, header := range requiredHeaders {
 		if s.Headers.Get(header) == "" {
-			// 🔴 Dump the full MM4 request before bailing
 			s.dumpFullMM4("missing_required_header_" + header)
 			return fmt.Errorf("missing required header: %s", header)
 		}
@@ -593,7 +583,6 @@ func (s *Session) handleMM4Message() error {
 	// Parse MIME parts to extract files
 	mm, err := mm4Message.parseMIMEParts()
 	if err != nil {
-		// 🔴 Dump entire thing if MIME parsing fails
 		s.dumpFullMM4("parse_mime_parts_error")
 		return fmt.Errorf("failed to parse MIME parts: %v", err)
 	}
@@ -1158,20 +1147,14 @@ func generateBoundary() string {
 
 // writeResponse sends a response to the client.
 func writeResponse(writer *bufio.Writer, response string) {
-	// this is effectively "server side" debug; keep it light
-	// log.Printf("S: %s", response)
 	writer.WriteString(response + "\r\n")
 	writer.Flush()
 }
 
 // dumpFullMM4 logs the full MM4 request (headers + body preview).
-// Uses MM4_DEBUG to avoid flooding logs in normal operation.
+// No env gating; relies purely on log level filtering.
 func (s *Session) dumpFullMM4(reason string) {
 	lm := s.Server.gateway.LogManager
-
-	// Turn this on ALWAYS for "reason" like missing headers,
-	// but still respect MM4_DEBUG for noisy cases if you want.
-	debug := strings.ToLower(os.Getenv("MM4_DEBUG")) == "true"
 
 	// Flatten headers into a simple map[string]string for logging
 	headersFlat := make(map[string]string, len(s.Headers))
@@ -1188,19 +1171,10 @@ func (s *Session) dumpFullMM4(reason string) {
 		truncated = true
 	}
 
-	level := logrus.InfoLevel
-	if !debug {
-		// In non-debug mode, keep it at Info only for serious reasons,
-		// you can change this to DebugLevel if it gets too noisy.
-		level = logrus.InfoLevel
-	} else {
-		level = logrus.DebugLevel
-	}
-
 	lm.SendLog(lm.BuildLog(
 		"Server.MM4.Raw",
 		"MM4RawRequest",
-		level,
+		logrus.DebugLevel,
 		map[string]interface{}{
 			"reason":           reason,
 			"client":           safeClientUsername(s.Client),

@@ -512,7 +512,7 @@ func (s *Session) handleMM4Message() error {
 	lm := s.Server.gateway.LogManager
 
 	requiredHeaders := []string{
-		"X-Mms-3GPP-MMS-Version",
+		/*"X-Mms-3GPP-MMS-Version",*/
 		"X-Mms-message-Type",
 		"X-Mms-message-ID",
 		"X-Mms-Transaction-ID",

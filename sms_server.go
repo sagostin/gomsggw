@@ -184,9 +184,32 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Track who caused the session to end.
+	var closedByServer bool
+	var closedByClient bool
+
 	defer func() {
-		// We *only* do local cleanup here; do NOT always call session.Close.
+		// Stop background goroutines.
 		cancel()
+
+		// Only force-close the SMPP session when *we* initiated the shutdown.
+		if closedByServer {
+			if err := session.Close(context.Background()); err != nil {
+				lm.SendLog(lm.BuildLog(
+					"Server.SMPP.Serve",
+					"SessionCloseError",
+					logrus.WarnLevel,
+					map[string]interface{}{
+						"ip":       ip,
+						"username": username,
+						"client":   clientName,
+					},
+					err,
+				))
+			}
+		}
+
+		// Remove from our tracking map.
 		h.server.removeSession(session)
 
 		lm.SendLog(lm.BuildLog(
@@ -194,30 +217,35 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 			"SessionClosed",
 			logrus.InfoLevel,
 			map[string]interface{}{
-				"ip":       ip,
-				"username": username,
-				"client":   clientName,
+				"ip":               ip,
+				"username":         username,
+				"client":           clientName,
+				"closed_by_server": closedByServer,
+				"closed_by_client": closedByClient,
 			},
 		))
 	}()
 
-	// If you suspect enquire_link is causing flaps, you can still comment this out.
+	// Periodic enquire_link
 	go h.enquireLink(session, ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Context cancelled from elsewhere; just return and let defer clean up state.
+			// Some higher-level logic canceled this context – treat as server-driven.
+			closedByServer = true
 			return
 
 		case packet, ok := <-session.PDU():
 			if !ok {
-				// PDU channel closed – usually indicates remote close/unbind or TCP EOF.
+				// PDU channel closed – usually remote close/unbind or TCP EOF.
 				username, client := h.server.getSessionClientInfo(session)
 				clientName := ""
 				if client != nil {
 					clientName = client.Username
 				}
+
+				closedByClient = true
 
 				lm.SendLog(lm.BuildLog(
 					"Server.SMPP.Serve",
@@ -230,37 +258,37 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 					},
 				))
 
-				// DO NOT call session.Close() here; the library / remote likely already did it.
+				// Do NOT call session.Close() here; remote/library already handled it.
 				return
 			}
 
-			// If handlePDU detects something fatal, it can explicitly close the session.
+			// If handlePDU detects a fatal condition, it can optionally cancel ctx
+			// (which will set closedByServer on the next select iteration),
+			// or you can change handlePDU to return an error and set closedByServer here.
 			h.handlePDU(session, packet)
 		}
 	}
 }
-
 func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) {
 	lm := h.server.gateway.LogManager
-	tick := time.NewTicker(15 * time.Second) // reduced to 15 seconds because of client flaps
+	tick := time.NewTicker(15 * time.Second) // keep your 15s if that matches clients
 	defer tick.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+
 		case <-tick.C:
-			pingCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			err := session.EnquireLink(pingCtx, 15*time.Second, 5*time.Second)
-			cancel()
-
-			username, client := h.server.getSessionClientInfo(session)
-			clientName := ""
-			if client != nil {
-				clientName = client.Username
-			}
-
+			// Use ctx directly like the old version to keep behavior identical.
+			err := session.EnquireLink(ctx, 15*time.Second, 5*time.Second)
 			if err != nil {
+				username, client := h.server.getSessionClientInfo(session)
+				clientName := ""
+				if client != nil {
+					clientName = client.Username
+				}
+
 				lm.SendLog(lm.BuildLog(
 					"Server.SMPP.EnquireLink",
 					"SMPPEnquireLinkError",
@@ -269,10 +297,19 @@ func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) 
 						"ip":       session.Parent.RemoteAddr().String(),
 						"username": username,
 						"client":   clientName,
-					}, err,
+					},
+					err,
 				))
-				// Stop pinging on error; the main loop / library will handle closing.
+
+				// Let the main loop / library handle closing; we just stop pinging.
 				return
+			}
+
+			// Optional; keep at Debug so it doesn't spam.
+			username, client := h.server.getSessionClientInfo(session)
+			clientName := ""
+			if client != nil {
+				clientName = client.Username
 			}
 
 			lm.SendLog(lm.BuildLog(

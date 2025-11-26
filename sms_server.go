@@ -233,7 +233,7 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 		select {
 		case <-ctx.Done():
 			// Some higher-level logic canceled this context – treat as server-driven.
-			closedByServer = true
+			// closedByServer = true
 			return
 
 		case packet, ok := <-session.PDU():

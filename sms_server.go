@@ -234,7 +234,7 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 
 func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) {
 	lm := h.server.gateway.LogManager
-	tick := time.NewTicker(60 * time.Second) // more relaxed than 15s; less likely to annoy clients
+	tick := time.NewTicker(15 * time.Second) // reduced to 15 seconds because of client flaps
 	defer tick.Stop()
 
 	for {

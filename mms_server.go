@@ -513,7 +513,7 @@ func (s *Session) handleMM4Message() error {
 
 	requiredHeaders := []string{
 		/*"X-Mms-3GPP-MMS-Version",*/
-		"X-Mms-message-Type",
+		/*"X-Mms-message-Type",*/
 		"X-Mms-message-ID",
 		"X-Mms-Transaction-ID",
 		"From",

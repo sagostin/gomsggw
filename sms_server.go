@@ -266,27 +266,77 @@ func (h *SimpleHandler) handlePDU(session *smpp.Session, packet any) {
 	case *pdu.Unbind:
 		h.handleUnbind(session, p)
 
+	case *pdu.UnbindResp:
+		// We initiated an Unbind and the peer acknowledged it.
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandlePDU",
+			"SMPPUnbindRespReceived",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"ip":             session.Parent.RemoteAddr().String(),
+				"go_type":        "*pdu.UnbindResp",
+				"command_status": p.Header.CommandStatus,
+				"sequence":       p.Header.Sequence,
+			},
+		))
+		// Optional: if your session lifecycle expects close after UnbindResp:
+		// _ = session.Close(context.Background())
+		// h.server.removeSession(session)
+
+	case *pdu.EnquireLinkResp:
+		// Keepalive response from the peer. Just log it so we don't treat it as "unhandled".
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandlePDU",
+			"SMPPEnquireLinkRespReceived",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"ip":             session.Parent.RemoteAddr().String(),
+				"go_type":        "*pdu.EnquireLinkResp",
+				"command_status": p.Header.CommandStatus,
+				"sequence":       p.Header.Sequence,
+			},
+		))
+		// If you ever track per-session last-activity timestamps, this is a good place to bump them.
+
 	case pdu.Responsable:
-		err := session.Send(p.Resp())
-		if err != nil {
+		// Generic request PDUs we can auto-respond to.
+		if err := session.Send(p.Resp()); err != nil {
 			lm.SendLog(lm.BuildLog(
 				"Server.SMPP.HandlePDU",
 				"SMPPResponsableError",
 				logrus.ErrorLevel,
 				map[string]interface{}{
-					"ip": session.Parent.RemoteAddr().String(),
+					"ip":      session.Parent.RemoteAddr().String(),
+					"go_type": fmt.Sprintf("%T", packet),
 				}, err,
 			))
 		}
 
 	default:
+		// Try to extract header info if the PDU exposes it.
+		var cmdID uint32
+		var seq uint32
+
+		if hPDU, ok := packet.(interface{ GetHeader() pdu.Header }); ok {
+			header := hPDU.GetHeader()
+			cmdID = uint32(header.CommandID)
+			seq = uint32(header.Sequence)
+		} else if hWithHeader, ok := packet.(interface{ Header() pdu.Header }); ok {
+			header := hWithHeader.Header()
+			cmdID = uint32(header.CommandID)
+			seq = uint32(header.Sequence)
+		}
+
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandlePDU",
 			"SMPPUnhandledPDU",
 			logrus.WarnLevel,
 			map[string]interface{}{
-				"ip":   session.Parent.RemoteAddr().String(),
-				"type": fmt.Sprintf("%T", p),
+				"ip":         session.Parent.RemoteAddr().String(),
+				"go_type":    fmt.Sprintf("%T", packet),
+				"command_id": cmdID,
+				"sequence":   seq,
+				// "pdu": fmt.Sprintf("%#v", packet), // enable if you need full dump
 			},
 		))
 	}

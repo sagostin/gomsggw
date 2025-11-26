@@ -183,9 +183,10 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 	))
 
 	ctx, cancel := context.WithCancel(context.Background())
+
 	defer func() {
+		// We *only* do local cleanup here; do NOT always call session.Close.
 		cancel()
-		_ = session.Close(ctx)
 		h.server.removeSession(session)
 
 		lm.SendLog(lm.BuildLog(
@@ -200,15 +201,18 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 		))
 	}()
 
-	// If you suspect enquire_link is causing flaps, you can comment this out
+	// If you suspect enquire_link is causing flaps, you can still comment this out.
 	go h.enquireLink(session, ctx)
 
 	for {
 		select {
 		case <-ctx.Done():
+			// Context cancelled from elsewhere; just return and let defer clean up state.
 			return
+
 		case packet, ok := <-session.PDU():
 			if !ok {
+				// PDU channel closed – usually indicates remote close/unbind or TCP EOF.
 				username, client := h.server.getSessionClientInfo(session)
 				clientName := ""
 				if client != nil {
@@ -225,8 +229,12 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 						"client":   clientName,
 					},
 				))
+
+				// DO NOT call session.Close() here; the library / remote likely already did it.
 				return
 			}
+
+			// If handlePDU detects something fatal, it can explicitly close the session.
 			h.handlePDU(session, packet)
 		}
 	}

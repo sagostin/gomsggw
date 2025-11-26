@@ -26,7 +26,7 @@ import (
 // Size limits
 const (
 	maxImageSize = 1 * 1024 * 1024 // 1 MB
-	maxFileSize  = 1 * 1024 * 1024 // 5 MB
+	maxFileSize  = 5 * 1024 * 1024 // 5 MB
 )
 
 // MsgFile represents an individual file extracted from the MIME multipart message.
@@ -38,65 +38,129 @@ type MsgFile struct {
 }
 
 func (s *MM4Server) transcodeMedia() {
-	for {
-		mm4Message := <-s.MediaTranscodeChan
+	lm := s.gateway.LogManager
 
-		//transId := primitive.NewObjectID().Hex()
+	for mm4Message := range s.MediaTranscodeChan {
+		start := time.Now()
 
-		ff, err := mm4Message.processAndConvertFiles()
-		if err != nil {
-			mm4Message.Files = nil
-			mm4Message.Content = nil // remove content to be safe
+		// Wrap per-message processing in a recover so one bad MMS doesn't kill the goroutine
+		func(msg *MM4Message) {
+			defer func() {
+				if r := recover(); r != nil {
+					var clientUser string
+					if msg.Client != nil {
+						clientUser = msg.Client.Username
+					}
+					lm.SendLog(lm.BuildLog(
+						"Server.MM4.TranscodeMedia",
+						"PanicRecovered",
+						logrus.ErrorLevel,
+						map[string]interface{}{
+							"from":          msg.From,
+							"to":            msg.To,
+							"transactionID": msg.TransactionID,
+							"client":        clientUser,
+						}, fmt.Errorf("panic: %v", r),
+					))
+				}
+			}()
 
-			mm4Message.Client.Password = "***"
-
-			// todo add log privacy
-
-			var lm = s.gateway.LogManager
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.TranscodeMedia",
-				"Failed to transcode media. %s",
-				logrus.ErrorLevel,
-				map[string]interface{}{
-					"mm4Message": mm4Message,
-					"logID":      mm4Message.TransactionID,
-				}, err,
-			))
-
-			msg := &MsgQueueItem{
-				To:              mm4Message.From,
-				From:            mm4Message.To,
-				Type:            "sms",
-				message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + mm4Message.TransactionID,
-				SkipNumberCheck: false,
-				LogID:           mm4Message.TransactionID,
-				Delivery: &MsgQueueDelivery{
-					Error:      "discard after first attempt",
-					RetryTime:  time.Now(),
-					RetryCount: 666,
-				},
+			var clientUser string
+			if msg.Client != nil {
+				clientUser = msg.Client.Username
 			}
 
-			s.gateway.Router.CarrierMsgChan <- *msg
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"StartTranscode",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"from":          msg.From,
+					"to":            msg.To,
+					"transactionID": msg.TransactionID,
+					"fileCount":     len(msg.Files),
+					"client":        clientUser,
+				},
+			))
 
-			continue
-		}
-		//mm4Message.files = ff
+			ff, err := msg.processAndConvertFiles()
+			if err != nil {
+				// Strip raw content to avoid logging body
+				msg.Content = nil
 
-		msgItem := MsgQueueItem{
-			To:                mm4Message.To,
-			From:              mm4Message.From,
-			ReceivedTimestamp: time.Now(),
-			Type:              MsgQueueItemType.MMS,
-			files:             ff,
-			LogID:             mm4Message.TransactionID,
-		}
+				if msg.Client != nil {
+					msg.Client.Password = "***"
+				}
 
-		s.gateway.Router.ClientMsgChan <- msgItem
+				lm.SendLog(lm.BuildLog(
+					"Server.MM4.TranscodeMedia",
+					"TranscodeFailed",
+					logrus.ErrorLevel,
+					map[string]interface{}{
+						"from":          msg.From,
+						"to":            msg.To,
+						"transactionID": msg.TransactionID,
+						"client":        clientUser,
+						"fileCount":     len(msg.Files),
+					}, err,
+				))
+
+				errText := "An error occurred. Please try again later or contact our support if the issue persists. ID: " + msg.TransactionID
+
+				msgItem := &MsgQueueItem{
+					To:              msg.From,
+					From:            msg.To,
+					Type:            "sms",
+					message:         errText,
+					SkipNumberCheck: false,
+					LogID:           msg.TransactionID,
+					Delivery: &MsgQueueDelivery{
+						Error:      "discard after first attempt",
+						RetryTime:  time.Now(),
+						RetryCount: 666,
+					},
+				}
+
+				s.gateway.Router.CarrierMsgChan <- *msgItem
+				return
+			}
+
+			totalBytes := 0
+			for _, f := range ff {
+				totalBytes += len(f.Content)
+			}
+
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"TranscodeSuccess",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"from":          msg.From,
+					"to":            msg.To,
+					"transactionID": msg.TransactionID,
+					"client":        clientUser,
+					"fileCountIn":   len(msg.Files),
+					"fileCountOut":  len(ff),
+					"totalBytes":    totalBytes,
+					"duration_ms":   time.Since(start).Milliseconds(),
+				},
+			))
+
+			msgItem := MsgQueueItem{
+				To:                msg.To,
+				From:              msg.From,
+				ReceivedTimestamp: time.Now(),
+				Type:              MsgQueueItemType.MMS,
+				files:             ff,
+				LogID:             msg.TransactionID,
+			}
+
+			s.gateway.Router.ClientMsgChan <- msgItem
+		}(mm4Message)
 	}
 }
 
-// List of compatible MIME types
+// List of compatible MIME types (currently not enforced, but can be used for validation if needed).
 var compatibleTypes = map[string]bool{
 	"image/jpeg": true, "image/jpg": true, "image/gif": true, "image/png": true,
 	"audio/basic": true, "audio/L24": true, "audio/mp4": true, "audio/mpeg": true,
@@ -116,23 +180,27 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 	var processedFiles []MsgFile
 
 	for _, file := range m.Files {
+		// Pass-through SMIL
 		if strings.Contains(file.ContentType, "application/smil") {
 			processedFiles = append(processedFiles, file)
 			continue
 		}
 
+		// Try to decode as base64. If that fails, treat as raw bytes.
 		decodedContent, err := decodeBase64(file.Content)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode Base64 content: %v", err)
+			decodedContent = file.Content
 		}
 
 		if strings.Contains(file.ContentType, "application/octet-stream") || file.ContentType == "" {
 			file.ContentType = detectMIMEType(decodedContent)
 		}
 
-		var convertedContent []byte
-		var newType string
-		var newExt string
+		var (
+			convertedContent []byte
+			newType          string
+			newExt           string
+		)
 
 		switch {
 		case strings.HasPrefix(file.ContentType, "image/"):
@@ -152,40 +220,38 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 				}
 			}
 			if err != nil {
-				return nil, fmt.Errorf("failed to process image: %v", err)
+				return nil, fmt.Errorf("failed to process image (%s): %v", file.ContentType, err)
 			}
 
 		case strings.HasPrefix(file.ContentType, "video/"):
 			convertedContent, newType, err = processVideoContent(decodedContent)
 			newExt = ".3gp"
 			if err != nil {
-				return nil, fmt.Errorf("failed to process video: %v", err)
+				return nil, fmt.Errorf("failed to process video (%s): %v", file.ContentType, err)
 			}
 
 		case strings.HasPrefix(file.ContentType, "audio/"):
 			convertedContent, newType, err = convertToMP3(decodedContent)
 			newExt = ".mp3"
 			if err != nil {
-				return nil, fmt.Errorf("failed to convert audio: %v", err)
+				return nil, fmt.Errorf("failed to convert audio (%s): %v", file.ContentType, err)
 			}
 
 		default:
+			// For non-media files, just enforce size limit. No magical ffmpeg on random docs.
 			convertedContent, err = compressFile(decodedContent, int(maxFileSize))
 			if err != nil {
-				return nil, fmt.Errorf("failed to compress file: %v", err)
+				return nil, fmt.Errorf("failed to process file (%s): %v", file.ContentType, err)
 			}
 			newType = file.ContentType
-			// Keep original extension if present
 			newExt = filepath.Ext(file.Filename)
 		}
 
-		// Update filename with new extension if needed
-		// baseName := strings.TrimSuffix(file.Filename, filepath.Ext(file.Filename))
 		file.Filename = uuid.New().String() + newExt
-
 		file.Content = convertedContent
 		file.ContentType = newType
 		file.Base64Data = encodeToBase64(convertedContent)
+
 		processedFiles = append(processedFiles, file)
 	}
 
@@ -194,78 +260,64 @@ func (m *MM4Message) processAndConvertFiles() ([]MsgFile, error) {
 
 // convertTo3GPP compresses and converts video content to 3GPP format suitable for MMS transmission.
 func convertTo3GPP(content []byte, transcodeVideo, transcodeAudio bool) ([]byte, error) {
-	// Determine temporary file path
 	tempPath := os.Getenv("TRANSCODE_TEMP_PATH")
 	if tempPath == "" {
-		tempPath = os.TempDir() // Use OS temp directory as fallback
+		tempPath = os.TempDir()
 	}
 
-	// Generate unique file names for input and output
 	inputFile := filepath.Join(tempPath, uuid.New().String())
-	outputFile := filepath.Join(tempPath, uuid.New().String()) // Use .3gp extension for 3GPP format
+	outputFile := filepath.Join(tempPath, uuid.New().String()) // 3GPP container
 
-	// Save the input content to a temporary file
-	err := ioutil.WriteFile(inputFile, content, 0644)
-	if err != nil {
+	if err := ioutil.WriteFile(inputFile, content, 0644); err != nil {
 		return nil, fmt.Errorf("failed to write temporary input file: %v", err)
 	}
-	defer os.Remove(inputFile) // Ensure cleanup
+	defer os.Remove(inputFile)
 
-	// Build FFmpeg command
 	ffmpegCmd := ffmpeg.Input(inputFile)
-
-	// Apply video filters if transcoding is required
 	if transcodeVideo {
-		// Apply scale and pad filters to maintain aspect ratio and fit into 176x144
-		ffmpegCmd = ffmpegCmd.Filter("scale", ffmpeg.Args{"w=176", "h=144", "force_original_aspect_ratio=decrease"}).Filter(
-			"pad",
-			ffmpeg.Args{"w=176", "h=144", "x=(ow-iw)/2", "y=(oh-ih)/2"},
-		)
+		ffmpegCmd = ffmpegCmd.Filter("scale",
+			ffmpeg.Args{"w=176", "h=144", "force_original_aspect_ratio=decrease"}).
+			Filter("pad",
+				ffmpeg.Args{"w=176", "h=144", "x=(ow-iw)/2", "y=(oh-ih)/2"},
+			)
 	}
 
-	// Prepare output arguments
 	outputArgs := ffmpeg.KwArgs{
-		"f": "3gp", // Output format
+		"f": "3gp",
 	}
 
-	// Set video codec options
 	if transcodeVideo {
-		outputArgs["c:v"] = "h263"     // Use H.263 codec for compatibility
-		outputArgs["b:v"] = "128k"     // Lower video bitrate for smaller size
-		outputArgs["maxrate"] = "128k" // Limit max bitrate
-		outputArgs["bufsize"] = "256k" // Buffer size for rate control
-		outputArgs["r"] = "12"         // Reduce frame rate to 12 FPS
+		outputArgs["c:v"] = "h263"
+		outputArgs["b:v"] = "128k"
+		outputArgs["maxrate"] = "128k"
+		outputArgs["bufsize"] = "256k"
+		outputArgs["r"] = "12"
 	} else {
 		outputArgs["c:v"] = "copy"
 	}
 
-	// Set audio codec options
 	if transcodeAudio {
-		outputArgs["c:a"] = "amr_nb" // Use AMR-NB codec for MMS compatibility
-		outputArgs["b:a"] = "12.2k"  // Lower audio bitrate
-		outputArgs["ar"] = "8000"    // Set audio sample rate to 8000 Hz
+		outputArgs["c:a"] = "amr_nb"
+		outputArgs["b:a"] = "12.2k"
+		outputArgs["ar"] = "8000"
 	} else {
 		outputArgs["c:a"] = "copy"
 	}
 
-	// Add output to command
 	ffmpegCmd = ffmpegCmd.Output(outputFile, outputArgs)
 
-	// Capture FFmpeg's stderr output for debugging
 	var stderr bytes.Buffer
-	err = ffmpegCmd.OverWriteOutput().ErrorToStdOut().WithErrorOutput(&stderr).Run()
+	err := ffmpegCmd.OverWriteOutput().ErrorToStdOut().WithErrorOutput(&stderr).Run()
 	if err != nil {
 		return nil, fmt.Errorf("FFmpeg processing failed: %v\nFFmpeg stderr:\n%s", err, stderr.String())
 	}
-	defer os.Remove(outputFile) // Ensure cleanup
+	defer os.Remove(outputFile)
 
-	// Read the processed output file
 	processedContent, err := ioutil.ReadFile(outputFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read temporary output file: %v", err)
 	}
 
-	// Validate file size (600 KB limit for MMS)
 	if len(processedContent) > int(maxFileSize) {
 		return nil, fmt.Errorf("compressed video file exceeds size limit of %.2f KB", float64(maxFileSize)/1024)
 	}
@@ -290,8 +342,7 @@ func convertImageToPNG(content []byte) ([]byte, string, error) {
 	}
 
 	var buf bytes.Buffer
-	err = png.Encode(&buf, img)
-	if err != nil {
+	if err := png.Encode(&buf, img); err != nil {
 		return nil, "", fmt.Errorf("failed to encode image as PNG: %v", err)
 	}
 
@@ -300,24 +351,23 @@ func convertImageToPNG(content []byte) ([]byte, string, error) {
 
 // processVideoContent converts video content if needed.
 func processVideoContent(content []byte) ([]byte, string, error) {
-	_, _, err := detectCodecs(content)
+	videoCodec, audioCodec, err := detectCodecs(content)
 	if err != nil {
-		return nil, "", err
+		// If probing fails, just try transcoding anyway.
+		data, err := convertTo3GPP(content, true, true)
+		return data, "video/3gpp", err
 	}
 
-	/*transcodeVideo := videoCodec != "h264"
-	transcodeAudio := audioCodec != "aac"
+	// For now we force transcode to 3GPP-compatible regardless, but this is where
+	// you could be smarter based on codecs.
+	_ = videoCodec
+	_ = audioCodec
 
-	if !transcodeVideo && !transcodeAudio {
-		return content, "video/3gpp", nil
-	}*/
-
-	data, err := convertTo3GPP(content, true, false)
-
+	data, err := convertTo3GPP(content, true, true)
 	return data, "video/3gpp", err
 }
 
-// compressJPEG compresses JPEG images to be under 1MB.
+// compressJPEG compresses JPEG images to be under maxSize.
 func compressJPEG(content []byte, maxSize int) ([]byte, error) {
 	img, err := jpeg.Decode(bytes.NewReader(content))
 	if err != nil {
@@ -328,20 +378,23 @@ func compressJPEG(content []byte, maxSize int) ([]byte, error) {
 	quality := 80
 	for {
 		buf.Reset()
-		err = jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality})
-		if err != nil {
+		if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality}); err != nil {
 			return nil, fmt.Errorf("failed to encode JPEG: %v", err)
 		}
 		if buf.Len() <= maxSize || quality < 10 {
 			break
 		}
-		quality -= 10 // Gradually reduce quality if size is too large
+		quality -= 10
+	}
+
+	if buf.Len() > maxSize {
+		return nil, fmt.Errorf("JPEG image exceeds size limit after compression")
 	}
 
 	return buf.Bytes(), nil
 }
 
-// compressPNG compresses PNG images using lower compression levels to be under 1MB.
+// compressPNG compresses PNG images to be under maxSize (re-encode, then enforce limit).
 func compressPNG(content []byte, maxSize int) ([]byte, error) {
 	img, err := png.Decode(bytes.NewReader(content))
 	if err != nil {
@@ -349,12 +402,10 @@ func compressPNG(content []byte, maxSize int) ([]byte, error) {
 	}
 
 	var buf bytes.Buffer
-	err = png.Encode(&buf, img)
-	if err != nil {
+	if err := png.Encode(&buf, img); err != nil {
 		return nil, fmt.Errorf("failed to encode PNG: %v", err)
 	}
 
-	// Check if the output is larger than the allowed limit (1MB)
 	if buf.Len() > maxSize {
 		return nil, fmt.Errorf("PNG image exceeds size limit")
 	}
@@ -362,41 +413,12 @@ func compressPNG(content []byte, maxSize int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// compressFile compresses any other file type to be under the specified max size.
+// compressFile enforces a max size for non-media files (no actual recompression).
 func compressFile(content []byte, maxSize int) ([]byte, error) {
 	if len(content) <= maxSize {
 		return content, nil
 	}
-
-	pr, pw := io.Pipe()
-	prOut, pwOut := io.Pipe()
-	defer pr.Close()
-	defer pwOut.Close()
-
-	go func() {
-		_, _ = pw.Write(content)
-		_ = pw.Close()
-	}()
-
-	var outputBuffer bytes.Buffer
-	ffmpegCmd := ffmpeg.Input("pipe:0").
-		Output("pipe:1", ffmpeg.KwArgs{"c:v": "libx264", "crf": 28, "preset": "slow"}).
-		WithInput(pr).
-		WithOutput(pwOut).
-		OverWriteOutput().
-		Run()
-
-	go func() {
-		_ = ffmpegCmd
-		_ = pwOut.Close()
-	}()
-
-	_, _ = io.Copy(&outputBuffer, prOut)
-	if outputBuffer.Len() > maxSize {
-		return nil, fmt.Errorf("file exceeds size limit after compression")
-	}
-
-	return outputBuffer.Bytes(), nil
+	return nil, fmt.Errorf("file exceeds size limit of %d bytes", maxSize)
 }
 
 // detectCodecs probes the input content to determine its codecs.
@@ -407,8 +429,7 @@ func detectCodecs(content []byte) (string, string, error) {
 	}
 	defer os.Remove(tmpFile.Name())
 
-	_, err = tmpFile.Write(content)
-	if err != nil {
+	if _, err := tmpFile.Write(content); err != nil {
 		return "", "", err
 	}
 	tmpFile.Close()
@@ -426,8 +447,7 @@ func detectCodecs(content []byte) (string, string, error) {
 	}
 
 	var info StreamInfo
-	err = json.Unmarshal([]byte(data), &info)
-	if err != nil {
+	if err := json.Unmarshal([]byte(data), &info); err != nil {
 		return "", "", err
 	}
 
@@ -444,6 +464,7 @@ func detectCodecs(content []byte) (string, string, error) {
 }
 
 // convertToMP4 compresses and converts video content to MP4 format using ffmpeg.
+// (Currently unused in the MM4 flow, but left here cleaned up for future use.)
 func convertToMP4(content []byte, transcodeVideo, transcodeAudio bool) ([]byte, error) {
 	pr, pw := io.Pipe()
 	prOut, pwOut := io.Pipe()
@@ -454,41 +475,42 @@ func convertToMP4(content []byte, transcodeVideo, transcodeAudio bool) ([]byte, 
 	}()
 
 	var outputBuffer bytes.Buffer
-	ffmpegCmd := ffmpeg.Input("pipe:0")
 
-	// Set video transcoding options with compression
+	args := ffmpeg.KwArgs{}
 	if transcodeVideo {
-		ffmpegCmd = ffmpegCmd.Output("pipe:1", ffmpeg.KwArgs{
-			"c:v":     "libx264",
-			"crf":     30, // Higher CRF value for better compression
-			"preset":  "veryfast",
-			"maxrate": "1M",
-			"bufsize": "2M",
-		})
+		args["c:v"] = "libx264"
+		args["crf"] = 30
+		args["preset"] = "veryfast"
+		args["maxrate"] = "1M"
+		args["bufsize"] = "2M"
 	} else {
-		ffmpegCmd = ffmpegCmd.Output("pipe:1", ffmpeg.KwArgs{"c:v": "copy"})
+		args["c:v"] = "copy"
 	}
 
-	// Set audio transcoding options with compression
 	if transcodeAudio {
-		ffmpegCmd = ffmpegCmd.Output("pipe:1", ffmpeg.KwArgs{
-			"c:a": "aac",
-			"b:a": "96k", // Lower bitrate for audio compression
-		})
+		args["c:a"] = "aac"
+		args["b:a"] = "96k"
 	} else {
-		ffmpegCmd = ffmpegCmd.Output("pipe:1", ffmpeg.KwArgs{"c:a": "copy"})
+		args["c:a"] = "copy"
 	}
 
 	go func() {
-		_ = ffmpegCmd.WithInput(pr).WithOutput(pwOut).OverWriteOutput().Run()
+		err := ffmpeg.Input("pipe:0").
+			Output("pipe:1", args).
+			WithInput(pr).
+			WithOutput(pwOut).
+			OverWriteOutput().
+			Run()
+		if err != nil {
+			fmt.Printf("FFmpeg MP4 error: %v\n", err)
+		}
 		_ = pwOut.Close()
 	}()
 
 	_, _ = io.Copy(&outputBuffer, prOut)
 
-	// Check if the output is larger than the allowed limit (5MB)
 	if outputBuffer.Len() > maxFileSize {
-		return nil, fmt.Errorf("compressed video file exceeds size limit of 5MB")
+		return nil, fmt.Errorf("compressed video file exceeds size limit of %d bytes", maxFileSize)
 	}
 
 	return outputBuffer.Bytes(), nil
@@ -510,7 +532,7 @@ func convertToMP3(content []byte) ([]byte, string, error) {
 		err := ffmpeg.Input("pipe:0").
 			Output("pipe:1", ffmpeg.KwArgs{
 				"c:a": "libmp3lame",
-				"b:a": "128k", // Set bitrate for compression
+				"b:a": "128k",
 				"ar":  "44100",
 			}).
 			WithInput(pr).
@@ -518,14 +540,13 @@ func convertToMP3(content []byte) ([]byte, string, error) {
 			OverWriteOutput().
 			Run()
 		if err != nil {
-			fmt.Printf("FFmpeg error: %v\n", err)
+			fmt.Printf("FFmpeg MP3 error: %v\n", err)
 		}
 		_ = pwOut.Close()
 	}()
 
 	_, _ = io.Copy(&outputBuffer, prOut)
 
-	// Check if the output is larger than the allowed limit (5MB)
 	if outputBuffer.Len() > maxFileSize {
 		return nil, "", fmt.Errorf("compressed audio file exceeds size limit of 5MB")
 	}

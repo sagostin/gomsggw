@@ -17,17 +17,6 @@ import (
 	"zultys-smpp-mm4/smpp/pdu"
 )
 
-// Some SMPP command status codes we care about.
-//
-// These are standard SMPP v3.4 values:
-//
-// ESME_RINVSYSID  = 0x0000000A (Invalid System ID)
-// ESME_RINVPASWD  = 0x0000000F (Invalid Password)
-const (
-	ESME_RINVSYSID uint32 = 0x0000000A
-	ESME_RINVPASWD uint32 = 0x0000000F
-)
-
 type SMPPServer struct {
 	TLS              *tls.Config
 	conns            map[string]*smpp.Session
@@ -463,8 +452,8 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 	}
 
 	// Helper to send a bind_resp with a given status and then close the session.
-	sendBindError := func(status uint32, reason string, logErr error) {
-		resp := bindReq.Resp()
+	sendBindError := func(status pdu.CommandStatus, reason string, logErr error) {
+		resp := bindReq.Resp(status)
 		_ = session.Send(resp)
 		_ = session.Close(context.Background())
 
@@ -481,22 +470,22 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 	}
 
 	if username == "" || password == "" {
-		sendBindError(ESME_RINVSYSID, "AuthFailedMissingCredentials", nil)
+		sendBindError(pdu.ErrInvalidSystemID, "AuthFailedMissingCredentials", nil)
 		return
 	}
 
 	authed, err := h.server.gateway.authClient(username, password)
 	if err != nil {
-		sendBindError(ESME_RINVPASWD, "AuthFailedInternal", err)
+		sendBindError(pdu.ErrInvalidPasswd, "AuthFailedInternal", err)
 		return
 	}
 
 	if !authed {
-		sendBindError(ESME_RINVPASWD, "AuthFailedInvalidCredentials", nil)
+		sendBindError(pdu.ErrInvalidPasswd, "AuthFailedInvalidCredentials", nil)
 		return
 	}
 
-	resp := bindReq.Resp()
+	resp := bindReq.Resp(pdu.ESME_ROK)
 	if err = session.Send(resp); err != nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleBind",

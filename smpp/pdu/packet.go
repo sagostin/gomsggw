@@ -45,8 +45,8 @@ type BindTransceiver struct {
 	AddressRange Address // see section 4.7.3.1
 }
 
-func (p *BindTransceiver) Resp() any {
-	return &BindTransceiverResp{Header: Header{Sequence: p.Header.Sequence}, SystemID: p.SystemID}
+func (p *BindTransceiver) Resp(status CommandStatus) any {
+	return &BindTransceiverResp{Header: Header{Sequence: p.Header.Sequence, CommandStatus: status}, SystemID: p.SystemID}
 }
 
 // BindTransceiverResp see SMPP v5, section 4.1.1.6 (60p)

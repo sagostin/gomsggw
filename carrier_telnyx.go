@@ -412,6 +412,25 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+
+		// check if it was blocked due to stop message
+		if strings.Contains(string(bodyBytes), "Blocked due to STOP message") {
+			lm.SendLog(lm.BuildLog(
+				"Carrier.SendSMS.Telnyx",
+				"Blocked due to STOP message",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"logID":           sms.LogID,
+					"response_code":   resp.StatusCode,
+					"response_status": resp.Status,
+					"to":              sms.To,
+					"from":            sms.From,
+					"response_body":   string(bodyBytes), // Include response body for debugging
+				}, err,
+			))
+			return "STOP_MESSAGE", errors.New("blocked due to STOP message")
+		}
+
 		lm.SendLog(lm.BuildLog(
 			"Carrier.SendSMS.Telnyx",
 			"Failed to send SMS to Carrier",
@@ -554,6 +573,24 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		// check if it was blocked due to stop message
+		if strings.Contains(string(bodyBytes), "Blocked due to STOP message") {
+			lm.SendLog(lm.BuildLog(
+				"Carrier.SendSMS.Telnyx",
+				"Blocked due to STOP message",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"logID":           mms.LogID,
+					"response_code":   resp.StatusCode,
+					"response_status": resp.Status,
+					"to":              mms.To,
+					"from":            mms.From,
+					"response_body":   string(bodyBytes), // Include response body for debugging
+				}, err,
+			))
+			return "STOP_MESSAGE", errors.New("blocked due to STOP message")
+		}
+
 		lm.SendLog(lm.BuildLog(
 			"Carrier.SendMMS.Telnyx",
 			"Failed to send MMS to Carrier",

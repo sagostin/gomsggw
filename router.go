@@ -127,22 +127,13 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				if route != nil {
 					ackID, err := route.Handler.SendSMS(m)
 					if err != nil {
-						lm.SendLog(lm.BuildLog(
-							"ROUTER.SMS",
-							"RouterSendCarrier",
-							logrus.ErrorLevel,
-							map[string]interface{}{
-								"client": fromClient.Username,
-								"logID":  m.LogID,
-							}, err,
-						))
-						if m.Retry("failed to send SMPP to carrier", retryChan) {
-							// todo send error message back to sender if it is a found client as the sender
+
+						if ackID == "STOP_MESSAGE" {
 							msg := &MsgQueueItem{
 								To:              m.From,
 								From:            m.To,
 								Type:            "sms",
-								message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
+								message:         "Blocked due to STOP message. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
 								SkipNumberCheck: false,
 								LogID:           m.LogID,
 								Delivery: &MsgQueueDelivery{
@@ -153,6 +144,35 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 							}
 
 							router.CarrierMsgChan <- *msg
+							return
+						} else {
+							lm.SendLog(lm.BuildLog(
+								"ROUTER.SMS",
+								"RouterSendCarrier",
+								logrus.ErrorLevel,
+								map[string]interface{}{
+									"client": fromClient.Username,
+									"logID":  m.LogID,
+								}, err,
+							))
+							if m.Retry("failed to send SMPP to carrier", retryChan) {
+								// todo send error message back to sender if it is a found client as the sender
+								msg := &MsgQueueItem{
+									To:              m.From,
+									From:            m.To,
+									Type:            "sms",
+									message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
+									SkipNumberCheck: false,
+									LogID:           m.LogID,
+									Delivery: &MsgQueueDelivery{
+										Error:      "discard after first attempt",
+										RetryTime:  time.Now(),
+										RetryCount: 666,
+									},
+								}
+
+								router.CarrierMsgChan <- *msg
+							}
 						}
 						return
 					}
@@ -225,22 +245,13 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				if route != nil {
 					ackID, err := route.Handler.SendMMS(m)
 					if err != nil {
-						lm.SendLog(lm.BuildLog(
-							"ROUTER.MMS",
-							"RouterSendCarrier",
-							logrus.ErrorLevel,
-							map[string]interface{}{
-								"client": fromClient.Username,
-								"logID":  m.LogID,
-							}, err,
-						))
 
-						if m.Retry("failed to send MMS to carrier", retryChan) {
+						if ackID == "STOP_MESSAGE" {
 							msg := &MsgQueueItem{
 								To:              m.From,
 								From:            m.To,
 								Type:            "sms",
-								message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
+								message:         "Blocked due to STOP message. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
 								SkipNumberCheck: false,
 								LogID:           m.LogID,
 								Delivery: &MsgQueueDelivery{
@@ -251,9 +262,38 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 							}
 
 							router.CarrierMsgChan <- *msg
-						}
+							return
+						} else {
+							lm.SendLog(lm.BuildLog(
+								"ROUTER.MMS",
+								"RouterSendCarrier",
+								logrus.ErrorLevel,
+								map[string]interface{}{
+									"client": fromClient.Username,
+									"logID":  m.LogID,
+								}, err,
+							))
 
-						return
+							if m.Retry("failed to send MMS to carrier", retryChan) {
+								msg := &MsgQueueItem{
+									To:              m.From,
+									From:            m.To,
+									Type:            "sms",
+									message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
+									SkipNumberCheck: false,
+									LogID:           m.LogID,
+									Delivery: &MsgQueueDelivery{
+										Error:      "discard after first attempt",
+										RetryTime:  time.Now(),
+										RetryCount: 666,
+									},
+								}
+
+								router.CarrierMsgChan <- *msg
+							}
+
+							return
+						}
 					}
 
 					lm.SendLog(lm.BuildLog(

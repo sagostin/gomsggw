@@ -392,10 +392,6 @@ func (s *Session) handleSession(srv *MM4Server) error {
 			continue
 		}
 
-		s.debugLog("IncomingCommand", map[string]interface{}{
-			"raw": line,
-		})
-
 		if err := s.handleCommand(line, srv); err != nil {
 			s.debugLog("CommandHandlerError", map[string]interface{}{
 				"line":  line,

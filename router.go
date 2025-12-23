@@ -122,8 +122,8 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		))
 
 		if toClient != nil {
-			// Try to send via SMPP
-			session, err := router.gateway.SMPPServer.findSmppSession(m.To)
+			// Get session directly by client username (more efficient than searching by number)
+			session, err := router.gateway.SMPPServer.getSessionByUsername(toClient.Username)
 
 			// Debug: Log session lookup result
 			sessionFound := session != nil

@@ -826,6 +826,7 @@ func cleanSMSMessage(input string) string {
 }
 
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
+// The session parameter should be a valid, already-looked-up session from the router.
 func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 	lm := s.gateway.LogManager
 
@@ -839,19 +840,17 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		},
 	))
 
-	// Find the SMPP session associated with the destination number
-	var err error
-	session, err = s.findSmppSession(msg.To)
-	if err != nil {
+	// Validate session is not nil (it should have been found by the router)
+	if session == nil {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.sendSMPP",
-			"FindSessionError",
+			"NilSessionError",
 			logrus.ErrorLevel,
 			map[string]interface{}{
 				"to": msg.To,
-			}, err,
+			},
 		))
-		return fmt.Errorf("error finding SMPP session: %v", err)
+		return fmt.Errorf("session is nil for destination: %s", msg.To)
 	}
 
 	username, client := s.getSessionClientInfo(session)
@@ -867,6 +866,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 	segments := coding.SplitSMS(msg.message, byte(bestCoding))
 	encoder := bestCoding.Encoding().NewEncoder()
 
+	var err error
 	for i, segment := range segments {
 		var encoded []byte
 		if bestCoding == coding.GSM7BitCoding {
@@ -1105,4 +1105,16 @@ func (srv *SMPPServer) GetClientIP(session *smpp.Session) (string, error) {
 	}
 
 	return host, nil
+}
+
+// getSessionByUsername looks up an active SMPP session by client username.
+// This is more efficient than searching by number when the client is already known.
+func (srv *SMPPServer) getSessionByUsername(username string) (*smpp.Session, error) {
+	srv.mu.RLock()
+	defer srv.mu.RUnlock()
+
+	if session, ok := srv.conns[username]; ok {
+		return session, nil
+	}
+	return nil, fmt.Errorf("no active session for client: %s", username)
 }

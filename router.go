@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 type Route struct {
@@ -47,8 +48,36 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 	m.From = from
 
 	// Lookup clients
-	toClient, _ := router.findClientByNumber(m.To)
-	fromClient, _ := router.findClientByNumber(m.From)
+	toClient, toClientErr := router.findClientByNumber(m.To)
+	fromClient, fromClientErr := router.findClientByNumber(m.From)
+
+	// Debug: Log routing decision info
+	toClientUsername := ""
+	if toClient != nil {
+		toClientUsername = toClient.Username
+	}
+	fromClientUsername := ""
+	if fromClient != nil {
+		fromClientUsername = fromClient.Username
+	}
+	lm.SendLog(lm.BuildLog(
+		"Router.DEBUG",
+		"ProcessMessageEntry",
+		logrus.DebugLevel,
+		map[string]interface{}{
+			"logID":              m.LogID,
+			"origin":             origin,
+			"msgType":            m.Type,
+			"from":               m.From,
+			"to":                 m.To,
+			"toClientFound":      toClient != nil,
+			"toClientUsername":   toClientUsername,
+			"toClientErr":        fmt.Sprintf("%v", toClientErr),
+			"fromClientFound":    fromClient != nil,
+			"fromClientUsername": fromClientUsername,
+			"fromClientErr":      fmt.Sprintf("%v", fromClientErr),
+		},
+	))
 
 	if origin == "client" && fromClient == nil {
 		lm.SendLog(lm.BuildLog("Router", "Invalid sender number", logrus.ErrorLevel, map[string]interface{}{
@@ -75,9 +104,42 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 	// Process based on message type
 	switch m.Type {
 	case MsgQueueItemType.SMS:
+		// Debug: Log which path we're taking
+		routePath := "CARRIER"
+		if toClient != nil {
+			routePath = "SMPP_CLIENT"
+		}
+		lm.SendLog(lm.BuildLog(
+			"Router.DEBUG.SMS",
+			"RoutingDecision",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"logID":     m.LogID,
+				"from":      m.From,
+				"to":        m.To,
+				"routePath": routePath,
+			},
+		))
+
 		if toClient != nil {
 			// Try to send via SMPP
 			session, err := router.gateway.SMPPServer.findSmppSession(m.To)
+
+			// Debug: Log session lookup result
+			sessionFound := session != nil
+			lm.SendLog(lm.BuildLog(
+				"Router.DEBUG.SMS",
+				"SMPPSessionLookup",
+				logrus.DebugLevel,
+				map[string]interface{}{
+					"logID":        m.LogID,
+					"to":           m.To,
+					"toClient":     toClient.Username,
+					"sessionFound": sessionFound,
+					"lookupErr":    fmt.Sprintf("%v", err),
+				},
+			))
+
 			if err != nil || session == nil {
 
 				lm.SendLog(lm.BuildLog("Router.SMS", "Failed to find SMPP session", logrus.ErrorLevel, map[string]interface{}{
@@ -89,6 +151,20 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				}
 				return
 			}
+
+			// Debug: Log before sending SMPP
+			lm.SendLog(lm.BuildLog(
+				"Router.DEBUG.SMS",
+				"SendingSMPP",
+				logrus.DebugLevel,
+				map[string]interface{}{
+					"logID":    m.LogID,
+					"from":     m.From,
+					"to":       m.To,
+					"toClient": toClient.Username,
+				},
+			))
+
 			if err := router.gateway.SMPPServer.sendSMPP(*m, session); err != nil {
 
 				lm.SendLog(lm.BuildLog("Router.SMS", "Failed to send via SMPP", logrus.ErrorLevel, map[string]interface{}{
@@ -101,6 +177,21 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				}
 				return
 			}
+
+			// Debug: Log successful SMPP send
+			lm.SendLog(lm.BuildLog(
+				"Router.DEBUG.SMS",
+				"SMPPSentSuccess",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"logID":    m.LogID,
+					"from":     m.From,
+					"to":       m.To,
+					"toClient": toClient.Username,
+					"internal": fromClient != nil && toClient != nil,
+				},
+			))
+
 			// Record the successful send
 			internal := (fromClient != nil && toClient != nil)
 			if fromClient != nil {

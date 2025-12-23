@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"net"
 	"os"
 	"strings"
@@ -15,6 +13,9 @@ import (
 	"zultys-smpp-mm4/smpp"
 	"zultys-smpp-mm4/smpp/coding"
 	"zultys-smpp-mm4/smpp/pdu"
+
+	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type SMPPServer struct {
@@ -1003,19 +1004,87 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 }
 
 func (srv *SMPPServer) findSmppSession(destination string) (*smpp.Session, error) {
+	lm := srv.gateway.LogManager
 	srv.mu.RLock()
 	defer srv.mu.RUnlock()
 
+	// Debug: Log the search
+	clientCount := len(srv.gateway.Clients)
+	connCount := len(srv.conns)
+	lm.SendLog(lm.BuildLog(
+		"SMPPServer.DEBUG",
+		"FindSmppSessionStart",
+		logrus.DebugLevel,
+		map[string]interface{}{
+			"destination": destination,
+			"clientCount": clientCount,
+			"connCount":   connCount,
+			"connUsernames": func() []string {
+				names := make([]string, 0, len(srv.conns))
+				for username := range srv.conns {
+					names = append(names, username)
+				}
+				return names
+			}(),
+		},
+	))
+
 	for _, client := range srv.gateway.Clients {
 		for _, num := range client.Numbers {
-			if strings.Contains(destination, num.Number) {
+			// Debug: Log each number check
+			isMatch := strings.Contains(destination, num.Number)
+			lm.SendLog(lm.BuildLog(
+				"SMPPServer.DEBUG",
+				"FindSmppSessionCheck",
+				logrus.DebugLevel,
+				map[string]interface{}{
+					"destination":    destination,
+					"clientUsername": client.Username,
+					"numberChecked":  num.Number,
+					"isMatch":        isMatch,
+				},
+			))
+
+			if isMatch {
 				if session, ok := srv.conns[client.Username]; ok {
+					lm.SendLog(lm.BuildLog(
+						"SMPPServer.DEBUG",
+						"FindSmppSessionFound",
+						logrus.DebugLevel,
+						map[string]interface{}{
+							"destination":    destination,
+							"clientUsername": client.Username,
+							"numberMatched":  num.Number,
+							"sessionFound":   true,
+						},
+					))
 					return session, nil
 				}
+				lm.SendLog(lm.BuildLog(
+					"SMPPServer.DEBUG",
+					"FindSmppSessionClientNotConnected",
+					logrus.WarnLevel,
+					map[string]interface{}{
+						"destination":    destination,
+						"clientUsername": client.Username,
+						"numberMatched":  num.Number,
+					},
+				))
 				return nil, fmt.Errorf("client found but not connected: %s", client.Username)
 			}
 		}
 	}
+
+	lm.SendLog(lm.BuildLog(
+		"SMPPServer.DEBUG",
+		"FindSmppSessionNotFound",
+		logrus.WarnLevel,
+		map[string]interface{}{
+			"destination": destination,
+			"clientCount": clientCount,
+			"connCount":   connCount,
+		},
+	))
 
 	return nil, fmt.Errorf("no session found for destination: %s", destination)
 }

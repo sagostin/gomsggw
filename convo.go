@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/sirupsen/logrus"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 // ConvoQueue holds all messages for a given conversation and tracks the active one.
@@ -35,6 +36,8 @@ func NewConvoManager() *ConvoManager {
 // If no message is active, it immediately releases the first message
 // by sending it to ClientMsgChan.
 func (cm *ConvoManager) AddMessage(convoID string, msg MsgQueueItem, router *Router) {
+	lm := router.gateway.LogManager
+
 	cm.mu.Lock()
 	cq, exists := cm.queues[convoID]
 	if !exists {
@@ -47,12 +50,49 @@ func (cm *ConvoManager) AddMessage(convoID string, msg MsgQueueItem, router *Rou
 
 	cq.mu.Lock()
 	cq.queue = append(cq.queue, msg)
+
+	// Debug: Log message addition to convo queue
+	queueLen := len(cq.queue)
+	wasInFlight := cq.inFlight
+
 	if !cq.inFlight {
 		cq.inFlight = true
 		nextMsg := cq.queue[0]
 		cq.queue = cq.queue[1:]
+
+		// Debug: Log that we're dispatching immediately
+		lm.SendLog(lm.BuildLog(
+			"ConvoManager.DEBUG",
+			"MessageDispatchedImmediately",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"logID":        msg.LogID,
+				"convoID":      convoID,
+				"from":         msg.From,
+				"to":           msg.To,
+				"queueLen":     queueLen,
+				"wasInFlight":  wasInFlight,
+				"dispatchedTo": "ClientMsgChan",
+			},
+		))
+
 		// Send the message into the normal routing path.
 		router.ClientMsgChan <- nextMsg
+	} else {
+		// Debug: Log that message was queued
+		lm.SendLog(lm.BuildLog(
+			"ConvoManager.DEBUG",
+			"MessageQueued",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"logID":       msg.LogID,
+				"convoID":     convoID,
+				"from":        msg.From,
+				"to":          msg.To,
+				"queueLen":    queueLen,
+				"wasInFlight": wasInFlight,
+			},
+		))
 	}
 	cq.mu.Unlock()
 }

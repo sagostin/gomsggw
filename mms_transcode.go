@@ -5,11 +5,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/gabriel-vasile/mimetype"
-	"github.com/google/uuid"
-	"github.com/sirupsen/logrus"
-	ffmpeg "github.com/u2takey/ffmpeg-go"
 	"image"
+	"image/gif"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -19,14 +16,69 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gabriel-vasile/mimetype"
+	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
+	ffmpeg "github.com/u2takey/ffmpeg-go"
+
 	_ "image/gif"
 	_ "image/jpeg"
 )
 
-// Size limits
+// MMS Size Limits
+// These can be adjusted based on carrier requirements
 const (
-	maxImageSize = 1 * 1024 * 1024 // 1 MB
-	maxFileSize  = 1 * 1024 * 1024 // 5 MB (comment vs constant, left as-is)
+	// Target size for transcoded output (images/videos that we CAN compress)
+	// This is the goal we try to achieve through compression
+	targetOutputSize = 600 * 1024 // 600 KB - safe for most carriers
+
+	// Maximum input size we'll attempt to process
+	maxInputSize = 10 * 1024 * 1024 // 10 MB
+
+	// Per-type limits for files we CAN'T transcode (passthrough limits)
+	maxGIFSize   = 600 * 1024      // 600 KB - animated GIFs can't be resized
+	maxAudioSize = 1 * 1024 * 1024 // 1 MB - audio files
+	maxVideoSize = 1 * 1024 * 1024 // 1 MB - video output after transcoding
+	maxOtherSize = 600 * 1024      // 600 KB - other file types (PDFs, docs, etc.)
+
+	// Legacy aliases
+	maxImageSize = targetOutputSize
+	maxFileSize  = targetOutputSize
+)
+
+// TranscodeError provides user-friendly error messages for MMS transcoding failures
+type TranscodeError struct {
+	Code        string // Machine-readable error code
+	UserMessage string // User-friendly message to send back to sender
+	Details     string // Technical details for logging
+}
+
+func (e TranscodeError) Error() string {
+	return e.Details
+}
+
+// Common transcoding errors with user-friendly messages
+var (
+	ErrFileTooLarge = TranscodeError{
+		Code:        "FILE_TOO_LARGE",
+		UserMessage: "Your file is too large to process (max 10MB). Please reduce the file size and try again.",
+		Details:     "input file exceeds maximum allowed size of 10MB",
+	}
+	ErrGIFTooLarge = TranscodeError{
+		Code:        "GIF_TOO_LARGE",
+		UserMessage: "Animated GIFs cannot be resized. Please send a smaller GIF (max 600KB).",
+		Details:     "animated GIF exceeds size limit and cannot be transcoded",
+	}
+	ErrCompressionFailed = TranscodeError{
+		Code:        "COMPRESSION_FAILED",
+		UserMessage: "Your media couldn't be compressed enough for MMS. Please try a smaller file.",
+		Details:     "failed to compress media to target size",
+	}
+	ErrUnsupportedFormat = TranscodeError{
+		Code:        "UNSUPPORTED_FORMAT",
+		UserMessage: "This file type is not supported for MMS. Supported formats: JPEG, PNG, GIF, MP4, 3GP.",
+		Details:     "unsupported media format for MMS",
+	}
 )
 
 // MsgFile represents an individual file extracted from the MIME multipart message.
@@ -136,11 +188,18 @@ func (s *MM4Server) transcodeMedia() {
 					err,
 				))
 
+				// Use user-friendly message from TranscodeError if available
+				userMsg := "An error occurred. Please try again later or contact support. ID: " + mm4Message.TransactionID
+				if te, ok := err.(TranscodeError); ok {
+					userMsg = te.UserMessage + " ID: " + mm4Message.TransactionID
+					errFields["error_code"] = te.Code
+				}
+
 				msg := &MsgQueueItem{
 					To:              mm4Message.From,
 					From:            mm4Message.To,
 					Type:            "sms",
-					message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + mm4Message.TransactionID,
+					message:         userMsg,
 					SkipNumberCheck: false,
 					LogID:           mm4Message.TransactionID,
 					Delivery: &MsgQueueDelivery{
@@ -263,6 +322,38 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 		}
 
 		entryFields["decoded_size"] = len(decodedContent)
+
+		// Check input size limit (10MB max)
+		if len(decodedContent) > maxInputSize {
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileInputTooLarge",
+				logrus.WarnLevel,
+				entryFields,
+			))
+			return nil, ErrFileTooLarge
+		}
+
+		// Check for animated GIF (cannot be resized per Telnyx docs)
+		if strings.Contains(file.ContentType, "image/gif") {
+			if isAnimatedGIF(decodedContent) {
+				entryFields["is_animated_gif"] = true
+				if len(decodedContent) > int(targetOutputSize) {
+					lm.SendLog(lm.BuildLog(
+						"Server.MM4.TranscodeMedia",
+						"AnimatedGIFTooLarge",
+						logrus.WarnLevel,
+						entryFields,
+					))
+					return nil, ErrGIFTooLarge
+				}
+				// Animated GIF is small enough, pass through unchanged
+				file.Base64Data = encodeToBase64(decodedContent)
+				file.Content = decodedContent
+				processedFiles = append(processedFiles, file)
+				continue
+			}
+		}
 
 		if strings.Contains(file.ContentType, "application/octet-stream") || file.ContentType == "" {
 			detected := detectMIMEType(decodedContent)
@@ -498,6 +589,21 @@ func detectMIMEType(content []byte) string {
 	return "application/octet-stream"
 }
 
+// isAnimatedGIF checks if the GIF content contains multiple frames (animated)
+func isAnimatedGIF(content []byte) bool {
+	reader := bytes.NewReader(content)
+
+	// Decode the GIF to check frame count
+	g, err := gif.DecodeAll(reader)
+	if err != nil {
+		// If we can't decode it as GIF, assume not animated
+		return false
+	}
+
+	// Animated GIF has more than one frame
+	return len(g.Image) > 1
+}
+
 // convertImageToPNG converts an image to PNG format.
 func convertImageToPNG(content []byte) ([]byte, string, error) {
 	img, _, err := image.Decode(bytes.NewReader(content))
@@ -533,49 +639,117 @@ func processVideoContent(content []byte) ([]byte, string, error) {
 	return data, "video/3gpp", err
 }
 
-// compressJPEG compresses JPEG images to be under 1MB.
+// compressJPEG compresses JPEG images with progressive quality reduction and dimension resizing.
+// Targets Tier 2 carrier limit (600KB) for maximum compatibility.
 func compressJPEG(content []byte, maxSize int) ([]byte, error) {
 	img, err := jpeg.Decode(bytes.NewReader(content))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode JPEG: %v", err)
 	}
 
+	// Quality levels to try (aggressive reduction)
+	qualityLevels := []int{85, 70, 55, 40, 25, 15, 5}
+	// Dimension scale factors to try if quality alone isn't enough
+	scaleFactors := []float64{1.0, 0.75, 0.5, 0.35, 0.25}
+
 	var buf bytes.Buffer
-	quality := 80
-	for {
-		buf.Reset()
-		err = jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality})
-		if err != nil {
-			return nil, fmt.Errorf("failed to encode JPEG: %v", err)
+	var currentImg image.Image = img
+
+	for _, scale := range scaleFactors {
+		if scale < 1.0 {
+			// Resize the image
+			currentImg = resizeImage(img, scale)
 		}
-		if buf.Len() <= maxSize || quality < 10 {
-			break
+
+		for _, quality := range qualityLevels {
+			buf.Reset()
+			err = jpeg.Encode(&buf, currentImg, &jpeg.Options{Quality: quality})
+			if err != nil {
+				return nil, fmt.Errorf("failed to encode JPEG: %v", err)
+			}
+
+			if buf.Len() <= maxSize {
+				return buf.Bytes(), nil
+			}
 		}
-		quality -= 10 // Gradually reduce quality if size is too large
 	}
 
-	return buf.Bytes(), nil
+	// If we still can't fit, return ErrCompressionFailed
+	return nil, ErrCompressionFailed
 }
 
-// compressPNG compresses PNG images using lower compression levels to be under 1MB.
+// resizeImage scales an image by the given factor while maintaining aspect ratio
+func resizeImage(img image.Image, scale float64) image.Image {
+	bounds := img.Bounds()
+	newWidth := int(float64(bounds.Dx()) * scale)
+	newHeight := int(float64(bounds.Dy()) * scale)
+
+	// Use simple nearest-neighbor resize (good enough for compression purposes)
+	newImg := image.NewRGBA(image.Rect(0, 0, newWidth, newHeight))
+
+	for y := 0; y < newHeight; y++ {
+		for x := 0; x < newWidth; x++ {
+			srcX := int(float64(x) / scale)
+			srcY := int(float64(y) / scale)
+			newImg.Set(x, y, img.At(srcX, srcY))
+		}
+	}
+
+	return newImg
+}
+
+// compressPNG attempts PNG compression first, then falls back to JPEG if still too large.
+// PNG is lossless and cannot be effectively compressed, so we convert to JPEG when needed.
+// Note: This changes the output format from PNG to JPEG when fallback is used.
 func compressPNG(content []byte, maxSize int) ([]byte, error) {
 	img, err := png.Decode(bytes.NewReader(content))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode PNG: %v", err)
 	}
 
+	// Try PNG first
 	var buf bytes.Buffer
 	err = png.Encode(&buf, img)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode PNG: %v", err)
 	}
 
-	// Check if the output is larger than the allowed limit (1MB)
-	if buf.Len() > maxSize {
-		return nil, fmt.Errorf("PNG image exceeds size limit")
+	// If PNG is small enough, return it
+	if buf.Len() <= maxSize {
+		return buf.Bytes(), nil
 	}
 
-	return buf.Bytes(), nil
+	// PNG too large - fall back to JPEG compression with progressive quality/resize
+	return compressImageToJPEG(img, maxSize)
+}
+
+// compressImageToJPEG compresses an already-decoded image to JPEG with progressive quality/resize
+func compressImageToJPEG(img image.Image, maxSize int) ([]byte, error) {
+	qualityLevels := []int{85, 70, 55, 40, 25, 15, 5}
+	scaleFactors := []float64{1.0, 0.75, 0.5, 0.35, 0.25}
+
+	var buf bytes.Buffer
+	var currentImg image.Image = img
+
+	for _, scale := range scaleFactors {
+		if scale < 1.0 {
+			currentImg = resizeImage(img, scale)
+		}
+
+		for _, quality := range qualityLevels {
+			buf.Reset()
+			err := jpeg.Encode(&buf, currentImg, &jpeg.Options{Quality: quality})
+			if err != nil {
+				return nil, fmt.Errorf("failed to encode JPEG: %v", err)
+			}
+
+			if buf.Len() <= maxSize {
+				return buf.Bytes(), nil
+			}
+		}
+	}
+
+	return nil, ErrCompressionFailed
 }
 
 // compressFile compresses any other file type to be under the specified max size.

@@ -622,8 +622,8 @@ func (s *Session) handleMM4Message() error {
 		}
 	}
 
-	transactionID := s.Headers.Get("X-Mms-Transaction-ID")
-	messageID := s.Headers.Get("X-Mms-message-ID")
+	transactionID := strings.Trim(s.Headers.Get("X-Mms-Transaction-ID"), "\"")
+	messageID := strings.Trim(s.Headers.Get("X-Mms-message-ID"), "\"")
 
 	s.debugLog("MM4HeadersValidated", map[string]interface{}{
 		"transaction_id": transactionID,

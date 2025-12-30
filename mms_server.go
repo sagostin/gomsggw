@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+
 	"github.com/pires/go-proxyproto"
 	"github.com/sirupsen/logrus"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -37,6 +38,46 @@ type MM4Message struct {
 	TransactionID string
 }
 
+// MM4ClientState tracks connection state for a single MM4 client (by IP)
+type MM4ClientState struct {
+	mu             sync.RWMutex
+	Username       string              // Client username for logging
+	ActiveSessions map[string]*Session // sessionID -> active Session
+	FirstConnectAt time.Time           // When client first connected
+	LastActivityAt time.Time           // Most recent activity across all sessions
+}
+
+// AddSession registers a new session and returns the current count
+func (cs *MM4ClientState) AddSession(session *Session) int {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.ActiveSessions[session.SessionID] = session
+	cs.LastActivityAt = time.Now()
+	return len(cs.ActiveSessions)
+}
+
+// RemoveSession unregisters a session and returns remaining count
+func (cs *MM4ClientState) RemoveSession(sessionID string) int {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	delete(cs.ActiveSessions, sessionID)
+	return len(cs.ActiveSessions)
+}
+
+// SessionCount returns current active session count
+func (cs *MM4ClientState) SessionCount() int {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return len(cs.ActiveSessions)
+}
+
+// UpdateActivity updates last activity timestamp
+func (cs *MM4ClientState) UpdateActivity() {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	cs.LastActivityAt = time.Now()
+}
+
 // MM4Server represents the SMTP server.
 type MM4Server struct {
 	Addr               string
@@ -44,14 +85,49 @@ type MM4Server struct {
 	mu                 sync.RWMutex
 	listener           net.Listener
 	mongo              *mongo.Client
-	connectedClients   map[string]time.Time
+	clientStates       map[string]*MM4ClientState // hashedIP -> client state
 	gateway            *Gateway
 	MediaTranscodeChan chan *MM4Message
 }
 
+// getOrCreateClientState returns the state for a client IP, creating if needed
+func (s *MM4Server) getOrCreateClientState(hashedIP string, username string) *MM4ClientState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	state, exists := s.clientStates[hashedIP]
+	if !exists {
+		state = &MM4ClientState{
+			Username:       username,
+			ActiveSessions: make(map[string]*Session),
+			FirstConnectAt: time.Now(),
+			LastActivityAt: time.Now(),
+		}
+		s.clientStates[hashedIP] = state
+	}
+	return state
+}
+
+// cleanupClientState removes client state if no active sessions remain
+func (s *MM4Server) cleanupClientState(hashedIP string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if state, exists := s.clientStates[hashedIP]; exists {
+		if state.SessionCount() == 0 {
+			delete(s.clientStates, hashedIP)
+		}
+	}
+}
+
+// generateSessionID creates a unique session identifier
+func generateSessionID() string {
+	return fmt.Sprintf("%d-%s", time.Now().UnixNano(), randomString(8))
+}
+
 // Start begins listening for incoming SMTP connections.
 func (s *MM4Server) Start() error {
-	s.connectedClients = make(map[string]time.Time)
+	s.clientStates = make(map[string]*MM4ClientState)
 	s.MediaTranscodeChan = make(chan *MM4Message)
 
 	go s.transcodeMedia()
@@ -217,70 +293,13 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Check if the client is already connected
-	s.mu.RLock()
-	lastActivity, exists := s.connectedClients[hashedIP]
-	s.mu.RUnlock()
+	// Generate unique session ID
+	sessionID := generateSessionID()
 
-	if !exists {
-		// New connection
-		lm.SendLog(lm.BuildLog(
-			"Server.MM4.HandleConnection",
-			"AuthSuccess",
-			logrus.InfoLevel,
-			map[string]interface{}{
-				"client":  client.Username,
-				"ip":      ip,
-				"ip_hash": hashedIP,
-				"fresh":   true,
-			},
-		))
-	} else {
-		// Existing connection
-		inactivityDuration := time.Since(lastActivity)
-		if inactivityDuration > 2*time.Minute {
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.HandleConnection",
-				"MM4ReconnectInactivity",
-				logrus.InfoLevel,
-				map[string]interface{}{
-					"client":             client.Username,
-					"ip":                 ip,
-					"ip_hash":            hashedIP,
-					"inactivity_seconds": inactivityDuration.Seconds(),
-				},
-			))
-		} else {
-			lm.SendLog(lm.BuildLog(
-				"Server.MM4.HandleConnection",
-				"MM4Reconnect",
-				logrus.InfoLevel,
-				map[string]interface{}{
-					"client":             client.Username,
-					"ip":                 ip,
-					"ip_hash":            hashedIP,
-					"inactivity_seconds": inactivityDuration.Seconds(),
-				},
-			))
-		}
-	}
+	// Get or create client state and register this session
+	clientState := s.getOrCreateClientState(hashedIP, client.Username)
 
-	// ALWAYS update the last connection time, regardless of inactivity
-	s.mu.Lock()
-	s.connectedClients[hashedIP] = time.Now()
-	activeCount := len(s.connectedClients)
-	s.mu.Unlock()
-
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.HandleConnection",
-		"MM4ActiveClientCount",
-		logrus.DebugLevel,
-		map[string]interface{}{
-			"active_clients": activeCount,
-		},
-	))
-
-	// Create the session
+	// Create the session first (before registering, so we have the SessionID)
 	session := &Session{
 		Conn:       conn,
 		Reader:     reader,
@@ -291,7 +310,47 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 		ClientIP:   ip,
 		RemoteAddr: remoteAddr,
 		mongo:      s.mongo,
+		SessionID:  sessionID,
 	}
+
+	// Register session and get active count
+	activeCount := clientState.AddSession(session)
+
+	// Ensure we cleanup when this connection closes
+	defer func() {
+		remaining := clientState.RemoveSession(sessionID)
+		lm.SendLog(lm.BuildLog(
+			"Server.MM4.HandleConnection",
+			"SessionEnd",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"client":             client.Username,
+				"session_id":         sessionID,
+				"remaining_sessions": remaining,
+				"ip_hash":            hashedIP,
+			},
+		))
+		// Cleanup client state if no more sessions
+		if remaining == 0 {
+			s.cleanupClientState(hashedIP)
+		}
+	}()
+
+	// Log session start with session info
+	isFirstSession := activeCount == 1
+	lm.SendLog(lm.BuildLog(
+		"Server.MM4.HandleConnection",
+		"SessionStart",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"client":          client.Username,
+			"session_id":      sessionID,
+			"active_sessions": activeCount,
+			"first_session":   isFirstSession,
+			"ip":              ip,
+			"ip_hash":         hashedIP,
+		},
+	))
 
 	// Handle the session
 	if err := session.handleSession(s); err != nil {
@@ -301,6 +360,7 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 			logrus.InfoLevel,
 			map[string]interface{}{
 				"client":     client.Username,
+				"session_id": sessionID,
 				"ip":         ip,
 				"ip_hash":    hashedIP,
 				"remoteAddr": remoteAddr,
@@ -346,6 +406,7 @@ type Session struct {
 	RemoteAddr string
 	Files      []MsgFile
 	mongo      *mongo.Client
+	SessionID  string // Unique identifier for log correlation
 }
 
 // debugLog is a helper to send debug logs via LogManager.
@@ -355,6 +416,7 @@ func (s *Session) debugLog(action string, fields map[string]interface{}) {
 		"ip":         s.ClientIP,
 		"ip_hash":    s.IPHash,
 		"remoteAddr": s.RemoteAddr,
+		"session_id": s.SessionID,
 	}
 	if s.Client != nil {
 		base["client"] = s.Client.Username
@@ -411,9 +473,10 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 		arg = parts[1]
 	}
 
-	srv.mu.Lock()
-	srv.connectedClients[s.IPHash] = time.Now()
-	srv.mu.Unlock()
+	// Update client state activity
+	if clientState, exists := srv.clientStates[s.IPHash]; exists {
+		clientState.UpdateActivity()
+	}
 
 	if cmd != "NOOP" {
 		// to many noops lol
@@ -462,7 +525,7 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 			))
 			writeResponse(s.Writer, fmt.Sprintf("554 %v", err))
 		} else {
-			writeResponse(s.Writer, "250 OK")
+			writeResponse(s.Writer, "250 Message queued for processing")
 		}
 	case "NOOP":
 		writeResponse(s.Writer, "250 OK")
@@ -592,7 +655,6 @@ func (s *Session) handleMM4Message() error {
 
 	s.Server.MediaTranscodeChan <- mm
 
-	writeResponse(s.Writer, "250 message queued for processing")
 	return nil
 }
 

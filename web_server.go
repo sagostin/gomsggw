@@ -2,14 +2,15 @@ package main
 
 import (
 	"encoding/base64"
-	"github.com/kataras/iris/v12"
-	"github.com/sirupsen/logrus"
 	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kataras/iris/v12"
+	"github.com/sirupsen/logrus"
 )
 
 // PasswordUpdateRequest defines the expected JSON request body
@@ -34,8 +35,11 @@ type SMPPClientInfo struct {
 
 // MM4ClientInfo contains information about a connected MM4 client.
 type MM4ClientInfo struct {
-	ClientID    string    `json:"client_id"`
-	ConnectedAt time.Time `json:"connected_at"`
+	ClientID       string    `json:"client_id"`
+	Username       string    `json:"username"`
+	ActiveSessions int       `json:"active_sessions"`
+	FirstConnectAt time.Time `json:"first_connect_at"`
+	LastActivityAt time.Time `json:"last_activity_at"`
 }
 
 // SetupStatsRoutes sets up the HTTP routes for statistics.
@@ -72,17 +76,21 @@ func SetupStatsRoutes(app *iris.Application, gateway *Gateway) {
 
 			// Collect MM4 Server Stats
 			gateway.MM4Server.mu.RLock()
-			mm4ConnCount := len(gateway.MM4Server.connectedClients)
-			statsResponse.MM4ConnectedClients = mm4ConnCount
-
-			mm4Clients := make([]MM4ClientInfo, 0, mm4ConnCount)
-			for clientID, connectedAt := range gateway.MM4Server.connectedClients {
+			mm4Clients := make([]MM4ClientInfo, 0)
+			totalMM4Sessions := 0
+			for clientID, state := range gateway.MM4Server.clientStates {
+				sessionCount := state.SessionCount()
+				totalMM4Sessions += sessionCount
 				mm4Clients = append(mm4Clients, MM4ClientInfo{
-					ClientID:    clientID,
-					ConnectedAt: connectedAt,
+					ClientID:       clientID,
+					Username:       state.Username,
+					ActiveSessions: sessionCount,
+					FirstConnectAt: state.FirstConnectAt,
+					LastActivityAt: state.LastActivityAt,
 				})
 			}
 			gateway.MM4Server.mu.RUnlock()
+			statsResponse.MM4ConnectedClients = totalMM4Sessions
 			statsResponse.MM4Clients = mm4Clients
 
 			// Return the stats as JSON

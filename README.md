@@ -103,12 +103,19 @@ curl -X POST http://gateway:3000/messages/send \
 | GET | `/stats` | Connection stats |
 | GET | `/clients` | List all clients |
 | POST | `/clients` | Create client |
+| DELETE | `/clients/{id}` | Delete a client |
+| PATCH | `/clients/{id}/password` | Update client password |
+| GET | `/clients/{id}/numbers` | List client numbers |
 | POST | `/clients/{id}/numbers` | Add number to client |
-| GET | `/clients/{id}/settings` | Get web settings |
-| PUT | `/clients/{id}/settings` | Update web settings |
+| PUT | `/clients/{id}/numbers/{number_id}` | Update number properties |
+| DELETE | `/clients/{id}/numbers/{number_id}` | Remove number |
+| GET | `/clients/{id}/settings` | Get client settings |
+| PUT | `/clients/{id}/settings` | Update client settings |
+| GET | `/numbers/{id}/settings` | Get number settings |
+| PUT | `/numbers/{id}/settings` | Update number settings |
 | GET | `/carriers` | List carriers |
 | POST | `/carriers` | Add carrier |
-| POST | `/clients/reload` | Reload from DB |
+| POST | `/clients/reload` | Reload clients from DB |
 | POST | `/carriers/reload` | Reload carriers |
 
 ### Web Client Endpoints (client auth)

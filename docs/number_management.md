@@ -190,7 +190,8 @@ Web clients can configure webhooks at the number level.
 
 1. Check if the destination `ClientNumber` has a `WebHook` URL
 2. If set, deliver to that URL
-3. If not set, log an error (no default fallback currently)
+3. If not set, fall back to client's `default_webhook` from ClientSettings
+4. Error if neither configured
 
 ---
 

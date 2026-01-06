@@ -356,7 +356,7 @@ sequenceDiagram
 ```mermaid
 graph TB
     subgraph "Main Thread"
-        MAIN[main()]
+        MAIN["main()"]
     end
     
     subgraph "Server Goroutines"

@@ -308,25 +308,20 @@ TRANSCODER_WORKERS=8
 
 ## Media Storage
 
-### MEDIA_STORAGE_PATH
+Media files (MMS content) are stored in PostgreSQL using the `MediaFile` table, **not** on the filesystem. Files are automatically cleaned up after 7 days.
 
-**Default**: `/tmp/gomsggw/media`
+### TRANSCODE_TEMP_PATH
 
-Path for temporary and cached media files.
+**Default**: `./transcode`
 
-```bash
-MEDIA_STORAGE_PATH=/var/lib/gomsggw/media
-```
-
-### MEDIA_RETENTION_HOURS
-
-**Default**: `24`
-
-Hours to retain media files before cleanup.
+Temporary directory for MMS media transcoding operations.
 
 ```bash
-MEDIA_RETENTION_HOURS=48
+TRANSCODE_TEMP_PATH=/tmp/gomsggw/transcode
 ```
+
+> [!NOTE]
+> The media retention period is currently hardcoded at 7 days in `media_storage.go`.
 
 ---
 
@@ -489,10 +484,7 @@ LOKI_ENABLED=false
 MMS_MAX_SIZE=614400
 MMS_IMAGE_QUALITY=85
 TRANSCODER_WORKERS=4
-
-# Media
-MEDIA_STORAGE_PATH=/tmp/gomsggw/media
-MEDIA_RETENTION_HOURS=24
+TRANSCODE_TEMP_PATH=/tmp/gomsggw/transcode
 ```
 
 ---
@@ -504,7 +496,7 @@ Some configurations can be reloaded at runtime via the API:
 ### Reload Clients and Numbers
 
 ```bash
-POST /reload
+POST /clients/reload
 ```
 
 Reloads all clients and numbers from the database.

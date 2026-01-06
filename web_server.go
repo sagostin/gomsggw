@@ -991,7 +991,7 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 		return
 	}
 
-	// Retrieve the media file from MongoDB
+	// Retrieve the media file from the database
 	mediaFile, err := gateway.getMediaFile(uint(id))
 	if err != nil {
 		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(

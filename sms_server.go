@@ -486,6 +486,26 @@ func (h *SimpleHandler) handleBind(session *smpp.Session, bindReq *pdu.BindTrans
 		return
 	}
 
+	// Verify client is legacy type - web clients cannot use SMPP
+	h.server.gateway.mu.RLock()
+	client, exists := h.server.gateway.Clients[username]
+	h.server.gateway.mu.RUnlock()
+
+	if exists && client.Type == "web" {
+		sendBindError(pdu.ErrBindFail, "WebClientCannotUseSMPP", nil)
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.HandleBind",
+			"WebClientRejected",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"ip":       ip,
+				"username": username,
+				"reason":   "Web clients must use REST API, not SMPP",
+			},
+		))
+		return
+	}
+
 	resp := bindReq.Resp(pdu.ESME_ROK)
 	if err = session.Send(resp); err != nil {
 		lm.SendLog(lm.BuildLog(

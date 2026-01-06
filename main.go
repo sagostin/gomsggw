@@ -1,10 +1,6 @@
 package main
 
 import (
-	"github.com/joho/godotenv"
-	"github.com/kataras/iris/v12"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 	"log"
 	"net"
 	"net/http"
@@ -12,6 +8,11 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
+	"github.com/kataras/iris/v12"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 )
 
 var trustedProxies []string
@@ -163,6 +164,8 @@ func main() {
 
 	SetupCarrierRoutes(app, gateway)
 	SetupClientRoutes(app, gateway)
+	SetupNumberRoutes(app, gateway)
+	SetupMessageRoutes(app, gateway)
 	SetupStatsRoutes(app, gateway)
 	app.Get("/health", func(ctx iris.Context) {
 		ctx.StatusCode(200)

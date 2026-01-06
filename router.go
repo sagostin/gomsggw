@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -87,6 +92,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		return
 	}
 	// If both client lookups fail, log and return.
+	// If both client lookups fail, log and return.
 	if origin == "carrier" && toClient == nil {
 		lm.SendLog(lm.BuildLog("Router", "Invalid destination number", logrus.ErrorLevel, map[string]interface{}{
 			"logID": m.LogID,
@@ -94,6 +100,30 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		}))
 		return
 	}
+
+	// --- COMPREHENSIVE LIMIT CHECK ---
+	if fromClient != nil {
+		// Determine message type for limit checking
+		msgType := string(m.Type)
+
+		// Use comprehensive limit checker (checks burst, daily, monthly for SMS/MMS with direction awareness)
+		limitResult := router.gateway.CheckMessageLimits(fromClient, m.From, msgType, "outbound")
+		if limitResult != nil && !limitResult.Allowed {
+			lm.SendLog(lm.BuildLog("Router", "Message limit exceeded", logrus.WarnLevel, map[string]interface{}{
+				"logID":     m.LogID,
+				"client":    fromClient.Username,
+				"from":      m.From,
+				"limitType": limitResult.LimitType,
+				"limit":     limitResult.Limit,
+				"used":      limitResult.CurrentUsage,
+				"period":    limitResult.Period,
+				"msgType":   msgType,
+			}))
+			// Drop the message
+			return
+		}
+	}
+	// --- END LIMIT CHECK ---
 
 	// Retry on the channel where the message came from
 	retryChan := router.ClientMsgChan
@@ -107,7 +137,11 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		// Debug: Log which path we're taking
 		routePath := "CARRIER"
 		if toClient != nil {
-			routePath = "SMPP_CLIENT"
+			if toClient.Type == "web" {
+				routePath = "WEB_CLIENT"
+			} else {
+				routePath = "SMPP_CLIENT"
+			}
 		}
 		lm.SendLog(lm.BuildLog(
 			"Router.DEBUG.SMS",
@@ -122,6 +156,86 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		))
 
 		if toClient != nil {
+			// Check if destination is a WEB Client
+			if toClient.Type == "web" {
+				// WEB CLIENT DELIVERY LOGIC
+				// Find valid webhook - first check number-specific, then fall back to client default
+				webhookURL := ""
+				for _, n := range toClient.Numbers {
+					if strings.Contains(m.To, n.Number) {
+						webhookURL = n.WebHook
+						break
+					}
+				}
+
+				// Fall back to client default webhook if number doesn't have one
+				if webhookURL == "" && toClient.Settings != nil && toClient.Settings.DefaultWebhook != "" {
+					webhookURL = toClient.Settings.DefaultWebhook
+				}
+
+				if webhookURL == "" {
+					lm.SendLog(lm.BuildLog("Router.SMS", "No webhook defined for web client number or default", logrus.ErrorLevel, map[string]interface{}{
+						"toClient": toClient.Username,
+						"to":       m.To,
+						"logID":    m.LogID,
+					}))
+					return
+				}
+
+				// Dispatch!
+				if err := router.DispatchWebhook(webhookURL, m, toClient, fromClient); err != nil {
+					lm.SendLog(lm.BuildLog("Router.SMS", "Failed to dispatch webhook", logrus.ErrorLevel, map[string]interface{}{
+						"toClient": toClient.Username,
+						"url":      webhookURL,
+						"logID":    m.LogID,
+					}, err))
+					// Retry logic?
+					if m.Retry("failed to dispatch webhook", retryChan) {
+					}
+					return
+				}
+
+				// Success Log
+				lm.SendLog(lm.BuildLog(
+					"Router.DEBUG.SMS",
+					"WebhookSentSuccess",
+					logrus.InfoLevel,
+					map[string]interface{}{
+						"logID":    m.LogID,
+						"toClient": toClient.Username,
+						"url":      webhookURL,
+					},
+				))
+
+				internal := (fromClient != nil && toClient != nil)
+				fromClientType := "carrier"
+				if fromClient != nil {
+					fromClientType = fromClient.Type
+					router.gateway.MsgRecordChan <- MsgRecord{
+						MsgQueueItem:   *m,
+						Carrier:        "from_client",
+						ClientID:       fromClient.ID,
+						Internal:       internal,
+						Direction:      "outbound",
+						FromClientType: fromClientType,
+						ToClientType:   "web",
+						DeliveryMethod: "webhook",
+					}
+				}
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem:   *m,
+					Carrier:        "to_client_web",
+					ClientID:       toClient.ID,
+					Internal:       internal,
+					Direction:      "inbound",
+					FromClientType: fromClientType,
+					ToClientType:   "web",
+					DeliveryMethod: "webhook",
+				}
+				return
+			}
+
+			// ... Legacy SMPP Handling (Existing Code) ...
 			// Get session directly by client username (more efficient than searching by number)
 			session, err := router.gateway.SMPPServer.getSessionByUsername(toClient.Username)
 
@@ -300,6 +414,88 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		}
 	case MsgQueueItemType.MMS:
 		if toClient != nil {
+			// Check if destination is a WEB Client - use webhook delivery
+			if toClient.Type == "web" {
+				// WEB CLIENT MMS DELIVERY LOGIC
+				// First check number-specific webhook, then fall back to client default
+				webhookURL := ""
+				for _, n := range toClient.Numbers {
+					if strings.Contains(m.To, n.Number) {
+						webhookURL = n.WebHook
+						break
+					}
+				}
+
+				// Fall back to client default webhook if number doesn't have one
+				if webhookURL == "" && toClient.Settings != nil && toClient.Settings.DefaultWebhook != "" {
+					webhookURL = toClient.Settings.DefaultWebhook
+				}
+
+				if webhookURL == "" {
+					lm.SendLog(lm.BuildLog("Router.MMS", "No webhook defined for web client number or default", logrus.ErrorLevel, map[string]interface{}{
+						"toClient": toClient.Username,
+						"to":       m.To,
+						"logID":    m.LogID,
+					}))
+					return
+				}
+
+				// Dispatch MMS via webhook
+				if err := router.DispatchWebhook(webhookURL, m, toClient, fromClient); err != nil {
+					lm.SendLog(lm.BuildLog("Router.MMS", "Failed to dispatch webhook", logrus.ErrorLevel, map[string]interface{}{
+						"toClient": toClient.Username,
+						"url":      webhookURL,
+						"logID":    m.LogID,
+					}, err))
+					if m.Retry("failed to dispatch MMS webhook", retryChan) {
+					}
+					return
+				}
+
+				// Success Log
+				lm.SendLog(lm.BuildLog(
+					"Router.DEBUG.MMS",
+					"WebhookSentSuccess",
+					logrus.InfoLevel,
+					map[string]interface{}{
+						"logID":      m.LogID,
+						"toClient":   toClient.Username,
+						"url":        webhookURL,
+						"mediaCount": len(m.files),
+					},
+				))
+
+				internal := (fromClient != nil && toClient != nil)
+				fromClientType := "carrier"
+				if fromClient != nil {
+					fromClientType = fromClient.Type
+					router.gateway.MsgRecordChan <- MsgRecord{
+						MsgQueueItem:   *m,
+						Carrier:        "from_client",
+						ClientID:       fromClient.ID,
+						Internal:       internal,
+						Direction:      "outbound",
+						FromClientType: fromClientType,
+						ToClientType:   "web",
+						DeliveryMethod: "webhook",
+						MediaCount:     len(m.files),
+					}
+				}
+				router.gateway.MsgRecordChan <- MsgRecord{
+					MsgQueueItem:   *m,
+					Carrier:        "to_client_web",
+					ClientID:       toClient.ID,
+					Internal:       internal,
+					Direction:      "inbound",
+					FromClientType: fromClientType,
+					ToClientType:   "web",
+					DeliveryMethod: "webhook",
+					MediaCount:     len(m.files),
+				}
+				return
+			}
+
+			// Legacy MM4 Client delivery
 			if err := router.gateway.MM4Server.sendMM4(*m); err != nil {
 				lm.SendLog(lm.BuildLog("Router", "Failed to send MM4: %s", logrus.ErrorLevel, map[string]interface{}{
 					"toClient": toClient.Username,
@@ -493,4 +689,149 @@ func FormatToE164(number string) (string, error) {
 	}
 
 	return cleaned, nil
+}
+
+// DispatchWebhook sends the message payload to a web client's webhook URL.
+// Supports different API formats based on client's WebSettings.APIFormat:
+// - 'generic' (default): Standard format
+// - 'bicom': Bicom PBXware format with Bearer auth and media_urls
+// - 'telnyx': Telnyx-style format
+func (router *Router) DispatchWebhook(webhookURL string, item *MsgQueueItem, toClient *Client, fromClient *Client) error {
+	// Determine API format
+	apiFormat := "generic"
+	if toClient != nil && toClient.Settings != nil && toClient.Settings.APIFormat != "" {
+		apiFormat = toClient.Settings.APIFormat
+	}
+
+	// Build payload based on format
+	var payload map[string]interface{}
+
+	switch apiFormat {
+	case "bicom":
+		// Bicom format: { from, to, text, media_urls }
+		payload = map[string]interface{}{
+			"from": item.From,
+			"to":   item.To,
+			"text": item.message,
+		}
+		if item.Type == MsgQueueItemType.MMS && len(item.files) > 0 {
+			// Bicom expects media_urls - we'll need to provide URLs or embed
+			// For now, provide as base64 data URLs since we don't have hosted URLs
+			mediaUrls := make([]string, 0, len(item.files))
+			for _, f := range item.files {
+				if len(f.Base64Data) > 0 {
+					dataURL := fmt.Sprintf("data:%s;base64,%s", f.ContentType, f.Base64Data)
+					mediaUrls = append(mediaUrls, dataURL)
+				}
+			}
+			if len(mediaUrls) > 0 {
+				payload["media_urls"] = mediaUrls
+			}
+		}
+
+	case "telnyx":
+		// Telnyx-style format
+		payload = map[string]interface{}{
+			"data": map[string]interface{}{
+				"event_type": "message.received",
+				"payload": map[string]interface{}{
+					"id":          item.LogID,
+					"from":        map[string]string{"phone_number": item.From},
+					"to":          []map[string]string{{"phone_number": item.To}},
+					"text":        item.message,
+					"type":        string(item.Type),
+					"received_at": item.ReceivedTimestamp,
+				},
+			},
+		}
+
+	default: // "generic"
+		payload = map[string]interface{}{
+			"id":        item.LogID,
+			"from":      item.From,
+			"to":        item.To,
+			"text":      item.message,
+			"timestamp": item.ReceivedTimestamp,
+			"type":      item.Type,
+		}
+
+		// Add media if MMS
+		if item.Type == MsgQueueItemType.MMS && len(item.files) > 0 {
+			mediaList := make([]map[string]string, 0, len(item.files))
+			for _, f := range item.files {
+				m := map[string]string{
+					"filename":     f.Filename,
+					"content_type": f.ContentType,
+				}
+				if len(f.Base64Data) > 0 {
+					m["base64"] = f.Base64Data
+				}
+				mediaList = append(mediaList, m)
+			}
+			payload["media"] = mediaList
+		}
+
+		// Add Organization Tags
+		if toClient != nil {
+			for _, num := range toClient.Numbers {
+				if strings.Contains(item.To, num.Number) || strings.Contains(num.Number, item.To) {
+					if num.Tag != "" {
+						payload["tag"] = num.Tag
+					}
+					if num.Group != "" {
+						payload["group"] = num.Group
+					}
+					break
+				}
+			}
+		}
+	}
+
+	// Marshal JSON
+	jsonBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal webhook payload: %v", err)
+	}
+
+	// Determine timeout - use client setting if set, otherwise global config
+	timeoutSecs := router.gateway.Config.WebhookTimeoutSecs
+	if toClient != nil && toClient.Settings != nil && toClient.Settings.WebhookTimeoutSecs > 0 {
+		timeoutSecs = toClient.Settings.WebhookTimeoutSecs
+	}
+
+	// Send HTTP POST
+	client := &http.Client{
+		Timeout: time.Duration(timeoutSecs) * time.Second,
+	}
+	req, err := http.NewRequest("POST", webhookURL, bytes.NewBuffer(jsonBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create webhook request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Set auth header based on format
+	if toClient != nil {
+		if apiFormat == "bicom" {
+			// Bicom uses Bearer token (base64 of username:password)
+			token := base64.StdEncoding.EncodeToString([]byte(toClient.Username + ":" + toClient.Password))
+			req.Header.Set("Authorization", "Bearer "+token)
+		} else {
+			// Default to Basic auth
+			auth := base64.StdEncoding.EncodeToString([]byte(toClient.Username + ":" + toClient.Password))
+			req.Header.Set("Authorization", "Basic "+auth)
+		}
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to execute webhook request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("webhook replied with failure status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }

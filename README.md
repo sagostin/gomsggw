@@ -1,235 +1,199 @@
-# Gomsggw Messaging Gateway
+# GOMSGGW Messaging Gateway
 
-Gomsggw is a high-performance messaging gateway that integrates SMPP and MM4 protocols. It is designed to handle SMS and MMS messages by bridging communications between various carriers (such as Twilio and Telnyx) and client applications. The gateway leverages web APIs, Prometheus metrics, and robust logging to provide a reliable, scalable, and observable messaging solution.
+A high-performance multi-protocol messaging gateway bridging **SMPP/MM4** (legacy clients) and **REST API/Webhooks** (web clients) with unified message routing, usage limits, and comprehensive logging.
 
-## Contents
+---
 
-- [Overview](#overview)
-- [Features](#features)
-- [Architecture](#architecture)
-- [Installation & Setup](#installation--setup)
-- [Configuration](#configuration)
-  - [Environment Variables](#environment-variables)
-- [API Documentation](#api-documentation)
-  - [Authentication](#authentication)
-  - [Endpoints](#endpoints)
-- [Building & Running](#building--running)
-- [Troubleshooting & Logging](#troubleshooting--logging)
-- [Contributing](#contributing)
-- [License](#license)
-
-## Overview
-
-Gomsggw integrates multiple messaging protocols in one unified gateway service. It supports:
-
-- **SMPP Server:** For SMS messaging. The gateway accepts SMPP connections from clients and forwards messages to carriers.
-- **MM4 Server:** For MMS messaging. The MM4 protocol handles multimedia messages.
-- **Web API:** A RESTful API (built with the Iris framework) for administrative tasks such as managing carriers, clients, retrieving statistics, health checks, and media file retrieval.
-- **Metrics:** Prometheus metrics endpoints provide visibility into system performance and client connections.
-- **Logging:** Uses Logrus for structured logging with support for external logging systems (e.g., Loki).
-
-## Features
-
-- **Multi-Protocol Messaging:** Supports both SMS (via SMPP) and MMS (via MM4) messaging.
-- **Carrier & Client Management:** RESTful endpoints for adding and managing carriers and clients.
-- **Robust Logging & Monitoring:** Detailed logs and Prometheus metrics for system observability.
-- **Docker Ready:** Comes with a Dockerfile and Docker Compose configuration for containerized deployments.
-- **Scalability:** Designed to support multiple gateway instances behind load balancers.
-
-## Architecture
-
-The system is composed of several interconnected components:
-
-1. **Main Application (main.go):** Loads environment configuration, initializes components, and starts the web server, SMPP server, and MM4 server concurrently.
-2. **Web Server (web_server.go):** Exposes RESTful endpoints for health checks, API management (carriers, clients), media retrieval, and inbound message processing.
-3. **Routers (router.go, router_carrier.go, router_client.go):** Handle message routing between carriers and clients.
-4. **SMPP & MM4 Servers:** Handle protocol-specific communications. The SMPP server manages SMS sessions and message delivery, while the MM4 server handles multimedia messages.
-5. **Metrics & Logging:** Exposes Prometheus metrics and logs detailed events using Logrus.
-
-## Installation & Setup
-
-### Prerequisites
-
-- [Go](https://golang.org/) (check the `go.mod` file for the required version).
-- [Docker](https://www.docker.com/) (for containerized deployments).
-- [PostgreSQL](https://www.postgresql.org/) (can be run via Docker Compose).
-
-### Clone the Repository
+## Quick Start
 
 ```bash
 git clone https://github.com/sagostin/gomsggw.git
 cd gomsggw
-```
-
-### Environment Configuration
-
-Copy the sample environment file and modify it according to your deployment settings:
-
-```bash
 cp sample.env .env
-```
-
-Key environment variables:
-
-- **ENCRYPTION_KEY**: (Required) Encryption key used for sensitive data.
-- **WEB_LISTEN**: Address and port for the web API server (default: `0.0.0.0:3000`).
-- **SMPP_LISTEN**: Listening address for the SMPP server (e.g., `0.0.0.0:9550`).
-- **MM4_LISTEN**: Listening address for the MM4 server (e.g., `0.0.0.0:2566`).
-- **API_KEY**: API key used for Basic Authentication on protected endpoints.
-- **PostgreSQL Settings**: Variables beginning with `POSTGRES_`.
-- **Prometheus Settings**: `PROMETHEUS_LISTEN` and `PROMETHEUS_PATH` for exposing metrics.
-
-### Docker Compose Setup
-
-A pre-configured `docker-compose.yml` is provided to spin up necessary services (PostgreSQL and multiple gateway instances). Review and adjust the configuration as needed before deployment.
-
-## API Documentation
-
-### Authentication
-
-Most API endpoints (except for public health checks) require Basic Authentication. Use the following guidelines:
-
-- **Header**: `Authorization: Basic <credentials>`
-- **Credentials Format**: Base64 encoded string in the format `username:API_KEY`.
-
-Example using cURL:
-
-```bash
-curl -H "Authorization: Basic $(echo -n 'user:YOUR_API_KEY' | base64)" http://localhost:3000/stats
-```
-
-### Endpoints
-
-#### Health Check
-
-- **GET /health**
-
-  Returns HTTP 200 to indicate the server is up.
-
-#### Statistics
-
-- **GET /stats** (protected)
-
-  Provides a JSON response with statistics on connected SMPP and MM4 clients. Sample response:
-
-  ```json
-  {
-    "smpp_connected_clients": 5,
-    "smpp_clients": [
-      { "username": "client1", "ip_address": "192.168.1.10", "last_seen": "2025-04-04T12:34:56Z" }
-    ],
-    "mm4_connected_clients": 3,
-    "mm4_clients": [
-      { "client_id": "mm4_001", "connected_at": "2025-04-04T12:35:00Z" }
-    ]
-  }
-  ```
-
-#### Carrier Management
-
-- **POST /carriers** (protected)
-
-  Add a new carrier. The JSON body should include (at minimum):
-
-  - `name`: Carrier name
-  - `type`: Carrier type (e.g., Twilio, Telnyx)
-  - `username`: Account username
-  - `password`: Account password
-
-  **Example Request**:
-
-  ```json
-  {
-    "name": "TwilioCarrier",
-    "type": "twilio",
-    "username": "twilio_user",
-    "password": "secret"
-  }
-  ```
-
-- **GET /carriers** (protected)
-
-  Retrieve a list of all configured carriers.
-
-- **POST /carriers/reload** (protected)
-
-  Reload carriers from persistent storage (e.g., database).
-
-#### Client Management
-
-- **POST /clients** (protected)
-
-  Add a new client. The JSON payload should include required client fields such as `username` and `password`.
-
-  **Example Request**:
-
-  ```json
-  {
-    "username": "client1",
-    "password": "client_secret",
-    "name": "Client One",
-    "address": "http://client.example.com",
-    "log_privacy": "public"
-  }
-  ```
-
-#### Inbound Messaging
-
-- **POST /inbound/{carrier}**
-
-  Endpoint to receive inbound messages from carriers. The `{carrier}` parameter should specify the carrier identifier. The payload will be processed by the gateway and routed appropriately.
-
-#### Media Retrieval
-
-- **GET /media/{id}**
-
-  Retrieve media files associated with MMS messages. The `{id}` path parameter corresponds to the media identifier.
-
-## Building & Running
-
-### Local Development (Without Docker)
-
-1. Ensure you have set up the environment variables by copying and modifying `.env`.
-2. Build and run the application:
-
-   ```bash
-go build -o msggw
-./msggw
-   ```
-
-### Docker Build
-
-Use the provided `build.sh` script to build the Docker image:
-
-```bash
+# Edit .env with your settings
 ./build.sh
+docker-compose up -d
 ```
 
-### Docker Compose
+---
 
-Start the services with Docker Compose:
+## Features
+
+### Multi-Protocol Support
+| Protocol | Direction | Use Case |
+|----------|-----------|----------|
+| SMPP | Bidirectional | Zultys MX, legacy PBX |
+| MM4 | Bidirectional | MMS via legacy |
+| REST API | Outbound | Web apps, Bicom PBXware |
+| Webhooks | Inbound | Web apps, Bicom PBXware |
+
+### Client Types
+| Feature | Legacy | Web |
+|---------|--------|-----|
+| Protocol | SMPP/MM4 | REST/Webhook |
+| Auth | SMPP Bind | HTTP Basic/Bearer |
+| Splitting | Always | Configurable |
+| API Format | N/A | generic, bicom, telnyx |
+| Use Case | Zultys MX | Bicom PBXware, Web Apps |
+
+### Additional Features
+- **Usage Limits** - Burst/daily/monthly quotas with timezone support
+- **Number Organization** - Tags and groups
+- **MMS Transcoding** - Automatic media optimization
+- **Enhanced Logging** - Client types, delivery methods, segments
+- **Global Retry Config** - Configurable via environment variables
+
+---
+
+## Integration Examples
+
+### Zultys MX (SMPP/Legacy)
 
 ```bash
-docker-compose up --build
+# Create legacy client (address required for ACL)
+curl -X POST http://gateway:3000/clients \
+  -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
+  -d '{"username":"zultys","password":"smpp_pass","type":"legacy","name":"Zultys MX","address":"192.168.1.100"}'
+
+# Response: {"id": 1, "username": "zultys", ...}
+
+# Configure limits
+curl -X PUT http://gateway:3000/clients/1/settings \
+  -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
+  -d '{"sms_daily_limit": 10000}'
+
+# Add number (use client ID from response)
+curl -X POST http://gateway:3000/clients/1/numbers \
+  -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
+  -d '{"number":"+12505551234","carrier":"telnyx"}'
 ```
 
-This will launch the messaging gateway and PostgreSQL services. Make sure to adjust the configuration in `docker-compose.yml` (and your environment variables) as needed.
+**Zultys SMPP Settings**: Host: `gateway-ip`, Port: `9550`, System ID: `zultys`
 
-## Troubleshooting & Logging
+### Bicom PBXware (REST API)
 
-- **Logs:** The gateway uses Logrus for structured logging. Logs are sent to STDOUT; ensure your logging aggregator (if used) is configured correctly.
-- **Metrics:** Access Prometheus metrics at the endpoint defined by `PROMETHEUS_LISTEN` and `PROMETHEUS_PATH` (e.g., http://localhost:2550/metrics).
-- **Authentication Errors:** Ensure the API key provided in the `Authorization` header matches the `API_KEY` environment variable.
-- **Environment Variable Issues:** The gateway will exit if essential variables (like `ENCRYPTION_KEY`) are missing. Double-check your `.env` file.
+```bash
+# Create web client
+curl -X POST http://gateway:3000/clients \
+  -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
+  -d '{"username":"bicom","password":"api_key","type":"web","name":"Bicom PBXware","timezone":"America/Vancouver"}'
 
-## Contributing
+# Response: {"id": 2, "username": "bicom", ...}
 
-Contributions are welcome! Please fork the repository and submit pull requests. When making changes:
+# Configure settings and limits
+curl -X PUT http://gateway:3000/clients/2/settings \
+  -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
+  -d '{"api_format":"bicom","default_webhook":"https://bicom.local/smsservice/connector","sms_daily_limit":25000}'
 
-- Follow the coding style and structure already present in the codebase.
-- Write tests for significant functionality where applicable.
-- Update documentation as needed.
+# Send SMS (client auth with Bearer token for Bicom format)
+curl -X POST http://gateway:3000/messages/send \
+  -H "Authorization: Bearer $(echo -n 'bicom:api_key' | base64)" \
+  -d '{"from":"+12505551234","to":"+14155559876","text":"Hello!"}'
+```
+
+---
+
+## API Endpoints
+
+### Admin Endpoints (API_KEY auth)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Health check |
+| GET | `/stats` | Connection stats |
+| GET | `/clients` | List all clients |
+| POST | `/clients` | Create client |
+| POST | `/clients/{id}/numbers` | Add number to client |
+| GET | `/clients/{id}/settings` | Get web settings |
+| PUT | `/clients/{id}/settings` | Update web settings |
+| GET | `/carriers` | List carriers |
+| POST | `/carriers` | Add carrier |
+| POST | `/clients/reload` | Reload from DB |
+| POST | `/carriers/reload` | Reload carriers |
+
+### Web Client Endpoints (client auth)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/messages/send` | Send SMS/MMS |
+| GET | `/messages/usage` | Check quota |
+
+---
+
+## Configuration
+
+### Required Environment Variables
+
+```bash
+# Security
+ENCRYPTION_KEY=your-32-byte-key
+API_KEY=admin-api-key
+
+# Server Ports
+WEB_LISTEN=0.0.0.0:3000
+SMPP_LISTEN=0.0.0.0:9550
+MM4_LISTEN=0.0.0.0:2566
+
+# PostgreSQL
+POSTGRES_HOST=postgres
+POSTGRES_USER=smsgw
+POSTGRES_PASSWORD=secret
+POSTGRES_DB=smsgw
+```
+
+### Global Retry Configuration
+
+```bash
+WEBHOOK_RETRIES=3
+WEBHOOK_TIMEOUT_SECS=10
+SMPP_RETRIES=3
+SMPP_TIMEOUT_SECS=30
+MM4_RETRIES=3
+MM4_TIMEOUT_SECS=60
+NOTIFY_SENDER_ON_FAILURE=true
+```
+
+### Carriers
+
+```bash
+TELNYX_ENABLE=true
+TELNYX_API_KEY=your-key
+
+TWILIO_ENABLE=true
+TWILIO_ACCOUNT_SID=your-sid
+TWILIO_AUTH_TOKEN=your-token
+```
+
+---
+
+## CLI Management Tool
+
+```bash
+cd scripts
+pip install requests
+export MSGGW_BASE_URL=http://localhost:3000
+export MSGGW_API_KEY=your-api-key
+python main.py
+```
+
+See [scripts/README.md](scripts/README.md) for usage.
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/api_reference.md](docs/api_reference.md) | Complete API reference |
+| [docs/deployment.md](docs/deployment.md) | Docker setup & production |
+| [docs/web_clients.md](docs/web_clients.md) | Web/Bicom integration |
+| [docs/legacy_clients.md](docs/legacy_clients.md) | SMPP/Zultys integration |
+| [docs/data_models.md](docs/data_models.md) | Database schemas |
+| [docs/usage_limits.md](docs/usage_limits.md) | Quota management |
+| [docs/configuration.md](docs/configuration.md) | All env variables |
+
+---
 
 ## License
 
-This project is licensed under the terms specified in the `LICENSE` file located in the `smpp` directory.
+See `smpp/LICENSE` file.

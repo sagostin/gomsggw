@@ -2,15 +2,37 @@ package main
 
 import (
 	"fmt"
-	"gorm.io/driver/postgres"
-	"gorm.io/gorm"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
+
+// GatewayConfig holds global configuration defaults
+type GatewayConfig struct {
+	// Web client defaults (can be overridden per-client)
+	WebhookRetries        int `json:"webhook_retries"`          // Default: 3
+	WebhookTimeoutSecs    int `json:"webhook_timeout_secs"`     // Default: 10
+	WebhookRetryDelaySecs int `json:"webhook_retry_delay_secs"` // Default: 5
+
+	// SMPP (SMS) defaults
+	SMPPRetries     int `json:"smpp_retries"`      // Default: 3
+	SMPPTimeoutSecs int `json:"smpp_timeout_secs"` // Default: 30
+
+	// MM4 (MMS) defaults
+	MM4Retries     int `json:"mm4_retries"`      // Default: 3
+	MM4TimeoutSecs int `json:"mm4_timeout_secs"` // Default: 60
+
+	// Failure notification
+	NotifySenderOnFailure bool `json:"notify_sender_on_failure"` // Send error back to original sender
+}
 
 // Gateway handles SMS processing for different carriers
 type Gateway struct {
+	Config       GatewayConfig
 	Carriers     map[string]CarrierHandler
 	CarrierUUIDs map[string]Carrier
 	DB           *gorm.DB
@@ -34,6 +56,23 @@ type MsgRecord struct {
 	ClientID     uint
 	Carrier      string
 	Internal     bool
+
+	// Enhanced tracking
+	Direction      string // "inbound" or "outbound"
+	FromClientType string // "legacy", "web", or "carrier"
+	ToClientType   string // "legacy", "web", or "carrier"
+	DeliveryMethod string // "smpp", "mm4", "webhook", "carrier_api"
+	Encoding       string // For SMS: "gsm7", "ucs2", etc.
+
+	// Segment tracking for split messages (all segments share same LogID)
+	TotalSegments int // Total number of segments in this message (1 for single-part)
+	SegmentIndex  int // Index of this segment (0-based)
+
+	// MMS transcoding
+	OriginalSizeBytes    int
+	TranscodedSizeBytes  int
+	MediaCount           int
+	TranscodingPerformed bool
 }
 
 func getPostgresDSN() string {
@@ -68,6 +107,61 @@ func getPostgresDSN() string {
 	return dsn
 }
 
+// loadGatewayConfig loads global configuration from environment variables
+func loadGatewayConfig() GatewayConfig {
+	config := GatewayConfig{
+		WebhookRetries:        3,
+		WebhookTimeoutSecs:    10,
+		WebhookRetryDelaySecs: 5,
+		SMPPRetries:           3,
+		SMPPTimeoutSecs:       30,
+		MM4Retries:            3,
+		MM4TimeoutSecs:        60,
+		NotifySenderOnFailure: true,
+	}
+
+	if val := os.Getenv("WEBHOOK_RETRIES"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			config.WebhookRetries = v
+		}
+	}
+	if val := os.Getenv("WEBHOOK_TIMEOUT_SECS"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			config.WebhookTimeoutSecs = v
+		}
+	}
+	if val := os.Getenv("WEBHOOK_RETRY_DELAY_SECS"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			config.WebhookRetryDelaySecs = v
+		}
+	}
+	if val := os.Getenv("SMPP_RETRIES"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			config.SMPPRetries = v
+		}
+	}
+	if val := os.Getenv("SMPP_TIMEOUT_SECS"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			config.SMPPTimeoutSecs = v
+		}
+	}
+	if val := os.Getenv("MM4_RETRIES"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			config.MM4Retries = v
+		}
+	}
+	if val := os.Getenv("MM4_TIMEOUT_SECS"); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			config.MM4TimeoutSecs = v
+		}
+	}
+	if val := os.Getenv("NOTIFY_SENDER_ON_FAILURE"); val != "" {
+		config.NotifySenderOnFailure = strings.ToLower(val) == "true" || val == "1"
+	}
+
+	return config
+}
+
 // NewGateway creates a new Gateway instance
 func NewGateway() (*Gateway, error) {
 	// Load environment variables or configuration for the database
@@ -79,6 +173,7 @@ func NewGateway() (*Gateway, error) {
 	}
 
 	gateway := &Gateway{
+		Config:       loadGatewayConfig(),
 		Carriers:     make(map[string]CarrierHandler),
 		CarrierUUIDs: make(map[string]Carrier),
 		Router: &Router{

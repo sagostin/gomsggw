@@ -2,72 +2,69 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:15-alpine
-    container_name: postgres
+    image: postgres:17-alpine
+    container_name: gomsggw-db
     env_file:
       - .env
     environment:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_HOST_AUTH_METHOD=${POSTGRES_HOST_AUTH_METHOD}
     volumes:
-      - ./postgres/data:/var/lib/postgresql/data
+      - ./postgres_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     restart: always
     networks:
-      - smsgw-network
+      - gomsggw-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  rabbitmq:
-    image: rabbitmq:3.12-management-alpine
-    container_name: rabbitmq
-    env_file:
-      - .env
-    volumes:
-      - ./rabbitmq/data:/var/lib/rabbitmq
-      - ./rabbitmq/log:/var/log/rabbitmq
-      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
-      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json
-    environment:
-      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
-      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
-      - RABBITMQ_VHOST=${RABBITMQ_VHOST}
-    ports:
-      - "${RABBITMQ_PORT}:5672"
-      - "${RABBITMQ_MANAGEMENT_PORT}:15672"
-      - "${RABBITMQ_PROMETHEUS_PORT}:15692" # Prometheus metrics exporter
-    restart: always
-    networks:
-      - smsgw-network
-
-  msggw:
-    image: sms-mms-gw:latest
-    container_name: msggw
+  gomsggw:
+    image: gomsggw:latest
+    container_name: gomsggw
     env_file:
       - .env
     restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
     networks:
-      - smsgw-network
+      - gomsggw-network
     ports:
-      - "80:3000"
-      - "2775:2775"
-      - "2566:2566"
+      - "3000:3000" # Web API
+      - "9550:9550" # SMPP
+      - "2566:2566" # MM4
     environment:
-      - SERVER_ID=msggw1
-#  haproxy:
-#    image: haproxy:latest
-#    container_name: haproxy
-#    volumes:
-#      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-#    ports:
-#      - "80:80"
-#      - "2775:2775"
-#      - "2566:2566"
-#    networks:
-#      - smsgw-network
-#    restart: always
+      - SERVER_ID=gomsggw1
+      - POSTGRES_HOST=postgres
+  # Optional: Automated backup container
+  # Uncomment to enable scheduled backups
+  # backup:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.backup
+  #   container_name: gomsggw-backup
+  #   env_file:
+  #     - .env
+  #   environment:
+  #     - POSTGRES_HOST=postgres
+  #     - BACKUP_SCHEDULE=0 2 * * *
+  #   volumes:
+  #     - ./backups:/var/backups/gomsggw
+  #     - ./.env:/app/.env:ro
+  #   depends_on:
+  #     - postgres
+  #   restart: always
+  #   networks:
+  #     - gomsggw-network
 
 networks:
-  smsgw-network:
+  gomsggw-network:
     driver: bridge
+
+volumes:
+  postgres_data:

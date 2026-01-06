@@ -87,6 +87,7 @@ type MsgFile struct {
 	ContentType string `json:"content_type,omitempty"`
 	Content     []byte `json:"content,omitempty"`
 	Base64Data  string `json:"base64_data,omitempty"`
+	MediaURL    string `json:"media_url,omitempty"` // URL to fetch media from (Bicom/Telnyx)
 }
 
 // safeClientInfo builds a log field map from an MM4Message without panicking.

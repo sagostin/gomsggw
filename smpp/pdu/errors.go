@@ -23,7 +23,8 @@ const (
 	ErrInvalidDestFlag      CommandStatus = 0x040
 	ErrInvalidTagLength     CommandStatus = 0x0C2
 	ErrUnknownError         CommandStatus = 0x0FF
-	ErrInvalidSystemID      CommandStatus = 0x0000000F // ESME_ESME_RINVSYSID
+	ErrInvalidSystemID      CommandStatus = 0x0000000F // ESME_RINVSYSID
 	ErrInvalidPasswd        CommandStatus = 0x0000000E // ESME_RINVPASWD
+	ErrBindFail             CommandStatus = 0x00000005 // ESME_RBINDFAIL
 	ESME_ROK                CommandStatus = 0x00000000
 )

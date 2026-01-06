@@ -1,0 +1,26 @@
+FROM alpine:3.19
+
+RUN apk add --no-cache \
+    bash \
+    postgresql16-client \
+    lftp \
+    curl \
+    openssl \
+    dcron
+
+WORKDIR /app
+
+COPY scripts/backup.sh /app/backup.sh
+RUN chmod +x /app/backup.sh
+
+# Create backup directory
+RUN mkdir -p /var/backups/gomsggw
+
+# Default: run backup daily at 2am
+ENV BACKUP_SCHEDULE="0 2 * * *"
+
+# Entrypoint: setup cron and run
+COPY scripts/backup-entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]

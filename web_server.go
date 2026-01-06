@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kataras/iris/v12"
 	"github.com/sirupsen/logrus"
 )
@@ -291,6 +293,13 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 				return
 			}
 
+			// Legacy clients require an address (IP or hostname) for SMPP ACL and MM4 delivery
+			if (client.Type == "" || client.Type == "legacy") && client.Address == "" {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Address (IP or hostname) is required for legacy clients"})
+				return
+			}
+
 			if err := gateway.addClient(&client); err != nil {
 				ctx.StatusCode(iris.StatusInternalServerError)
 				ctx.JSON(iris.Map{"error": err.Error()})
@@ -302,6 +311,7 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 				ID:         client.ID,
 				Username:   client.Username,
 				Name:       client.Name,
+				Type:       client.Type,
 				Address:    client.Address,
 				LogPrivacy: client.LogPrivacy,
 			}
@@ -321,9 +331,8 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			ctx.JSON(iris.Map{"status": "Clients and Numbers reloaded"})
 		})
 
-		// Add this inside the SetupClientRoutes function, within the clients Party group:
 		// Update client password
-		/*clients.Patch("/{id}/password", func(ctx iris.Context) {
+		clients.Patch("/{id}/password", func(ctx iris.Context) {
 			clientIDStr := ctx.Params().Get("id")
 			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
 			if err != nil {
@@ -359,11 +368,18 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			}
 
 			ctx.JSON(iris.Map{"status": "Password updated successfully"})
-		})*/
+		})
 
 		// Add a new number to a client
 		clients.Post("/{id}/numbers", func(ctx iris.Context) {
-			clientID := ctx.Params().Get("id")
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
 			var newNumber ClientNumber
 			if err := ctx.ReadJSON(&newNumber); err != nil {
 				ctx.StatusCode(iris.StatusBadRequest)
@@ -379,7 +395,7 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			}
 
 			// Add the number to the client
-			if err := gateway.addNumber(clientID, &newNumber); err != nil {
+			if err := gateway.addNumber(uint(clientID), &newNumber); err != nil {
 				ctx.StatusCode(iris.StatusInternalServerError)
 				ctx.JSON(iris.Map{"error": err.Error()})
 				return
@@ -399,19 +415,158 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 
 		// Get all numbers for a specific client
 		clients.Get("/{id}/numbers", func(ctx iris.Context) {
-			clientID := ctx.Params().Get("id")
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
 
-			gateway.mu.RLock()
-			client, exists := gateway.Clients[clientID]
-			gateway.mu.RUnlock()
-
-			if !exists {
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
 				ctx.StatusCode(iris.StatusNotFound)
 				ctx.JSON(iris.Map{"error": "Client not found"})
 				return
 			}
 
 			ctx.JSON(client.Numbers)
+		})
+
+		// Get ClientSettings for a client
+		clients.Get("/{id}/settings", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			if client.Settings == nil {
+				ctx.JSON(iris.Map{"message": "No web settings configured for this client"})
+				return
+			}
+
+			ctx.JSON(client.Settings)
+		})
+
+		// Update ClientSettings for a client
+		clients.Put("/{id}/settings", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			var updateReq struct {
+				// Auth & Format
+				AuthMethod *string `json:"auth_method,omitempty"`
+				APIFormat  *string `json:"api_format,omitempty"`
+				// Web-specific
+				DisableMessageSplitting *bool   `json:"disable_message_splitting,omitempty"`
+				WebhookRetries          *int    `json:"webhook_retries,omitempty"`
+				WebhookTimeoutSecs      *int    `json:"webhook_timeout_secs,omitempty"`
+				IncludeRawSegments      *bool   `json:"include_raw_segments,omitempty"`
+				DefaultWebhook          *string `json:"default_webhook,omitempty"`
+				// SMS Limits
+				SMSBurstLimit   *int64 `json:"sms_burst_limit,omitempty"`
+				SMSDailyLimit   *int64 `json:"sms_daily_limit,omitempty"`
+				SMSMonthlyLimit *int64 `json:"sms_monthly_limit,omitempty"`
+				// MMS Limits
+				MMSBurstLimit   *int64 `json:"mms_burst_limit,omitempty"`
+				MMSDailyLimit   *int64 `json:"mms_daily_limit,omitempty"`
+				MMSMonthlyLimit *int64 `json:"mms_monthly_limit,omitempty"`
+				// Limit Behavior
+				LimitBoth *bool `json:"limit_both,omitempty"`
+			}
+
+			if err := ctx.ReadJSON(&updateReq); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request body"})
+				return
+			}
+
+			// Create settings if they don't exist
+			if client.Settings == nil {
+				client.Settings = &ClientSettings{ClientID: client.ID}
+			}
+
+			// Apply updates - Auth & Format
+			if updateReq.AuthMethod != nil {
+				client.Settings.AuthMethod = *updateReq.AuthMethod
+			}
+			if updateReq.APIFormat != nil {
+				client.Settings.APIFormat = *updateReq.APIFormat
+			}
+			// Web-specific
+			if updateReq.DisableMessageSplitting != nil {
+				client.Settings.DisableMessageSplitting = *updateReq.DisableMessageSplitting
+			}
+			if updateReq.WebhookRetries != nil {
+				client.Settings.WebhookRetries = *updateReq.WebhookRetries
+			}
+			if updateReq.WebhookTimeoutSecs != nil {
+				client.Settings.WebhookTimeoutSecs = *updateReq.WebhookTimeoutSecs
+			}
+			if updateReq.IncludeRawSegments != nil {
+				client.Settings.IncludeRawSegments = *updateReq.IncludeRawSegments
+			}
+			if updateReq.DefaultWebhook != nil {
+				client.Settings.DefaultWebhook = *updateReq.DefaultWebhook
+			}
+			// SMS Limits
+			if updateReq.SMSBurstLimit != nil {
+				client.Settings.SMSBurstLimit = *updateReq.SMSBurstLimit
+			}
+			if updateReq.SMSDailyLimit != nil {
+				client.Settings.SMSDailyLimit = *updateReq.SMSDailyLimit
+			}
+			if updateReq.SMSMonthlyLimit != nil {
+				client.Settings.SMSMonthlyLimit = *updateReq.SMSMonthlyLimit
+			}
+			// MMS Limits
+			if updateReq.MMSBurstLimit != nil {
+				client.Settings.MMSBurstLimit = *updateReq.MMSBurstLimit
+			}
+			if updateReq.MMSDailyLimit != nil {
+				client.Settings.MMSDailyLimit = *updateReq.MMSDailyLimit
+			}
+			if updateReq.MMSMonthlyLimit != nil {
+				client.Settings.MMSMonthlyLimit = *updateReq.MMSMonthlyLimit
+			}
+			// Limit Behavior
+			if updateReq.LimitBoth != nil {
+				client.Settings.LimitBoth = *updateReq.LimitBoth
+			}
+
+			// Save to database
+			if err := gateway.DB.Save(client.Settings).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to save settings"})
+				return
+			}
+
+			ctx.JSON(iris.Map{
+				"message":  "Settings updated",
+				"settings": client.Settings,
+			})
 		})
 
 		// Get all clients
@@ -427,13 +582,349 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 					Username:   client.Username,
 					Name:       client.Name,
 					Address:    client.Address,
+					Type:       client.Type,
+					Timezone:   client.Timezone,
 					LogPrivacy: client.LogPrivacy,
+					Settings:   client.Settings,
 					Numbers:    client.Numbers,
 				}
 				clientList = append(clientList, c)
 			}
 
 			ctx.JSON(clientList)
+		})
+
+		// Update a number's properties
+		clients.Put("/{id}/numbers/{number_id}", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
+			numberIDStr := ctx.Params().Get("number_id")
+			numberID, err := strconv.ParseUint(numberIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number ID"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			// Find the number in the client's numbers
+			var targetNumber *ClientNumber
+			for i := range client.Numbers {
+				if client.Numbers[i].ID == uint(numberID) {
+					targetNumber = &client.Numbers[i]
+					break
+				}
+			}
+			if targetNumber == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Number not found for this client"})
+				return
+			}
+
+			var updateReq struct {
+				Carrier              *string `json:"carrier,omitempty"`
+				Tag                  *string `json:"tag,omitempty"`
+				Group                *string `json:"group,omitempty"`
+				Webhook              *string `json:"webhook,omitempty"`
+				IgnoreStopCmdSending *bool   `json:"ignore_stop_cmd_sending,omitempty"`
+			}
+
+			if err := ctx.ReadJSON(&updateReq); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request body"})
+				return
+			}
+
+			// Apply updates
+			if updateReq.Carrier != nil {
+				targetNumber.Carrier = *updateReq.Carrier
+			}
+			if updateReq.Tag != nil {
+				targetNumber.Tag = *updateReq.Tag
+			}
+			if updateReq.Group != nil {
+				targetNumber.Group = *updateReq.Group
+			}
+			if updateReq.Webhook != nil {
+				targetNumber.WebHook = *updateReq.Webhook
+			}
+			if updateReq.IgnoreStopCmdSending != nil {
+				targetNumber.IgnoreStopCmdSending = *updateReq.IgnoreStopCmdSending
+			}
+
+			// Save to database
+			if err := gateway.DB.Save(targetNumber).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to update number"})
+				return
+			}
+
+			ctx.JSON(iris.Map{
+				"message": "Number updated",
+				"number":  targetNumber,
+			})
+		})
+
+		// Delete a number from a client
+		clients.Delete("/{id}/numbers/{number_id}", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
+			numberIDStr := ctx.Params().Get("number_id")
+			numberID, err := strconv.ParseUint(numberIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number ID"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			// Find the number in the client's numbers
+			var targetNumber *ClientNumber
+			var targetIndex int
+			for i := range client.Numbers {
+				if client.Numbers[i].ID == uint(numberID) {
+					targetNumber = &client.Numbers[i]
+					targetIndex = i
+					break
+				}
+			}
+			if targetNumber == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Number not found for this client"})
+				return
+			}
+
+			// Delete NumberSettings if exists
+			if targetNumber.Settings != nil {
+				gateway.DB.Delete(targetNumber.Settings)
+			}
+
+			// Delete from database
+			if err := gateway.DB.Delete(targetNumber).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to delete number"})
+				return
+			}
+
+			// Remove from in-memory map
+			gateway.mu.Lock()
+			delete(gateway.Numbers, targetNumber.Number)
+			// Remove from client's Numbers slice
+			client.Numbers = append(client.Numbers[:targetIndex], client.Numbers[targetIndex+1:]...)
+			gateway.mu.Unlock()
+
+			ctx.JSON(iris.Map{"message": "Number deleted", "number_id": numberID})
+		})
+
+		// Delete a client
+		clients.Delete("/{id}", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			// Delete all NumberSettings for this client's numbers
+			for _, num := range client.Numbers {
+				if num.Settings != nil {
+					gateway.DB.Delete(num.Settings)
+				}
+				gateway.DB.Delete(&num)
+				gateway.mu.Lock()
+				delete(gateway.Numbers, num.Number)
+				gateway.mu.Unlock()
+			}
+
+			// Delete ClientSettings
+			if client.Settings != nil {
+				gateway.DB.Delete(client.Settings)
+			}
+
+			// Delete the client from database
+			if err := gateway.DB.Delete(&Client{}, clientID).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to delete client"})
+				return
+			}
+
+			// Remove from in-memory map
+			gateway.mu.Lock()
+			delete(gateway.Clients, client.Username)
+			gateway.mu.Unlock()
+
+			ctx.JSON(iris.Map{"message": "Client deleted", "client_id": clientID})
+		})
+	}
+}
+
+// SetupNumberRoutes sets up the HTTP routes for number management (standalone).
+func SetupNumberRoutes(app *iris.Application, gateway *Gateway) {
+	numbers := app.Party("/numbers", gateway.basicAuthMiddleware)
+	{
+		// Update NumberSettings for a number
+		numbers.Put("/{id}/settings", func(ctx iris.Context) {
+			numberIDStr := ctx.Params().Get("id")
+			numberID, err := strconv.ParseUint(numberIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number ID"})
+				return
+			}
+
+			// Find the number in the gateway's numbers map
+			var targetNumber *ClientNumber
+			gateway.mu.RLock()
+			for _, num := range gateway.Numbers {
+				if num.ID == uint(numberID) {
+					targetNumber = num
+					break
+				}
+			}
+			gateway.mu.RUnlock()
+
+			if targetNumber == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Number not found"})
+				return
+			}
+
+			var updateReq struct {
+				// SMS Limits
+				SMSBurstLimit   *int64 `json:"sms_burst_limit,omitempty"`
+				SMSDailyLimit   *int64 `json:"sms_daily_limit,omitempty"`
+				SMSMonthlyLimit *int64 `json:"sms_monthly_limit,omitempty"`
+				// MMS Limits
+				MMSBurstLimit   *int64 `json:"mms_burst_limit,omitempty"`
+				MMSDailyLimit   *int64 `json:"mms_daily_limit,omitempty"`
+				MMSMonthlyLimit *int64 `json:"mms_monthly_limit,omitempty"`
+				// Limit Behavior
+				LimitBoth *bool `json:"limit_both,omitempty"`
+			}
+
+			if err := ctx.ReadJSON(&updateReq); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request body"})
+				return
+			}
+
+			// Create settings if they don't exist
+			if targetNumber.Settings == nil {
+				targetNumber.Settings = &NumberSettings{NumberID: targetNumber.ID}
+			}
+
+			// Apply updates
+			if updateReq.SMSBurstLimit != nil {
+				targetNumber.Settings.SMSBurstLimit = *updateReq.SMSBurstLimit
+			}
+			if updateReq.SMSDailyLimit != nil {
+				targetNumber.Settings.SMSDailyLimit = *updateReq.SMSDailyLimit
+			}
+			if updateReq.SMSMonthlyLimit != nil {
+				targetNumber.Settings.SMSMonthlyLimit = *updateReq.SMSMonthlyLimit
+			}
+			if updateReq.MMSBurstLimit != nil {
+				targetNumber.Settings.MMSBurstLimit = *updateReq.MMSBurstLimit
+			}
+			if updateReq.MMSDailyLimit != nil {
+				targetNumber.Settings.MMSDailyLimit = *updateReq.MMSDailyLimit
+			}
+			if updateReq.MMSMonthlyLimit != nil {
+				targetNumber.Settings.MMSMonthlyLimit = *updateReq.MMSMonthlyLimit
+			}
+			if updateReq.LimitBoth != nil {
+				targetNumber.Settings.LimitBoth = *updateReq.LimitBoth
+			}
+
+			// Save to database
+			if err := gateway.DB.Save(targetNumber.Settings).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to save settings"})
+				return
+			}
+
+			// Also update the client's in-memory reference
+			client := gateway.getClientByID(targetNumber.ClientID)
+			if client != nil {
+				for i := range client.Numbers {
+					if client.Numbers[i].ID == targetNumber.ID {
+						client.Numbers[i].Settings = targetNumber.Settings
+						break
+					}
+				}
+			}
+
+			ctx.JSON(iris.Map{
+				"message":  "Number settings updated",
+				"settings": targetNumber.Settings,
+			})
+		})
+
+		// Get NumberSettings for a number
+		numbers.Get("/{id}/settings", func(ctx iris.Context) {
+			numberIDStr := ctx.Params().Get("id")
+			numberID, err := strconv.ParseUint(numberIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number ID"})
+				return
+			}
+
+			// Find the number
+			var targetNumber *ClientNumber
+			gateway.mu.RLock()
+			for _, num := range gateway.Numbers {
+				if num.ID == uint(numberID) {
+					targetNumber = num
+					break
+				}
+			}
+			gateway.mu.RUnlock()
+
+			if targetNumber == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Number not found"})
+				return
+			}
+
+			if targetNumber.Settings == nil {
+				ctx.JSON(iris.Map{"message": "No settings configured for this number"})
+				return
+			}
+
+			ctx.JSON(targetNumber.Settings)
 		})
 	}
 }
@@ -468,14 +959,14 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 	}
 
 	// Log the error for unknown carrier
-	/*logf := LoggingFormat{
-		Type: LogType.Carrier + "_" + LogType.Inbound,
-	}
-	logf.AddField("carrier", carrier)
-	logf.Level = logrus.WarnLevel
-	logf.message = "Unknown carrier"
-	logf.Print()
-	*/
+	gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+		"WebServer.Carrier",
+		"Unknown carrier UUID",
+		logrus.WarnLevel,
+		map[string]interface{}{
+			"carrier_uuid": carrier,
+		},
+	))
 	// Respond with 404 Not Found
 	ctx.StatusCode(http.StatusNotFound)
 	ctx.WriteString("carrier not found")
@@ -486,16 +977,15 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	fileID := ctx.Params().Get("id")
 	id, err := strconv.ParseInt(fileID, 10, 64)
 	if fileID == "" || err != nil {
-		// Log the error
-		/*logf := LoggingFormat{
-			Type: LogType.Carrier + "_" + LogType.Inbound,
-		}
-		logf.AddField("error", "file ID is required")
-		logf.Level = logrus.ErrorLevel
-		logf.message = "Missing file ID in request"
-		logf.Print()*/
-
-		// Respond with 400 Bad Request
+		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+			"WebServer.Media",
+			"Invalid or missing file ID",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"file_id": fileID,
+				"error":   "file ID is required or invalid",
+			},
+		))
 		ctx.StatusCode(http.StatusBadRequest)
 		ctx.WriteString("file ID is required")
 		return
@@ -504,17 +994,14 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	// Retrieve the media file from MongoDB
 	mediaFile, err := gateway.getMediaFile(uint(id))
 	if err != nil {
-		// Log the error
-		/*logf := LoggingFormat{
-			Type: LogType.Carrier + "_" + LogType.Inbound,
-		}*/
-		/*logf.AddField("error", err.Error())
-		logf.AddField("fileID", fileID)
-		logf.Level = logrus.ErrorLevel
-		logf.message = "Failed to retrieve media file from MongoDB"
-		logf.Print()*/
-
-		// Respond with 404 Not Found
+		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+			"WebServer.Media",
+			"Failed to retrieve media file",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"file_id": fileID,
+			}, err,
+		))
 		ctx.StatusCode(http.StatusNotFound)
 		ctx.WriteString("media file not found")
 		return
@@ -529,17 +1016,14 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	// Decode the Base64-encoded data
 	fileBytes, err := base64.StdEncoding.DecodeString(mediaFile.Base64Data)
 	if err != nil {
-		// Log the error
-		/*logf := LoggingFormat{
-			Type: LogType.Carrier + "_" + LogType.Inbound,
-		}
-		logf.AddField("error", err.Error())
-		logf.AddField("fileID", fileID)
-		logf.Level = logrus.ErrorLevel
-		logf.message = "Failed to decode Base64 media data"
-		logf.Print()*/
-
-		// Respond with 500 Internal Server Error
+		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+			"WebServer.Media",
+			"Failed to decode Base64 media data",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"file_id": fileID,
+			}, err,
+		))
 		ctx.StatusCode(http.StatusInternalServerError)
 		ctx.WriteString("failed to decode file data")
 		return
@@ -613,4 +1097,419 @@ func ProxyIPMiddleware(ctx iris.Context) {
 	// If we couldn't determine a public IP, fall back to the remote address
 	ctx.Values().Set("client_ip", ctx.RemoteAddr())
 	ctx.Next()
+}
+
+// clientAuthMiddleware authenticates using Basic Auth (username:password) or Bearer token.
+// Bearer token should be the base64-encoded username:password (for Bicom compatibility).
+// Only 'web' type clients can use this API - legacy clients must use SMPP.
+// Auth method is validated against client's api_format setting:
+// - bicom: expects Bearer token
+// - generic/telnyx/other: expects Basic Auth
+func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
+	var username, password string
+	var authMethod string // "basic" or "bearer"
+
+	// Try Basic Auth first
+	username, password, ok := ctx.Request().BasicAuth()
+	if ok {
+		authMethod = "basic"
+	}
+
+	// If no Basic Auth, try Bearer token
+	if !ok {
+		authHeader := ctx.GetHeader("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			// Token is base64(username:password)
+			decoded, err := base64.StdEncoding.DecodeString(token)
+			if err == nil {
+				parts := strings.SplitN(string(decoded), ":", 2)
+				if len(parts) == 2 {
+					username = parts[0]
+					password = parts[1]
+					authMethod = "bearer"
+					ok = true
+				}
+			}
+		}
+	}
+
+	if !ok || username == "" {
+		unauthorized(ctx, gateway, "Authentication required")
+		return
+	}
+
+	gateway.mu.RLock()
+	client, exists := gateway.Clients[username]
+	gateway.mu.RUnlock()
+
+	if !exists {
+		unauthorized(ctx, gateway, "Invalid credentials")
+		return
+	}
+
+	// Password check
+	if client.Password != password {
+		unauthorized(ctx, gateway, "Invalid credentials")
+		return
+	}
+
+	// Only web clients can use REST API - legacy clients must use SMPP
+	if client.Type != "" && client.Type != "web" {
+		ctx.StatusCode(iris.StatusForbidden)
+		ctx.JSON(iris.Map{
+			"status":  "error",
+			"message": "Legacy clients must use SMPP protocol, not REST API",
+		})
+		return
+	}
+
+	// Validate auth method matches client's auth_method setting
+	expectedAuth := "basic" // default
+	if client.Settings != nil && client.Settings.AuthMethod != "" {
+		expectedAuth = client.Settings.AuthMethod
+	}
+
+	if expectedAuth != authMethod {
+		ctx.StatusCode(iris.StatusUnauthorized)
+		ctx.JSON(iris.Map{
+			"status":  "error",
+			"message": fmt.Sprintf("Client requires %s authentication", expectedAuth),
+		})
+		return
+	}
+
+	// Set client in context
+	ctx.Values().Set("client", client)
+	ctx.Values().Set("auth_method", authMethod)
+	ctx.Next()
+}
+
+// WebMediaItem represents a media file in the JSON payload.
+type WebMediaItem struct {
+	Filename    string `json:"filename"`     // e.g. "photo.jpg"
+	Content     string `json:"content"`      // Base64 encoded content
+	ContentType string `json:"content_type"` // e.g. "image/jpeg"
+	URL         string `json:"url"`          // Alternative: URL to media (for Bicom/Telnyx)
+}
+
+// WebMessageRequest represents the incoming JSON payload for sending a message (generic format).
+type WebMessageRequest struct {
+	ClientID uint           `json:"client_id"` // Explicit client ID (validated against auth)
+	From     string         `json:"from"`      // Sender number (must belong to client)
+	To       string         `json:"to"`
+	Text     string         `json:"text"`
+	Media    []WebMediaItem `json:"media,omitempty"`
+}
+
+// BicomMessageRequest represents Bicom's inbound message format.
+type BicomMessageRequest struct {
+	From      string   `json:"from"`
+	To        string   `json:"to"`
+	Text      string   `json:"text"`
+	MediaURLs []string `json:"media_urls,omitempty"`
+}
+
+// TelnyxMessageRequest represents Telnyx's webhook-like inbound format.
+type TelnyxMessageRequest struct {
+	Data struct {
+		EventType string `json:"event_type"`
+		Payload   struct {
+			From struct {
+				PhoneNumber string `json:"phone_number"`
+			} `json:"from"`
+			To []struct {
+				PhoneNumber string `json:"phone_number"`
+			} `json:"to"`
+			Text  string `json:"text"`
+			Media []struct {
+				URL         string `json:"url"`
+				ContentType string `json:"content_type"`
+			} `json:"media,omitempty"`
+		} `json:"payload"`
+	} `json:"data"`
+}
+
+// ParsedMessage is the normalized internal format after parsing any API format.
+type ParsedMessage struct {
+	From  string
+	To    string
+	Text  string
+	Media []WebMediaItem
+}
+
+// SetupMessageRoutes sets up the HTTP routes for message sending (Web Clients).
+func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
+	messages := app.Party("/messages", gateway.clientAuthMiddleware)
+	{
+		messages.Post("/send", func(ctx iris.Context) {
+			// Get authenticated client
+			client := ctx.Values().Get("client").(*Client)
+
+			// Determine API format from client settings
+			apiFormat := "generic"
+			if client.Settings != nil && client.Settings.APIFormat != "" {
+				apiFormat = client.Settings.APIFormat
+			}
+
+			// Parse request based on format
+			var parsed ParsedMessage
+			switch apiFormat {
+			case "bicom":
+				var req BicomMessageRequest
+				if err := ctx.ReadJSON(&req); err != nil {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"error": "Invalid Bicom format request body"})
+					return
+				}
+				parsed.From = req.From
+				parsed.To = req.To
+				parsed.Text = req.Text
+				// Convert media URLs to WebMediaItems
+				for _, url := range req.MediaURLs {
+					parsed.Media = append(parsed.Media, WebMediaItem{URL: url})
+				}
+
+			case "telnyx":
+				var req TelnyxMessageRequest
+				if err := ctx.ReadJSON(&req); err != nil {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"error": "Invalid Telnyx format request body"})
+					return
+				}
+				parsed.From = req.Data.Payload.From.PhoneNumber
+				if len(req.Data.Payload.To) > 0 {
+					parsed.To = req.Data.Payload.To[0].PhoneNumber
+				}
+				parsed.Text = req.Data.Payload.Text
+				for _, m := range req.Data.Payload.Media {
+					parsed.Media = append(parsed.Media, WebMediaItem{URL: m.URL, ContentType: m.ContentType})
+				}
+
+			default: // "generic"
+				var req WebMessageRequest
+				if err := ctx.ReadJSON(&req); err != nil {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"error": "Invalid request body"})
+					return
+				}
+				// Validate client_id matches authenticated client
+				if req.ClientID != 0 && req.ClientID != client.ID {
+					ctx.StatusCode(iris.StatusForbidden)
+					ctx.JSON(iris.Map{"error": "Authenticated client does not match specified client_id"})
+					return
+				}
+				parsed.From = req.From
+				parsed.To = req.To
+				parsed.Text = req.Text
+				parsed.Media = req.Media
+			}
+
+			if parsed.To == "" {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "'to' field is required"})
+				return
+			}
+
+			// Validate From
+			fromNumber := parsed.From
+			if fromNumber == "" {
+				if len(client.Numbers) == 1 {
+					fromNumber = client.Numbers[0].Number
+				} else {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"error": "'from' field is required when multiple numbers exist"})
+					return
+				}
+			} else {
+				// verify ownership
+				owned := false
+				for _, n := range client.Numbers {
+					if n.Number == fromNumber { // loose match? or exact?
+						owned = true
+						break
+					}
+					// Check e164 match if stored with +
+					if strings.TrimPrefix(n.Number, "+") == strings.TrimPrefix(fromNumber, "+") {
+						fromNumber = n.Number // Use stored format
+						owned = true
+						break
+					}
+				}
+				if !owned {
+					ctx.StatusCode(iris.StatusForbidden)
+					ctx.JSON(iris.Map{"error": "You do not own the 'from' number"})
+					return
+				}
+			}
+
+			// Construct Queue Item
+			msgType := MsgQueueItemType.SMS
+			if len(parsed.Media) > 0 {
+				msgType = MsgQueueItemType.MMS
+			}
+
+			// --- COMPREHENSIVE LIMIT CHECK (Synchronous for API) ---
+			// Use the same limit checking logic as the router for consistency
+			limitResult := gateway.CheckMessageLimits(client, fromNumber, string(msgType), "outbound")
+			if limitResult != nil && !limitResult.Allowed {
+				ctx.StatusCode(iris.StatusTooManyRequests)
+				ctx.JSON(iris.Map{
+					"error":         "rate_limit_exceeded",
+					"message":       limitResult.Message,
+					"limit_type":    limitResult.LimitType,
+					"period":        limitResult.Period,
+					"number":        limitResult.Number,
+					"current_usage": limitResult.CurrentUsage,
+					"limit":         limitResult.Limit,
+				})
+				return
+			}
+			// --- END LIMIT CHECK ---
+
+			// Parse Media
+			var files []MsgFile
+			if msgType == MsgQueueItemType.MMS {
+				for _, media := range parsed.Media {
+					files = append(files, MsgFile{
+						Filename:    media.Filename,
+						ContentType: media.ContentType,
+						Base64Data:  media.Content,
+						MediaURL:    media.URL,
+					})
+				}
+			}
+
+			logID := uuid.New().String()
+
+			item := MsgQueueItem{
+				LogID:             logID,
+				To:                parsed.To,
+				From:              fromNumber,
+				Type:              msgType,
+				message:           parsed.Text,
+				files:             files,
+				ReceivedTimestamp: time.Now(),
+			}
+
+			// Inject into Router
+			// The router handles routing, logging, and additional LIMITS for non-API sources.
+			gateway.Router.ClientMsgChan <- item
+
+			// Return success immediately (Async)
+			ctx.StatusCode(iris.StatusAccepted)
+			ctx.JSON(iris.Map{
+				"status": "queued",
+				"id":     logID,
+			})
+		})
+
+		// GET /messages/usage - Check current usage against limits
+		messages.Get("/usage", func(ctx iris.Context) {
+			client := ctx.Values().Get("client").(*Client)
+
+			// Helper to build period usage
+			buildPeriodUsage := func(msgType string, period string) iris.Map {
+				periodStart := GetPeriodStart(client, period)
+				used, _ := gateway.GetUsageCountByType(client.ID, "", msgType, periodStart)
+
+				var limit int64
+				if client.Settings != nil {
+					limit, _, _ = getEffectiveLimit(client.Settings, nil, msgType, period)
+				}
+
+				var remaining interface{} = nil
+				if limit > 0 {
+					rem := limit - used
+					if rem < 0 {
+						rem = 0
+					}
+					remaining = rem
+				}
+
+				return iris.Map{
+					"current_usage": used,
+					"limit":         limit,
+					"remaining":     remaining,
+				}
+			}
+
+			// Build comprehensive client usage
+			clientUsage := iris.Map{
+				"username": client.Username,
+				"type":     client.Type,
+				"sms": iris.Map{
+					"burst":   buildPeriodUsage("sms", "burst"),
+					"daily":   buildPeriodUsage("sms", "daily"),
+					"monthly": buildPeriodUsage("sms", "monthly"),
+				},
+				"mms": iris.Map{
+					"burst":   buildPeriodUsage("mms", "burst"),
+					"daily":   buildPeriodUsage("mms", "daily"),
+					"monthly": buildPeriodUsage("mms", "monthly"),
+				},
+			}
+
+			// Build per-number usage (focusing on daily for numbers)
+			numberUsage := make([]iris.Map, 0, len(client.Numbers))
+			dailyStart := GetPeriodStart(client, "daily")
+
+			for _, num := range client.Numbers {
+				// Use direction-aware counting to match limit enforcement behavior (outbound only by default)
+				smsUsedOut, _ := gateway.GetUsageCountWithDirection(client.ID, num.Number, "sms", "outbound", dailyStart)
+				mmsUsedOut, _ := gateway.GetUsageCountWithDirection(client.ID, num.Number, "mms", "outbound", dailyStart)
+
+				// Get number limits and limit_both setting
+				var smsDailyLimit, mmsDailyLimit int64
+				limitBoth := false
+				if num.Settings != nil {
+					if num.Settings.SMSDailyLimit > 0 {
+						smsDailyLimit = num.Settings.SMSDailyLimit
+					}
+					if num.Settings.MMSDailyLimit > 0 {
+						mmsDailyLimit = num.Settings.MMSDailyLimit
+					}
+					limitBoth = num.Settings.LimitBoth
+				}
+
+				entry := iris.Map{
+					"number":    num.Number,
+					"direction": "outbound",
+					"sms": iris.Map{
+						"current_usage": smsUsedOut,
+						"limit":         smsDailyLimit,
+					},
+					"mms": iris.Map{
+						"current_usage": mmsUsedOut,
+						"limit":         mmsDailyLimit,
+					},
+					"limit_both": limitBoth,
+				}
+				if num.Tag != "" {
+					entry["tag"] = num.Tag
+				}
+				if num.Group != "" {
+					entry["group"] = num.Group
+				}
+				numberUsage = append(numberUsage, entry)
+			}
+
+			// Calculate reset times using client's timezone
+			burstReset := time.Now().Add(time.Minute)
+			dailyReset := GetPeriodStart(client, "daily").Add(24 * time.Hour)
+			monthlyReset := GetPeriodStart(client, "monthly").AddDate(0, 1, 0)
+
+			ctx.JSON(iris.Map{
+				"client":   clientUsage,
+				"numbers":  numberUsage,
+				"timezone": client.Timezone,
+				"reset_times": iris.Map{
+					"burst":   burstReset.Format(time.RFC3339),
+					"daily":   dailyReset.Format(time.RFC3339),
+					"monthly": monthlyReset.Format(time.RFC3339),
+				},
+				"timestamp": time.Now().Format(time.RFC3339),
+			})
+		})
+	}
 }

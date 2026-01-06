@@ -12,7 +12,7 @@ func (gateway *Gateway) createIndexes() error {
 }
 
 func (gateway *Gateway) migrateSchema() error {
-	if err := gateway.DB.AutoMigrate(&Client{}, &ClientNumber{}, &Carrier{}, &MediaFile{}, &MsgRecordDBItem{}); err != nil {
+	if err := gateway.DB.AutoMigrate(&Client{}, &ClientNumber{}, &ClientSettings{}, &NumberSettings{}, &Carrier{}, &MediaFile{}, &MsgRecordDBItem{}); err != nil {
 		return err
 	}
 	err := gateway.createIndexes()

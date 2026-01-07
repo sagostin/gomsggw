@@ -175,8 +175,8 @@ func main() {
 	// Define the /reload_clients route
 	// app.Get("/reload_clients", basicAuthMiddleware, gateway.webReloadClients)
 
-	// Define the /media/{id} route
-	app.Get("/media/{id}", gateway.webMediaFile)
+	// Define the /media/{token} route (UUID-based access token for security)
+	app.Get("/media/{token}", gateway.webMediaFile)
 	// Define the /inbound/{carrier} route
 	app.Post("/inbound/{carrier}", gateway.webInboundCarrier)
 

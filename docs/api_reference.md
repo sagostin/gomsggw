@@ -86,10 +86,11 @@ Add a carrier (admin auth).
   "type": "telnyx",
   "username": "api_key",
   "password": "api_secret",
-  "sms_limit": 600000,
-  "mms_limit": 1048576
+  "profile_id": "40016c5f-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 }
 ```
+
+> `profile_id` is optional. For Telnyx, this is the messaging_profile_id.
 
 ---
 
@@ -396,10 +397,24 @@ Each carrier has its own payload format. The gateway normalizes and routes them.
 
 ---
 
-### GET /media/{id}
-Retrieve MMS media files.
+### GET /media/{token}
+Retrieve MMS media files using UUID access token.
+
+**Security:**
+- Media files are accessed via unguessable UUID tokens, not sequential IDs
+- All access attempts are logged with client IP and User-Agent for audit trails
+- Tokens expire after 7 days along with the media content
+
+**Example URL:**
+```
+GET /media/a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
 
 **Response**: Binary file with appropriate Content-Type header.
+
+**Error Responses:**
+- `400` - Missing or invalid access token
+- `404` - Media file not found or expired
 
 ---
 

@@ -316,12 +316,129 @@ docker-compose logs gomsggw | grep webhook
 docker-compose exec postgres psql -U smsgw -c "SELECT 1"
 ```
 
+## Backup & Recovery
+
+### Overview
+
+GOMSGGW includes a backup script (`scripts/backup.sh`) that handles:
+- PostgreSQL database dumps (gzip compressed)
+- `.env` file backup (optionally encrypted with AES-256)
+- Automatic FTP upload (optional)
+- Retention-based cleanup
+
+### Configuration
+
+Add these to your `.env` file:
+
+```bash
+# Local backup settings
+BACKUP_LOCAL_DIR=/var/backups/gomsggw
+BACKUP_RETENTION_DAYS=7          # Days to keep local backups (0 = keep forever)
+BACKUP_SCHEDULE=0 2 * * *        # Cron schedule (default: 2 AM daily)
+
+# FTP upload (optional - leave empty to disable)
+BACKUP_FTP_HOST=ftp.example.com
+BACKUP_FTP_PORT=21
+BACKUP_FTP_USER=backup_user
+BACKUP_FTP_PASSWORD=secure_password
+BACKUP_FTP_DIR=/gomsggw
+```
+
+### Manual Backup
+
+```bash
+# Full backup (database + .env)
+./scripts/backup.sh
+
+# Database only
+./scripts/backup.sh --db-only
+
+# .env file only
+./scripts/backup.sh --env-only
+```
+
+### Backup Files
+
+| File Pattern | Contents |
+|--------------|----------|
+| `db_smsgw_YYYYMMDD_HHMMSS.sql.gz` | PostgreSQL dump (gzip) |
+| `env_YYYYMMDD_HHMMSS.enc` | .env file (encrypted if ENCRYPTION_KEY set) |
+
+### Scheduled Backups (Docker)
+
+Use the backup container for automated scheduling:
+
+```yaml
+# docker-compose.yml
+services:
+  backup:
+    image: alpine:3.19
+    container_name: gomsggw-backup
+    volumes:
+      - ./scripts:/app:ro
+      - ./backups:/var/backups/gomsggw
+      - ./.env:/app/.env:ro
+    env_file:
+      - .env
+    entrypoint: ["/app/backup-entrypoint.sh"]
+    depends_on:
+      - postgres
+```
+
+```bash
+# View backup logs
+docker logs gomsggw-backup
+
+# Run manual backup
+docker exec gomsggw-backup /app/backup.sh
+
+# Check next scheduled run
+docker exec gomsggw-backup crontab -l
+```
+
+### Restore Procedures
+
+#### Database Restore
+
+```bash
+# From gzip backup
+gunzip -c /var/backups/gomsggw/db_smsgw_20260106_020000.sql.gz | \
+  docker exec -i gomsggw-db psql -U smsgw smsgw
+
+# Or extract first
+gunzip db_smsgw_20260106_020000.sql.gz
+docker exec -i gomsggw-db psql -U smsgw smsgw < db_smsgw_20260106_020000.sql
+```
+
+#### .env Restore
+
+```bash
+# If encrypted (requires original ENCRYPTION_KEY)
+openssl enc -aes-256-cbc -d -pbkdf2 \
+  -in env_20260106_020000.enc \
+  -out .env \
+  -pass pass:"$ENCRYPTION_KEY"
+
+# If unencrypted
+cp env_20260106_020000.enc .env
+chmod 600 .env
+```
+
+### FTP Requirements
+
+The backup script requires `lftp` or `curl` for FTP uploads:
+
+```dockerfile
+# Alpine-based container
+RUN apk add --no-cache lftp postgresql-client openssl
+```
+
 ---
 
 ## Production Considerations
 
 1. **Use HTTPS** - Put behind nginx/traefik with TLS
 2. **Firewall** - Restrict SMPP/MM4 to known IPs
-3. **Backups** - Regular PostgreSQL backups
+3. **Backups** - Enable scheduled backups with FTP offsite
 4. **Monitoring** - Export Prometheus metrics to Grafana
-5. **Log aggregation** - Send logs to Loki/ELK
+5. **Log aggregation** - Enable Loki logging (`LOKI_ENABLED=true`)

@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sirupsen/logrus"
 )
 
 func (lm *LogManager) LoadTemplates() {
@@ -50,10 +51,11 @@ func (lm *LogManager) LoadTemplates() {
 
 // LogManager manages log templates and handles dispatching logs to Loki.
 type LogManager struct {
-	Templates  map[string]string
-	LokiClient *LokiClient
-	LogChannel chan *LoggingFormat
-	wg         sync.WaitGroup
+	Templates   map[string]string
+	LokiClient  *LokiClient
+	LokiEnabled bool // Whether to send logs to Loki
+	LogChannel  chan *LoggingFormat
+	wg          sync.WaitGroup
 }
 
 // LoggingFormat represents the structure of a log message.
@@ -142,11 +144,13 @@ func (c *LokiClient) PushLog(labels map[string]string, entry LogEntry) error {
 }
 
 // NewLogManager initializes a new LogManager.
-func NewLogManager(lokiClient *LokiClient) *LogManager {
+// lokiEnabled controls whether logs are sent to Loki (set via LOKI_ENABLED env var)
+func NewLogManager(lokiClient *LokiClient, lokiEnabled bool) *LogManager {
 	lm := &LogManager{
-		Templates:  make(map[string]string),
-		LokiClient: lokiClient,
-		LogChannel: make(chan *LoggingFormat),
+		Templates:   make(map[string]string),
+		LokiClient:  lokiClient,
+		LokiEnabled: lokiEnabled,
+		LogChannel:  make(chan *LoggingFormat),
 	}
 	lm.wg.Add(1)
 	go lm.processLogChannel()
@@ -197,6 +201,11 @@ func (lm *LogManager) SendLog(log *LoggingFormat) {
 func (lm *LogManager) processLogChannel() {
 	defer lm.wg.Done()
 	for log := range lm.LogChannel {
+		// Skip Loki sending if disabled
+		if !lm.LokiEnabled {
+			continue
+		}
+
 		labels := map[string]string{
 			"job":       os.Getenv("LOKI_JOB"),
 			"server_id": os.Getenv("SERVER_ID"),

@@ -2,11 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/kataras/iris/v12"
-	"github.com/sirupsen/logrus"
-	"github.com/twilio/twilio-go"
-	twilioApi "github.com/twilio/twilio-go/rest/api/v2010"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io"
 	"net/http"
 	"os"
@@ -14,6 +9,12 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kataras/iris/v12"
+	"github.com/sirupsen/logrus"
+	"github.com/twilio/twilio-go"
+	twilioApi "github.com/twilio/twilio-go/rest/api/v2010"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // TwilioHandler implements CarrierHandler for Twilio
@@ -258,7 +259,7 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 				continue
 			}
 
-			id, err := h.gateway.saveMsgFileMedia(i)
+			accessToken, err := h.gateway.saveMsgFileMedia(i)
 			if err != nil {
 				var lm = h.gateway.LogManager
 				lm.SendLog(lm.BuildLog(
@@ -272,7 +273,7 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 				return "", err
 			}
 
-			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
+			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+accessToken)
 		}
 		params.MediaUrl = &mediaUrls
 	}

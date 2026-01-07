@@ -3,16 +3,28 @@ package main
 import (
 	"errors"
 	"fmt"
-	"gorm.io/gorm"
 	"os"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const (
 	TTLDuration = 7 * 24 * time.Hour // 7-day expiration
 )
+
+// MediaFile stores uploaded media content with UUID-based access tokens
+type MediaFile struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	AccessToken string    `gorm:"uniqueIndex;size:36" json:"access_token"` // UUID for secure access
+	FileName    string    `json:"file_name"`
+	ContentType string    `json:"content_type"`
+	Base64Data  string    `json:"base64_data"`
+	UploadAt    time.Time `json:"upload_at"`
+	ExpiresAt   time.Time `gorm:"index" json:"expires_at"`
+}
 
 func (gateway *Gateway) uploadMediaGetUrls(mms *MsgQueueItem) ([]string, error) {
 	var mediaUrls []string
@@ -23,25 +35,16 @@ func (gateway *Gateway) uploadMediaGetUrls(mms *MsgQueueItem) ([]string, error) 
 				continue
 			}
 
-			id, err := gateway.saveMsgFileMedia(i)
+			accessToken, err := gateway.saveMsgFileMedia(i)
 			if err != nil {
 				return mediaUrls, err
 			}
 
-			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
+			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+accessToken)
 		}
 		return mediaUrls, nil
 	}
 	return mediaUrls, nil
-}
-
-type MediaFile struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	FileName    string    `json:"file_name"`
-	ContentType string    `json:"content_type"`
-	Base64Data  string    `json:"base64_data"`
-	UploadAt    time.Time `json:"upload_at"`
-	ExpiresAt   time.Time `gorm:"index" json:"expires_at"`
 }
 
 func (gateway *Gateway) cleanUpExpiredMediaFiles(interval time.Duration) {
@@ -63,8 +66,12 @@ func (gateway *Gateway) cleanUpExpiredMediaFiles(interval time.Duration) {
 	}
 }
 
-func (gateway *Gateway) saveMsgFileMedia(file MsgFile) (uint, error) {
+// saveMsgFileMedia saves a media file and returns its UUID access token
+func (gateway *Gateway) saveMsgFileMedia(file MsgFile) (string, error) {
+	accessToken := uuid.New().String()
+
 	mediaFile := MediaFile{
+		AccessToken: accessToken,
 		FileName:    file.Filename,
 		ContentType: file.ContentType,
 		Base64Data:  file.Base64Data,
@@ -73,26 +80,27 @@ func (gateway *Gateway) saveMsgFileMedia(file MsgFile) (uint, error) {
 	}
 
 	if err := gateway.DB.Create(&mediaFile).Error; err != nil {
-		return 0, fmt.Errorf("failed to insert media file to db: %v", err)
+		return "", fmt.Errorf("failed to insert media file to db: %v", err)
 	}
 
-	return mediaFile.ID, nil
+	return accessToken, nil
 }
 
-func (gateway *Gateway) getMediaFile(fileID uint) (*MediaFile, error) {
+// getMediaFileByToken retrieves a media file by its UUID access token
+func (gateway *Gateway) getMediaFileByToken(accessToken string) (*MediaFile, error) {
 	var mediaFile MediaFile
-	if err := gateway.DB.First(&mediaFile, fileID).Error; err != nil {
+	if err := gateway.DB.Where("access_token = ?", accessToken).First(&mediaFile).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, fmt.Errorf("media file not found: %d", fileID)
+			return nil, fmt.Errorf("media file not found: %s", accessToken)
 		}
 		return nil, fmt.Errorf("failed to retrieve media file: %v", err)
 	}
 
 	// Check if the media file has expired
 	if time.Now().After(mediaFile.ExpiresAt) {
-		// Optionally delete the expired media file
+		// Delete the expired media file
 		gateway.DB.Delete(&mediaFile)
-		return nil, fmt.Errorf("media file has expired: %d", fileID)
+		return nil, fmt.Errorf("media file has expired: %s", accessToken)
 	}
 
 	return &mediaFile, nil

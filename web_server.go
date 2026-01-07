@@ -973,34 +973,46 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 }
 
 func (gateway *Gateway) webMediaFile(ctx iris.Context) {
-	// Extract the 'id' parameter from the URL
-	fileID := ctx.Params().Get("id")
-	id, err := strconv.ParseInt(fileID, 10, 64)
-	if fileID == "" || err != nil {
+	// Extract the access token from the URL
+	accessToken := ctx.Params().Get("token")
+
+	// Get client info for logging
+	clientIP := ctx.Values().GetString("client_ip")
+	if clientIP == "" {
+		clientIP = ctx.RemoteAddr()
+	}
+	userAgent := ctx.GetHeader("User-Agent")
+
+	if accessToken == "" {
 		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
-			"WebServer.Media",
-			"Invalid or missing file ID",
+			"WebServer.Media.Access",
+			"Missing access token",
 			logrus.WarnLevel,
 			map[string]interface{}{
-				"file_id": fileID,
-				"error":   "file ID is required or invalid",
+				"client_ip":  clientIP,
+				"user_agent": userAgent,
+				"success":    false,
 			},
 		))
 		ctx.StatusCode(http.StatusBadRequest)
-		ctx.WriteString("file ID is required")
+		ctx.WriteString("access token is required")
 		return
 	}
 
-	// Retrieve the media file from the database
-	mediaFile, err := gateway.getMediaFile(uint(id))
+	// Retrieve the media file from the database using UUID token
+	mediaFile, err := gateway.getMediaFileByToken(accessToken)
 	if err != nil {
 		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
-			"WebServer.Media",
+			"WebServer.Media.Access",
 			"Failed to retrieve media file",
-			logrus.ErrorLevel,
+			logrus.WarnLevel,
 			map[string]interface{}{
-				"file_id": fileID,
-			}, err,
+				"access_token": accessToken,
+				"client_ip":    clientIP,
+				"user_agent":   userAgent,
+				"success":      false,
+				"error_reason": err.Error(),
+			},
 		))
 		ctx.StatusCode(http.StatusNotFound)
 		ctx.WriteString("media file not found")
@@ -1008,7 +1020,18 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	}
 
 	if strings.Contains(mediaFile.ContentType, "application/smil") {
-		// todo
+		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+			"WebServer.Media.Access",
+			"SMIL content type not supported",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"access_token": accessToken,
+				"client_ip":    clientIP,
+				"user_agent":   userAgent,
+				"success":      false,
+				"error_reason": "smil_not_supported",
+			},
+		))
 		ctx.StatusCode(500)
 		return
 	}
@@ -1017,24 +1040,43 @@ func (gateway *Gateway) webMediaFile(ctx iris.Context) {
 	fileBytes, err := base64.StdEncoding.DecodeString(mediaFile.Base64Data)
 	if err != nil {
 		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
-			"WebServer.Media",
+			"WebServer.Media.Access",
 			"Failed to decode Base64 media data",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"file_id": fileID,
-			}, err,
+				"access_token": accessToken,
+				"client_ip":    clientIP,
+				"user_agent":   userAgent,
+				"success":      false,
+				"error_reason": "base64_decode_failed",
+			},
 		))
 		ctx.StatusCode(http.StatusInternalServerError)
 		ctx.WriteString("failed to decode file data")
 		return
 	}
 
-	// Set the appropriate Msg-Type header
+	// Log successful access
+	gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+		"WebServer.Media.Access",
+		"Media file accessed",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"access_token": accessToken,
+			"file_name":    mediaFile.FileName,
+			"content_type": mediaFile.ContentType,
+			"client_ip":    clientIP,
+			"user_agent":   userAgent,
+			"success":      true,
+		},
+	))
+
+	// Set the appropriate Content-Type header
 	ctx.ContentType(mediaFile.ContentType)
 
-	// Optionally, set Msg-Disposition to suggest a filename for download
+	// Optionally, set Content-Disposition to suggest a filename for download
 	// Uncomment the following line if you want the browser to prompt a download
-	// ctx.Header("Msg-Disposition", fmt.Sprintf("attachment; filename=%s", mediaFile.FileName))
+	// ctx.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", mediaFile.FileName))
 
 	// Send the file bytes as the response
 	ctx.Write(fileBytes)

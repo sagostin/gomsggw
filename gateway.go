@@ -194,7 +194,8 @@ func NewGateway() (*Gateway, error) {
 
 	// Initialize Loki Client and Log Manager
 	lokiClient := NewLokiClient(os.Getenv("LOKI_URL"), os.Getenv("LOKI_USERNAME"), os.Getenv("LOKI_PASSWORD"))
-	logManager := NewLogManager(lokiClient)
+	lokiEnabled := strings.ToLower(os.Getenv("LOKI_ENABLED")) == "true" || os.Getenv("LOKI_ENABLED") == "1"
+	logManager := NewLogManager(lokiClient, lokiEnabled)
 	// Define Templates
 	logManager.LoadTemplates()
 	gateway.LogManager = logManager

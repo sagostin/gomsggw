@@ -3,19 +3,21 @@ package main
 
 import (
 	"fmt"
+	"strings"
+
 	"github.com/kataras/iris/v12"
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"strings"
 )
 
 // Carrier represents a messaging carrier in the database.
 type Carrier struct {
-	ID       uint   `gorm:"primaryKey" json:"id"`
-	Name     string `gorm:"unique;not null" json:"name"` // e.g., "twilio", "telnyx"
-	Type     string `gorm:"not null" json:"type"`        // e.g., "twilio", "telnyx"
-	Username string `gorm:"not null" json:"username"`    // e.g., Account SID for Twilio (encrypted)
-	Password string `gorm:"not null" json:"password"`    // e.g., Auth Token for Twilio (encrypted)
-	UUID     string `gorm:"unique;not null" json:"uuid"`
+	ID        uint   `gorm:"primaryKey" json:"id"`
+	Name      string `gorm:"unique;not null" json:"name"` // e.g., "twilio", "telnyx"
+	Type      string `gorm:"not null" json:"type"`        // e.g., "twilio", "telnyx"
+	Username  string `gorm:"not null" json:"username"`    // e.g., Account SID for Twilio (encrypted)
+	Password  string `gorm:"not null" json:"password"`    // e.g., Auth Token for Twilio (encrypted)
+	UUID      string `gorm:"unique;not null" json:"uuid"` // Internal UUID for webhook routing
+	ProfileID string `json:"profile_id,omitempty"`        // Carrier-specific ID (e.g., Telnyx messaging_profile_id)
 	// Add any carrier-specific configuration fields here
 }
 

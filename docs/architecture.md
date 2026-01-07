@@ -253,7 +253,7 @@ HTTP API server for management, carrier webhooks, and web clients.
 2. **Management**: `/clients`, `/carriers`, `/reload`
 3. **Carrier Webhooks**: `/inbound/{carrier}`
 4. **Web Client API**: `/messages/send`
-5. **Media Serving**: `/media/{id}`
+5. **Media Serving**: `/media/{token}` (UUID-based access tokens for security)
 
 ### Transcoder (`mms_transcode.go`)
 

@@ -181,7 +181,8 @@ Carrier configuration for outbound routing.
 | `type` | string | Carrier type: `"telnyx"`, `"twilio"` |
 | `username` | string | Encrypted API credentials (e.g., API key, Account SID) |
 | `password` | string | Encrypted API credentials (e.g., API secret, Auth Token) |
-| `uuid` | string | Unique identifier for inbound webhook routing |
+| `uuid` | string | Internal UUID for inbound webhook routing |
+| `profile_id` | string | Carrier-specific ID (e.g., Telnyx `messaging_profile_id`) |
 
 ---
 

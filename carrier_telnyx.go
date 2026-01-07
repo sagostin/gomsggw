@@ -5,17 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/kataras/iris/v12"
-	"github.com/sirupsen/logrus"
-	"go.mongodb.org/mongo-driver/bson/primitive"
 	"io"
 	"io/ioutil"
 	"net/http"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"time"
+
+	"github.com/kataras/iris/v12"
+	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 // TelnyxHandler implements CarrierHandler for Telnyx
@@ -349,9 +349,9 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 		// WebhookURL: "https://yourwebhook.url", // Optional
 	}
 
-	messagingProfileID := os.Getenv("TELNYX_MESSAGING_PROFILE_ID")
-	if messagingProfileID != "" {
-		message.MessagingProfileID = messagingProfileID
+	// Use carrier's ProfileID if configured (stored in database)
+	if h.carrier.ProfileID != "" {
+		message.MessagingProfileID = h.carrier.ProfileID
 	}
 
 	// Serialize to JSON
@@ -490,7 +490,7 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 				continue
 			}
 
-			id, err := h.gateway.saveMsgFileMedia(i)
+			accessToken, err := h.gateway.saveMsgFileMedia(i)
 			if err != nil {
 				lm.SendLog(lm.BuildLog(
 					"Carrier.SendMMS.Telnyx",
@@ -503,15 +503,14 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 				return "", err
 			}
 
-			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+strconv.Itoa(int(id)))
+			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+accessToken)
 		}
 		message.MediaUrls = mediaUrls
 	}
 
-	// Optionally, set MessagingProfileID if sending alphanumeric messages
-	messagingProfileID := os.Getenv("TELNYX_MESSAGING_PROFILE_ID")
-	if messagingProfileID != "" {
-		message.MessagingProfileID = messagingProfileID
+	// Use carrier's ProfileID if configured (stored in database)
+	if h.carrier.ProfileID != "" {
+		message.MessagingProfileID = h.carrier.ProfileID
 	}
 
 	// Serialize to JSON

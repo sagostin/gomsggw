@@ -198,64 +198,42 @@ func migrateClients(db *sql.DB, encryptionKey string, dryRun bool) error {
 	return nil
 }
 
-// DecryptAES256 decrypts data encrypted with AES-256-CBC.
-func DecryptAES256(encrypted string, key string) (string, error) {
-	// The encrypted data is base64 encoded
-	data, err := base64.StdEncoding.DecodeString(encrypted)
+// DecryptAES256 decrypts an AES-256 encrypted password using the provided PSK.
+func DecryptAES256(encryptedBase64, psk string) (string, error) {
+	// Convert PSK to 32 bytes (AES-256 key size)
+	key := []byte(psk)
+	if len(key) > 32 {
+		key = key[:32]
+	} else if len(key) < 32 {
+		padded := make([]byte, 32)
+		copy(padded, key)
+		key = padded
+	}
+
+	// Decode the base64 encoded ciphertext
+	combined, err := base64.StdEncoding.DecodeString(encryptedBase64)
 	if err != nil {
 		return "", fmt.Errorf("failed to decode base64: %w", err)
 	}
 
-	// AES block size is 16 bytes
-	if len(data) < aes.BlockSize {
+	if len(combined) < aes.BlockSize {
 		return "", fmt.Errorf("ciphertext too short")
 	}
 
-	block, err := aes.NewCipher([]byte(key))
+	// Extract the IV and ciphertext
+	iv := combined[:aes.BlockSize]
+	ciphertext := combined[aes.BlockSize:]
+
+	// Create AES block cipher
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %w", err)
 	}
 
-	// IV is the first 16 bytes
-	iv := data[:aes.BlockSize]
-	ciphertext := data[aes.BlockSize:]
-
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return "", fmt.Errorf("ciphertext is not a multiple of block size")
-	}
-
-	mode := cipher.NewCBCDecrypter(block, iv)
+	// Decrypt the data
 	plaintext := make([]byte, len(ciphertext))
-	mode.CryptBlocks(plaintext, ciphertext)
-
-	// Remove PKCS7 padding
-	plaintext, err = pkcs7Unpad(plaintext)
-	if err != nil {
-		return "", fmt.Errorf("failed to unpad: %w", err)
-	}
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(plaintext, ciphertext)
 
 	return string(plaintext), nil
-}
-
-func pkcs7Unpad(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("empty data")
-	}
-	padding := int(data[len(data)-1])
-	if padding > aes.BlockSize || padding == 0 {
-		return nil, fmt.Errorf("invalid padding size")
-	}
-	for i := 0; i < padding; i++ {
-		if data[len(data)-1-i] != byte(padding) {
-			return nil, fmt.Errorf("invalid padding bytes")
-		}
-	}
-	return data[:len(data)-padding], nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

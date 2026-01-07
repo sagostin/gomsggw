@@ -6,15 +6,18 @@ This directory contains migration scripts to upgrade from the old database schem
 
 ### Clients Table
 - `username`: Now stored in **plaintext** (was encrypted)
+- `password`: Encrypted with `ENCRYPTION_KEY`
 - `type`: NEW - `'legacy'` or `'web'` (default: `'legacy'`)
 - `timezone`: NEW - IANA timezone string (default: `'UTC'`)
+
+### Carriers Table
+- `username`: Now stored in **plaintext** (was encrypted)
+- `password`: Encrypted with `ENCRYPTION_KEY`
+- `profile_id`: NEW - Carrier-specific ID (e.g., Telnyx messaging_profile_id)
 
 ### Client Numbers Table
 - `tag`: NEW - Organizational tag
 - `group`: NEW - Number grouping
-
-### Carriers Table
-- `profile_id`: NEW - Carrier-specific ID (e.g., Telnyx messaging_profile_id)
 
 ### Media Files Table
 - `access_token`: NEW - UUID for secure access (replaces integer ID in URLs)
@@ -39,36 +42,64 @@ This directory contains migration scripts to upgrade from the old database schem
 pg_dump -U smsgw smsgw > backup_before_migration.sql
 ```
 
-### 2. Decrypt Usernames (if encrypted)
+### 2. Re-key Encrypted Data
 
-If your old database has encrypted client usernames, run the Go migration tool:
+The old database may have been encrypted with a blank key (due to a missing initialization). The migration scripts will:
+- Decrypt data using `OLD_ENCRYPTION_KEY` (the original key, which may be blank)
+- Store **usernames as plaintext**
+- Re-encrypt **passwords** with the new `ENCRYPTION_KEY`
+
+#### Environment Variables
+
+Set these in your `.env` file or export them:
+
+```bash
+# The key that was originally used (may be blank if ENCRYPTION_KEY wasn't initialized)
+OLD_ENCRYPTION_KEY=""
+
+# The new key to use going forward
+ENCRYPTION_KEY="your-new-secure-32-char-key-here"
+
+# Database connection (if not using defaults)
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=smsgw
+POSTGRES_PASSWORD=your-db-password
+POSTGRES_DB=smsgw
+POSTGRES_SSLMODE=disable
+```
+
+#### Run Client Migration
 
 ```bash
 cd migration
 
-# Install postgres driver
+# Install postgres driver (if needed)
 go get github.com/lib/pq
+go get github.com/joho/godotenv
 
-# Dry run first (shows what would change)
-go run migrate_decrypt.go -key=YOUR_ENCRYPTION_KEY -dry-run
+# Dry run first (shows what would change without modifying data)
+go run migrate_clients.go -dry-run
 
-# Actually migrate
-go run migrate_decrypt.go -key=YOUR_ENCRYPTION_KEY
+# Apply changes
+go run migrate_clients.go
 ```
 
-The tool reads the `POSTGRES_*` environment variables or you can specify a DSN:
+#### Run Carrier Migration
 
 ```bash
-go run migrate_decrypt.go \
-  -key=your-32-character-key-here \
-  -dsn="host=localhost user=smsgw password=xxx dbname=smsgw sslmode=disable"
+# Dry run first
+go run migrate_carriers.go -dry-run
+
+# Apply changes
+go run migrate_carriers.go
 ```
 
-### 3. Run SQL Schema Migration
+### 3. Run SQL Schema Migration (if needed)
 
 ```bash
 # Add new columns and create new tables
-psql -U smsgw -d smsgw -f 01_add_columns.sql
+psql -U smsgw -d smsgw -f migrate.sql
 ```
 
 ### 4. Restart GOMSGGW
@@ -84,10 +115,13 @@ docker-compose restart gomsggw
 ## Verify Migration
 
 ```sql
--- Check client types
-SELECT id, username, type, timezone FROM clients;
+-- Check client usernames are plaintext
+SELECT id, username, name FROM clients;
 
--- Check new tables exist
+-- Check carrier usernames are plaintext
+SELECT id, name, username FROM carriers;
+
+-- Verify new tables exist
 SELECT COUNT(*) FROM client_settings;
 SELECT COUNT(*) FROM number_settings;
 
@@ -115,7 +149,17 @@ psql -U smsgw -d smsgw < backup_before_migration.sql
 
 ## Notes
 
-- **Encrypted Usernames**: The old schema encrypted client usernames. The new schema stores them in plaintext for easier identification. The `migrate_decrypt.go` tool handles this conversion.
+- **Blank Encryption Key Bug**: The original `gateway.go` did not initialize `EncryptionKey` from the environment variable, causing data to be encrypted with a blank key. This has been fixed.
+
+- **Username vs Password Storage**:
+  - **Clients**: Username is plaintext, password is encrypted
+  - **Carriers**: Username is plaintext (e.g., API keys, Account SIDs), password is encrypted (e.g., Auth Tokens)
+
+- **Separate Migration Scripts**: 
+  - `migrate_clients.go` - Migrates client table
+  - `migrate_carriers.go` - Migrates carriers table
+  
+  Run them independently with `-dry-run` to preview changes first.
 
 - **AutoMigrate**: GORM's AutoMigrate will create indexes and handle minor schema differences automatically on application startup.
 

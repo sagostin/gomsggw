@@ -177,12 +177,11 @@ Carrier configuration for outbound routing.
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | uint | Primary key |
-| `name` | string | Carrier identifier |
-| `type` | string | `"telnyx"`, `"twilio"`, etc. |
-| `username` | string | Encrypted API credentials |
-| `password` | string | Encrypted API credentials |
-| `sms_limit` | int | Max SMS size (bytes) |
-| `mms_limit` | int | Max MMS size (bytes) |
+| `name` | string | Unique carrier identifier |
+| `type` | string | Carrier type: `"telnyx"`, `"twilio"` |
+| `username` | string | Encrypted API credentials (e.g., API key, Account SID) |
+| `password` | string | Encrypted API credentials (e.g., API secret, Auth Token) |
+| `uuid` | string | Unique identifier for inbound webhook routing |
 
 ---
 
@@ -201,8 +200,35 @@ Message tracking with enhanced metadata.
 | `received_timestamp` | time | When message was received |
 | `type` | string | `"sms"` or `"mms"` |
 | `carrier` | string | Carrier used |
-| `direction` | string | `"inbound"` or `"outbound"` |
+| `internal` | bool | Is client-to-client (not via carrier) |
 | `log_id` | string | Correlation ID for all segments |
+| `server_id` | string | Gateway instance ID |
+
+### Enhanced Tracking Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `direction` | string | `"inbound"` or `"outbound"` |
+| `from_client_type` | string | `"legacy"`, `"web"`, or `"carrier"` |
+| `to_client_type` | string | `"legacy"`, `"web"`, or `"carrier"` |
+| `delivery_method` | string | `"smpp"`, `"mm4"`, `"webhook"`, `"carrier_api"` |
+
+### SMS-Specific Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `encoding` | string | `"gsm7"`, `"ucs2"`, `"ascii"` |
+| `total_segments` | int | Total segments (all share same LogID) |
+| `segment_index` | int | Index of this segment (0-based) |
+
+### MMS-Specific Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `original_size_bytes` | int | Total media size before transcoding |
+| `transcoded_size_bytes` | int | Total media size after transcoding |
+| `media_count` | int | Number of media attachments |
+| `transcoding_performed` | bool | Whether transcoding was applied |
 
 ---
 
@@ -211,15 +237,18 @@ Message tracking with enhanced metadata.
 ### Encryption
 
 Sensitive fields are encrypted at rest using AES-256:
-- `Client.username`
 - `Client.password`
 - `Carrier.username`
 - `Carrier.password`
+
+> [!NOTE]
+> `Client.username` is stored in plaintext since it's used as the authentication identifier and lookup key.
 
 Encryption key is set via `ENCRYPTION_KEY` environment variable.
 
 ### Password Handling
 
-- Credentials are encrypted before database storage
+- Passwords are encrypted before database storage
 - Decrypted into memory on load
 - Password never returned in API responses (json:"-")
+

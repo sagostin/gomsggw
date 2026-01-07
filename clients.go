@@ -288,7 +288,7 @@ func (gateway *Gateway) CheckMessageLimits(client *Client, fromNumber string, ms
 	return nil // All checks passed
 }
 
-// loadClients loads clients from the database, decrypts their credentials, and populates the in-memory map.
+// loadClients loads clients from the database, decrypts passwords, and populates the in-memory map.
 func (gateway *Gateway) loadClients() error {
 	var clients []Client
 	// Preload Numbers, Settings, and NumberSettings
@@ -301,18 +301,13 @@ func (gateway *Gateway) loadClients() error {
 	defer gateway.mu.Unlock()
 
 	for _, client := range clients {
-		// Decrypt Username and Password
-		decryptedUsername, err := DecryptAES256(client.Username, gateway.EncryptionKey)
-		if err != nil {
-			return fmt.Errorf("failed to decrypt username for client %s: %w", client.Name, err)
-		}
+		// Decrypt password only (username is stored in plaintext)
 		decryptedPassword, err := DecryptAES256(client.Password, gateway.EncryptionKey)
 		if err != nil {
 			return fmt.Errorf("failed to decrypt password for client %s: %w", client.Name, err)
 		}
 
-		// Update client struct with decrypted credentials
-		client.Username = decryptedUsername
+		// Update client struct with decrypted password
 		client.Password = decryptedPassword
 
 		c := client // create a copy to avoid referencing the loop variable
@@ -342,20 +337,17 @@ func (gateway *Gateway) loadNumbers() error {
 	return nil
 }
 
-// addClient encrypts the client's credentials and stores the client in the database and in-memory map.
+// addClient encrypts the client's password and stores the client in the database and in-memory map.
 func (gateway *Gateway) addClient(client *Client) error {
-	// Encrypt Username and Password
-	// todo remove username encryption?
-	encryptedUsername, err := EncryptAES256(client.Username, gateway.EncryptionKey)
-	if err != nil {
-		return fmt.Errorf("failed to encrypt username: %w", err)
-	}
+	// Store original password for in-memory map
+	plaintextPassword := client.Password
+
+	// Encrypt password only (username stored in plaintext)
 	encryptedPassword, err := EncryptAES256(client.Password, gateway.EncryptionKey)
 	if err != nil {
 		return fmt.Errorf("failed to encrypt password: %w", err)
 	}
 
-	client.Username = encryptedUsername
 	client.Password = encryptedPassword
 
 	// Store in the database
@@ -363,19 +355,8 @@ func (gateway *Gateway) addClient(client *Client) error {
 		return err
 	}
 
-	// Decrypt credentials for in-memory map
-	decryptedUsername, err := DecryptAES256(client.Username, gateway.EncryptionKey)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt username after encryption: %w", err)
-	}
-	decryptedPassword, err := DecryptAES256(client.Password, gateway.EncryptionKey)
-	if err != nil {
-		return fmt.Errorf("failed to decrypt password after encryption: %w", err)
-	}
-
-	// Update client struct with decrypted credentials
-	client.Username = decryptedUsername
-	client.Password = decryptedPassword
+	// Restore plaintext password for in-memory map
+	client.Password = plaintextPassword
 
 	gateway.mu.Lock()
 	gateway.Clients[client.Username] = client

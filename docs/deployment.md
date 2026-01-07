@@ -67,15 +67,17 @@ PROMETHEUS_PATH=/metrics
 
 ### Carrier Configuration
 
-```bash
-# Telnyx
-TELNYX_ENABLE=true
-TELNYX_API_KEY=your-telnyx-api-key
+> [!NOTE]
+> Carriers are managed via the REST API, not environment variables.
+> Use the CLI tool or API to add carriers after initial startup.
 
-# Twilio
-TWILIO_ENABLE=true
+```bash
+# Twilio credentials (used by carrier initialization)
 TWILIO_ACCOUNT_SID=your-account-sid
 TWILIO_AUTH_TOKEN=your-auth-token
+
+# Optional: Telnyx messaging profile
+# TELNYX_MESSAGING_PROFILE_ID=your-profile-id
 ```
 
 ### Global Retry Settings

@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
+	"github.com/joho/godotenv"
 	"log"
 	"os"
 
@@ -51,6 +52,10 @@ func main() {
 
 	// Build DSN from environment if not provided
 	if *dsn == "" {
+		err := godotenv.Load()
+		if err != nil {
+			return
+		}
 		*dsn = buildDSN()
 	}
 

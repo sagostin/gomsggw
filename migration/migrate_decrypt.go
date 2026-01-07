@@ -33,7 +33,6 @@ import (
 func main() {
 
 	// Parse command line flags
-	encryptionKey := flag.String("key", "", "32-byte encryption key (required)")
 	dryRun := flag.Bool("dry-run", false, "Show what would be changed without modifying database")
 	flag.Parse()
 
@@ -41,16 +40,7 @@ func main() {
 	if err != nil {
 		return
 	}
-
-	/*if len(*encryptionKey) != 32 {
-		log.Fatalf("Error: Encryption key must be exactly 32 characters, got %d", len(*encryptionKey))
-	}*/
-	if *encryptionKey == "" {
-		*encryptionKey = os.Getenv("ENCRYPTION_KEY")
-	}
-	if *encryptionKey == "" {
-		log.Fatal("Error: -key flag or ENCRYPTION_KEY env var is required")
-	}
+	encryptionKey := os.Getenv("ENCRYPTION_KEY")
 	dns := buildDSN()
 
 	log.Printf("Connecting to database...")
@@ -68,7 +58,7 @@ func main() {
 	log.Printf("Connected successfully!")
 
 	// Migrate clients
-	if err := migrateClients(db, *encryptionKey, *dryRun); err != nil {
+	if err := migrateClients(db, encryptionKey, *dryRun); err != nil {
 		log.Fatalf("Failed to migrate clients: %v", err)
 	}
 

@@ -31,37 +31,31 @@ import (
 )
 
 func main() {
+
 	// Parse command line flags
 	encryptionKey := flag.String("key", "", "32-byte encryption key (required)")
 	dryRun := flag.Bool("dry-run", false, "Show what would be changed without modifying database")
-	dsn := flag.String("dsn", "", "PostgreSQL DSN (defaults to env vars)")
 	flag.Parse()
 
-	if *encryptionKey == "" {
-		// Try environment variable
-		*encryptionKey = os.Getenv("ENCRYPTION_KEY")
-	}
-
-	if *encryptionKey == "" {
-		log.Fatal("Error: -key flag or ENCRYPTION_KEY env var is required")
+	err := godotenv.Load()
+	if err != nil {
+		return
 	}
 
 	/*if len(*encryptionKey) != 32 {
 		log.Fatalf("Error: Encryption key must be exactly 32 characters, got %d", len(*encryptionKey))
 	}*/
-
-	// Build DSN from environment if not provided
-	if *dsn == "" {
-		err := godotenv.Load()
-		if err != nil {
-			return
-		}
-		*dsn = buildDSN()
+	if *encryptionKey == "" {
+		*encryptionKey = os.Getenv("ENCRYPTION_KEY")
 	}
+	if *encryptionKey == "" {
+		log.Fatal("Error: -key flag or ENCRYPTION_KEY env var is required")
+	}
+	dns := buildDSN()
 
 	log.Printf("Connecting to database...")
 
-	db, err := sql.Open("postgres", *dsn)
+	db, err := sql.Open("postgres", dns)
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}

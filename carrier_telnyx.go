@@ -349,6 +349,11 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 		// WebhookURL: "https://yourwebhook.url", // Optional
 	}
 
+	messagingProfileID := os.Getenv("TELNYX_MESSAGING_PROFILE_ID")
+	if messagingProfileID != "" {
+		message.MessagingProfileID = messagingProfileID
+	}
+
 	// Serialize to JSON
 	payloadBytes, err := json.Marshal(message)
 	if err != nil {

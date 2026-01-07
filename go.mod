@@ -8,12 +8,11 @@ require (
 	github.com/M2MGateway/go-smpp v0.0.0-20221204100419-92d023664ef0
 	github.com/gabriel-vasile/mimetype v1.4.6
 	github.com/google/uuid v1.6.0
-	github.com/jackc/pgx/v5 v5.7.1
 	github.com/joho/godotenv v1.5.1
 	github.com/kataras/iris/v12 v12.2.11
+	github.com/lib/pq v1.10.9
 	github.com/pires/go-proxyproto v0.8.0
 	github.com/prometheus/client_golang v1.20.5
-	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/sirupsen/logrus v1.9.3
 	github.com/stretchr/testify v1.9.0
 	github.com/twilio/twilio-go v1.22.3
@@ -45,6 +44,7 @@ require (
 	github.com/iris-contrib/schema v0.0.6 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/pgx/v5 v5.7.1 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
@@ -69,7 +69,6 @@ require (
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/schollz/closestmatch v2.1.0+incompatible // indirect
-	github.com/streadway/amqp v1.1.0 // indirect
 	github.com/tdewolff/minify/v2 v2.20.19 // indirect
 	github.com/tdewolff/parse/v2 v2.7.12 // indirect
 	github.com/u2takey/go-utils v0.3.1 // indirect

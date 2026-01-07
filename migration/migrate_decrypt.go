@@ -43,6 +43,8 @@ func main() {
 	encryptionKey := os.Getenv("ENCRYPTION_KEY")
 	dns := buildDSN()
 
+	log.Printf("Using encryption key: %s", encryptionKey)
+
 	log.Printf("Connecting to database...")
 
 	db, err := sql.Open("postgres", dns)

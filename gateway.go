@@ -185,6 +185,7 @@ func NewGateway() (*Gateway, error) {
 		Clients:       make(map[string]*Client),
 		Numbers:       make(map[string]*ClientNumber),
 		ServerID:      os.Getenv("SERVER_ID"),
+		EncryptionKey: os.Getenv("ENCRYPTION_KEY"),
 		DB:            db,
 	}
 

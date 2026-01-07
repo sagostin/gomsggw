@@ -45,9 +45,9 @@ func main() {
 		log.Fatal("Error: -key flag or ENCRYPTION_KEY env var is required")
 	}
 
-	if len(*encryptionKey) != 32 {
+	/*if len(*encryptionKey) != 32 {
 		log.Fatalf("Error: Encryption key must be exactly 32 characters, got %d", len(*encryptionKey))
-	}
+	}*/
 
 	// Build DSN from environment if not provided
 	if *dsn == "" {

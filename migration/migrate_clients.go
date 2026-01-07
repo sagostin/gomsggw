@@ -1,16 +1,16 @@
 // ==============================================================================
-// GOMSGGW Migration Tool: Re-key Encrypted Data
+// GOMSGGW Migration Tool: Re-key Client Data
 // ==============================================================================
-// This tool migrates data from the old encryption key (which may have been blank)
-// to a new encryption key. Usernames are stored as plaintext, passwords are
-// re-encrypted with the new key.
+// This tool migrates client data from the old encryption key (which may have been
+// blank) to a new encryption key. Usernames are stored as plaintext, passwords
+// are re-encrypted with the new key.
 //
 // Environment Variables:
 //   OLD_ENCRYPTION_KEY - The key originally used to encrypt the data (may be blank)
 //   ENCRYPTION_KEY     - The new key to use for password re-encryption
 //
 // Usage:
-//   go run migrate_decrypt.go [-dry-run] [-dsn="..."]
+//   go run migrate_clients.go [-dry-run]
 //
 // The tool will:
 // 1. Read all clients from the database
@@ -39,7 +39,6 @@ import (
 )
 
 func main() {
-
 	// Parse command line flags
 	dryRun := flag.Bool("dry-run", false, "Show what would be changed without modifying database")
 	flag.Parse()
@@ -57,6 +56,7 @@ func main() {
 		log.Fatalf("ENCRYPTION_KEY must be set for re-encryption")
 	}
 
+	log.Printf("=== CLIENT MIGRATION ===")
 	log.Printf("OLD_ENCRYPTION_KEY: '%s' (length: %d)", maskKey(oldEncryptionKey), len(oldEncryptionKey))
 	log.Printf("ENCRYPTION_KEY: '%s' (length: %d)", maskKey(newEncryptionKey), len(newEncryptionKey))
 
@@ -85,7 +85,7 @@ func main() {
 		log.Fatalf("Failed to migrate clients: %v", err)
 	}
 
-	log.Println("Migration completed successfully!")
+	log.Println("Client migration completed successfully!")
 }
 
 // maskKey returns a masked version of the key for logging

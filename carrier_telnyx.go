@@ -127,6 +127,12 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 
 	// Handle MMS if media files are present
 	if numMedia > 0 && len(files) > 0 {
+		// Calculate original file sizes
+		var originalSizeBytes int
+		for _, f := range files {
+			originalSizeBytes += len(f.Content)
+		}
+
 		msg := MsgQueueItem{
 			To:                to,
 			From:              from,
@@ -136,6 +142,7 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 			SkipNumberCheck:   false,
 			LogID:             logID,
 			SourceCarrier:     h.carrier.Name,
+			OriginalSizeBytes: originalSizeBytes,
 		}
 		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
 		h.gateway.Router.CarrierMsgChan <- msg

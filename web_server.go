@@ -1430,6 +1430,19 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				clientIP = ctx.RemoteAddr()
 			}
 
+			// Calculate original size for MMS
+			var originalSizeBytes int
+			if msgType == MsgQueueItemType.MMS {
+				for _, f := range files {
+					// Content size (if set)
+					originalSizeBytes += len(f.Content)
+					// Base64Data decodes to ~75% of encoded size
+					if len(f.Base64Data) > 0 {
+						originalSizeBytes += len(f.Base64Data) * 3 / 4
+					}
+				}
+			}
+
 			item := MsgQueueItem{
 				LogID:             logID,
 				To:                parsed.To,
@@ -1439,6 +1452,7 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				files:             files,
 				ReceivedTimestamp: time.Now(),
 				SourceIP:          clientIP,
+				OriginalSizeBytes: originalSizeBytes,
 			}
 
 			// Inject into Router

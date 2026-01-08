@@ -143,7 +143,9 @@ func (h *TwilioHandler) fetchMediaFiles(c iris.Context, numMedia int, accountSid
 		req.SetBasicAuth(twilioAccountSid, twilioAuthToken)
 
 		// Perform the request
-		client := &http.Client{}
+		client := &http.Client{
+			Timeout: 30 * time.Second,
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			var lm = h.gateway.LogManager

@@ -317,7 +317,9 @@ func fetchMediaContentTelnyx(mediaURL string) ([]byte, error) {
 		return nil, err
 	}
 
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
@@ -387,7 +389,9 @@ func (h *TelnyxHandler) SendSMS(sms *MsgQueueItem) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+h.password)
 
 	// Perform the request
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		lm.SendLog(lm.BuildLog(
@@ -546,7 +550,9 @@ func (h *TelnyxHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 	req.Header.Set("Authorization", "Bearer "+h.password)
 
 	// Perform the request
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		var lm = h.gateway.LogManager

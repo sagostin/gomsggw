@@ -224,6 +224,17 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 		case <-ctx.Done():
 			// Some higher-level logic canceled this context – treat as server-driven.
 			// closedByServer = true
+			lm.SendLog(lm.BuildLog(
+				"Server.SMPP.Serve",
+				"ContextCancelled",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"ip":       ip,
+					"username": username,
+					"client":   clientName,
+					"reason":   ctx.Err(),
+				},
+			))
 			return
 
 		case packet, ok := <-session.PDU():
@@ -240,7 +251,7 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 				lm.SendLog(lm.BuildLog(
 					"Server.SMPP.Serve",
 					"PDUChannelClosed",
-					logrus.DebugLevel,
+					logrus.InfoLevel,
 					map[string]interface{}{
 						"ip":       ip,
 						"username": username,

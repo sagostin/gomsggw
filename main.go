@@ -21,6 +21,19 @@ func main() {
 	// Load environment variables
 	err := godotenv.Load()
 
+	// Set log level from environment (default to info)
+	logLevel := os.Getenv("LOG_LEVEL")
+	switch strings.ToLower(logLevel) {
+	case "debug":
+		logrus.SetLevel(logrus.DebugLevel)
+	case "warn", "warning":
+		logrus.SetLevel(logrus.WarnLevel)
+	case "error":
+		logrus.SetLevel(logrus.ErrorLevel)
+	default:
+		logrus.SetLevel(logrus.InfoLevel)
+	}
+
 	if os.Getenv("DEBUG") == "true" {
 		go func() {
 			err := http.ListenAndServe(os.Getenv("PPROF_LISTEN"), nil)

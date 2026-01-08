@@ -628,7 +628,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}
 
 	numData := h.server.gateway.getNumber(submitSM.SourceAddr.String())
-	if numData.IgnoreStopCmdSending && decodedMsg == "Reply STOP to end messages." {
+	if numData != nil && numData.IgnoreStopCmdSending && decodedMsg == "Reply STOP to end messages." {
 		lm.SendLog(lm.BuildLog(
 			"Server.SMPP.HandleSubmitSM",
 			"DroppingSTOPMessagePerClientRule",

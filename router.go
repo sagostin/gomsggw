@@ -147,9 +147,10 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 	// Process based on message type
 	switch m.Type {
 	case MsgQueueItemType.SMS:
-		// Calculate SMS encoding and segment count for records
+		// Calculate SMS encoding, segment count, and byte length for records
 		smsEncoding := GetSMSEncoding(m.message)
 		smsSegments := GetSMSSegmentCount(m.message)
+		smsBytesLength := len([]byte(m.message))
 
 		// Debug: Log which path we're taking
 		routePath := "CARRIER"
@@ -233,31 +234,33 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					fromClientType = fromClient.Type
 					carrierName = "" // No carrier for client-to-client
 					router.gateway.MsgRecordChan <- MsgRecord{
-						MsgQueueItem:   *m,
-						Carrier:        "", // Client-to-client, no carrier
-						ClientID:       fromClient.ID,
-						Internal:       internal,
-						Direction:      "outbound",
-						FromClientType: fromClientType,
-						ToClientType:   "web",
-						DeliveryMethod: "webhook",
-						Encoding:       smsEncoding,
-						TotalSegments:  smsSegments,
-						SourceIP:       m.SourceIP,
+						MsgQueueItem:        *m,
+						Carrier:             "", // Client-to-client, no carrier
+						ClientID:            fromClient.ID,
+						Internal:            internal,
+						Direction:           "outbound",
+						FromClientType:      fromClientType,
+						ToClientType:        "web",
+						DeliveryMethod:      "webhook",
+						Encoding:            smsEncoding,
+						TotalSegments:       smsSegments,
+						OriginalBytesLength: smsBytesLength,
+						SourceIP:            m.SourceIP,
 					}
 				}
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem:   *m,
-					Carrier:        carrierName, // Source carrier if from carrier, empty if from client
-					ClientID:       toClient.ID,
-					Internal:       internal,
-					Direction:      "inbound",
-					FromClientType: fromClientType,
-					ToClientType:   "web",
-					DeliveryMethod: "webhook",
-					Encoding:       smsEncoding,
-					TotalSegments:  smsSegments,
-					SourceIP:       m.SourceIP,
+					MsgQueueItem:        *m,
+					Carrier:             carrierName, // Source carrier if from carrier, empty if from client
+					ClientID:            toClient.ID,
+					Internal:            internal,
+					Direction:           "inbound",
+					FromClientType:      fromClientType,
+					ToClientType:        "web",
+					DeliveryMethod:      "webhook",
+					Encoding:            smsEncoding,
+					TotalSegments:       smsSegments,
+					OriginalBytesLength: smsBytesLength,
+					SourceIP:            m.SourceIP,
 				}
 				return
 			}
@@ -341,32 +344,34 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				fromClientType = fromClient.Type
 				carrierName = "" // No carrier for client-to-client
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem:   *m,
-					Carrier:        "",
-					ClientID:       fromClient.ID,
-					Internal:       internal,
-					Direction:      "outbound",
-					FromClientType: fromClientType,
-					ToClientType:   "legacy",
-					DeliveryMethod: "smpp",
-					Encoding:       smsEncoding,
-					TotalSegments:  smsSegments,
-					SourceIP:       m.SourceIP,
+					MsgQueueItem:        *m,
+					Carrier:             "",
+					ClientID:            fromClient.ID,
+					Internal:            internal,
+					Direction:           "outbound",
+					FromClientType:      fromClientType,
+					ToClientType:        "legacy",
+					DeliveryMethod:      "smpp",
+					Encoding:            smsEncoding,
+					TotalSegments:       smsSegments,
+					OriginalBytesLength: smsBytesLength,
+					SourceIP:            m.SourceIP,
 				}
 			}
 			if toClient != nil {
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem:   *m,
-					Carrier:        carrierName,
-					ClientID:       toClient.ID,
-					Internal:       internal,
-					Direction:      "inbound",
-					FromClientType: fromClientType,
-					ToClientType:   "legacy",
-					DeliveryMethod: "smpp",
-					Encoding:       smsEncoding,
-					TotalSegments:  smsSegments,
-					SourceIP:       m.SourceIP,
+					MsgQueueItem:        *m,
+					Carrier:             carrierName,
+					ClientID:            toClient.ID,
+					Internal:            internal,
+					Direction:           "inbound",
+					FromClientType:      fromClientType,
+					ToClientType:        "legacy",
+					DeliveryMethod:      "smpp",
+					Encoding:            smsEncoding,
+					TotalSegments:       smsSegments,
+					OriginalBytesLength: smsBytesLength,
+					SourceIP:            m.SourceIP,
 				}
 			}
 		} else {
@@ -450,17 +455,18 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 
 					if fromClient != nil {
 						router.gateway.MsgRecordChan <- MsgRecord{
-							MsgQueueItem:   *m,
-							Carrier:        carrier,
-							ClientID:       fromClient.ID,
-							Internal:       false,
-							Direction:      "outbound",
-							FromClientType: fromClient.Type,
-							ToClientType:   "carrier",
-							DeliveryMethod: "carrier_api",
-							Encoding:       smsEncoding,
-							TotalSegments:  smsSegments,
-							SourceIP:       m.SourceIP,
+							MsgQueueItem:        *m,
+							Carrier:             carrier,
+							ClientID:            fromClient.ID,
+							Internal:            false,
+							Direction:           "outbound",
+							FromClientType:      fromClient.Type,
+							ToClientType:        "carrier",
+							DeliveryMethod:      "carrier_api",
+							Encoding:            smsEncoding,
+							TotalSegments:       smsSegments,
+							OriginalBytesLength: smsBytesLength,
+							SourceIP:            m.SourceIP,
 						}
 					}
 					/*if m.Delivery != nil {

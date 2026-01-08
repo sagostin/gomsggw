@@ -59,9 +59,9 @@ type MsgRecordDBItem struct {
 	SourceIP       string `json:"source_ip,omitempty"` // Originating IP address (for web/API messages)
 
 	// SMS specific
-	Encoding      string `json:"encoding,omitempty"` // "gsm7", "ucs2", "ascii"
-	TotalSegments int    `json:"total_segments"`     // Total segments in this message (all share same LogID)
-	SegmentIndex  int    `json:"segment_index"`      // Index of this segment (0-based)
+	Encoding            string `json:"encoding,omitempty"`              // "gsm7", "ucs2", "ascii"
+	TotalSegments       int    `json:"total_segments"`                  // Total segments in this message (all share same LogID)
+	OriginalBytesLength int    `json:"original_bytes_length,omitempty"` // Original SMS byte length
 
 	// MMS specific
 	OriginalSizeBytes    int  `json:"original_size_bytes,omitempty"`   // Total media size before transcoding
@@ -116,7 +116,7 @@ func (gateway *Gateway) InsertMsgRecord(record MsgRecord) error {
 		SourceIP:             record.SourceIP,
 		Encoding:             record.Encoding,
 		TotalSegments:        record.TotalSegments,
-		SegmentIndex:         record.SegmentIndex,
+		OriginalBytesLength:  record.OriginalBytesLength,
 		OriginalSizeBytes:    record.OriginalSizeBytes,
 		TranscodedSizeBytes:  transcodedSize,
 		MediaCount:           mediaCount,

@@ -220,7 +220,7 @@ Message tracking with enhanced metadata.
 |-------|------|-------------|
 | `encoding` | string | `"gsm7"`, `"ucs2"`, `"ascii"` |
 | `total_segments` | int | Total segments (all share same LogID) |
-| `segment_index` | int | Index of this segment (0-based) |
+| `original_bytes_length` | int | Original SMS message byte length |
 
 ### MMS-Specific Fields
 

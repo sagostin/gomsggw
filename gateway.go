@@ -65,9 +65,9 @@ type MsgRecord struct {
 	Encoding       string // For SMS: "gsm7", "ucs2", etc.
 	SourceIP       string // Originating IP address (for web/API messages)
 
-	// Segment tracking for split messages (all segments share same LogID)
-	TotalSegments int // Total number of segments in this message (1 for single-part)
-	SegmentIndex  int // Index of this segment (0-based)
+	// SMS tracking
+	TotalSegments       int // Total number of segments in this message (1 for single-part)
+	OriginalBytesLength int // Original message byte length
 
 	// MMS transcoding
 	OriginalSizeBytes    int

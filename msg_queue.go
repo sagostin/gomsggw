@@ -22,6 +22,7 @@ type MsgQueueItem struct {
 	message           string
 	SkipNumberCheck   bool
 	LogID             string `json:"log_id"`
+	SourceCarrier     string // Carrier name for inbound messages from carrier (e.g., "telnyx")
 	//Delivery          *amqp.Delivery
 	Delivery *MsgQueueDelivery
 }

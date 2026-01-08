@@ -78,6 +78,7 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 			files:             files,
 			SkipNumberCheck:   false,
 			LogID:             transId,
+			SourceCarrier:     h.carrier.Name,
 		}
 		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
 		h.gateway.Router.CarrierMsgChan <- msg
@@ -94,6 +95,7 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 				Type:              MsgQueueItemType.SMS,
 				message:           smsBody,
 				LogID:             transId,
+				SourceCarrier:     h.carrier.Name,
 			}
 			h.gateway.Router.CarrierMsgChan <- sms
 		}

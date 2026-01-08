@@ -222,11 +222,13 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 
 				internal := (fromClient != nil && toClient != nil)
 				fromClientType := "carrier"
+				carrierName := m.SourceCarrier // Source carrier for inbound from carrier
 				if fromClient != nil {
 					fromClientType = fromClient.Type
+					carrierName = "" // No carrier for client-to-client
 					router.gateway.MsgRecordChan <- MsgRecord{
 						MsgQueueItem:   *m,
-						Carrier:        "from_client",
+						Carrier:        "", // Client-to-client, no carrier
 						ClientID:       fromClient.ID,
 						Internal:       internal,
 						Direction:      "outbound",
@@ -237,7 +239,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				}
 				router.gateway.MsgRecordChan <- MsgRecord{
 					MsgQueueItem:   *m,
-					Carrier:        "to_client_web",
+					Carrier:        carrierName, // Source carrier if from carrier, empty if from client
 					ClientID:       toClient.ID,
 					Internal:       internal,
 					Direction:      "inbound",
@@ -321,20 +323,32 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 
 			// Record the successful send
 			internal := (fromClient != nil && toClient != nil)
+			fromClientType := "carrier"
+			carrierName := m.SourceCarrier // Source carrier for inbound from carrier
 			if fromClient != nil {
+				fromClientType = fromClient.Type
+				carrierName = "" // No carrier for client-to-client
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem: *m,
-					Carrier:      "from_client",
-					ClientID:     fromClient.ID,
-					Internal:     internal,
+					MsgQueueItem:   *m,
+					Carrier:        "",
+					ClientID:       fromClient.ID,
+					Internal:       internal,
+					Direction:      "outbound",
+					FromClientType: fromClientType,
+					ToClientType:   "legacy",
+					DeliveryMethod: "smpp",
 				}
 			}
 			if toClient != nil {
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem: *m,
-					Carrier:      "to_client",
-					ClientID:     toClient.ID,
-					Internal:     internal,
+					MsgQueueItem:   *m,
+					Carrier:        carrierName,
+					ClientID:       toClient.ID,
+					Internal:       internal,
+					Direction:      "inbound",
+					FromClientType: fromClientType,
+					ToClientType:   "legacy",
+					DeliveryMethod: "smpp",
 				}
 			}
 		} else {
@@ -418,10 +432,14 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 
 					if fromClient != nil {
 						router.gateway.MsgRecordChan <- MsgRecord{
-							MsgQueueItem: *m,
-							Carrier:      carrier,
-							ClientID:     fromClient.ID,
-							Internal:     false,
+							MsgQueueItem:   *m,
+							Carrier:        carrier,
+							ClientID:       fromClient.ID,
+							Internal:       false,
+							Direction:      "outbound",
+							FromClientType: fromClient.Type,
+							ToClientType:   "carrier",
+							DeliveryMethod: "carrier_api",
 						}
 					}
 					/*if m.Delivery != nil {
@@ -486,11 +504,13 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 
 				internal := (fromClient != nil && toClient != nil)
 				fromClientType := "carrier"
+				carrierName := m.SourceCarrier // Source carrier for inbound from carrier
 				if fromClient != nil {
 					fromClientType = fromClient.Type
+					carrierName = "" // No carrier for client-to-client
 					router.gateway.MsgRecordChan <- MsgRecord{
 						MsgQueueItem:   *m,
-						Carrier:        "from_client",
+						Carrier:        "",
 						ClientID:       fromClient.ID,
 						Internal:       internal,
 						Direction:      "outbound",
@@ -502,7 +522,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				}
 				router.gateway.MsgRecordChan <- MsgRecord{
 					MsgQueueItem:   *m,
-					Carrier:        "to_client_web",
+					Carrier:        carrierName,
 					ClientID:       toClient.ID,
 					Internal:       internal,
 					Direction:      "inbound",
@@ -526,20 +546,34 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				return
 			}
 			internal := (fromClient != nil && toClient != nil)
+			fromClientType := "carrier"
+			carrierName := m.SourceCarrier // Source carrier for inbound from carrier
 			if fromClient != nil {
+				fromClientType = fromClient.Type
+				carrierName = "" // No carrier for client-to-client
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem: *m,
-					Carrier:      "from_client",
-					ClientID:     fromClient.ID,
-					Internal:     internal,
+					MsgQueueItem:   *m,
+					Carrier:        "",
+					ClientID:       fromClient.ID,
+					Internal:       internal,
+					Direction:      "outbound",
+					FromClientType: fromClientType,
+					ToClientType:   "legacy",
+					DeliveryMethod: "mm4",
+					MediaCount:     len(m.files),
 				}
 			}
 			if toClient != nil {
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem: *m,
-					Carrier:      "to_client",
-					ClientID:     toClient.ID,
-					Internal:     internal,
+					MsgQueueItem:   *m,
+					Carrier:        carrierName,
+					ClientID:       toClient.ID,
+					Internal:       internal,
+					Direction:      "inbound",
+					FromClientType: fromClientType,
+					ToClientType:   "legacy",
+					DeliveryMethod: "mm4",
+					MediaCount:     len(m.files),
 				}
 			}
 		} else {
@@ -616,10 +650,15 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 
 					if fromClient != nil {
 						router.gateway.MsgRecordChan <- MsgRecord{
-							MsgQueueItem: *m,
-							Carrier:      carrier,
-							ClientID:     fromClient.ID,
-							Internal:     false,
+							MsgQueueItem:   *m,
+							Carrier:        carrier,
+							ClientID:       fromClient.ID,
+							Internal:       false,
+							Direction:      "outbound",
+							FromClientType: fromClient.Type,
+							ToClientType:   "carrier",
+							DeliveryMethod: "carrier_api",
+							MediaCount:     len(m.files),
 						}
 					}
 					return

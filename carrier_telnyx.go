@@ -135,6 +135,7 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 			files:             files,
 			SkipNumberCheck:   false,
 			LogID:             logID,
+			SourceCarrier:     h.carrier.Name,
 		}
 		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
 		h.gateway.Router.CarrierMsgChan <- msg
@@ -150,6 +151,7 @@ func (h *TelnyxHandler) Inbound(c iris.Context) error {
 			Type:              MsgQueueItemType.SMS,
 			message:           body,
 			LogID:             logID,
+			SourceCarrier:     h.carrier.Name,
 		}
 		h.gateway.Router.CarrierMsgChan <- sms
 		/*for _, smsBody := range smsMessages {

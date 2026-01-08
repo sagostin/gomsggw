@@ -63,6 +63,7 @@ type MsgRecord struct {
 	ToClientType   string // "legacy", "web", or "carrier"
 	DeliveryMethod string // "smpp", "mm4", "webhook", "carrier_api"
 	Encoding       string // For SMS: "gsm7", "ucs2", etc.
+	SourceIP       string // Originating IP address (for web/API messages)
 
 	// Segment tracking for split messages (all segments share same LogID)
 	TotalSegments int // Total number of segments in this message (1 for single-part)

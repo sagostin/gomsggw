@@ -23,6 +23,7 @@ type MsgQueueItem struct {
 	SkipNumberCheck   bool
 	LogID             string `json:"log_id"`
 	SourceCarrier     string // Carrier name for inbound messages from carrier (e.g., "telnyx")
+	SourceIP          string // Originating IP address for web/API messages
 	//Delivery          *amqp.Delivery
 	Delivery *MsgQueueDelivery
 }

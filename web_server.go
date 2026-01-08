@@ -1424,6 +1424,12 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 
 			logID := uuid.New().String()
 
+			// Get client IP for tracking
+			clientIP := ctx.Values().GetString("client_ip")
+			if clientIP == "" {
+				clientIP = ctx.RemoteAddr()
+			}
+
 			item := MsgQueueItem{
 				LogID:             logID,
 				To:                parsed.To,
@@ -1432,6 +1438,7 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				message:           parsed.Text,
 				files:             files,
 				ReceivedTimestamp: time.Now(),
+				SourceIP:          clientIP,
 			}
 
 			// Inject into Router

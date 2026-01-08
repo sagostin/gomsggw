@@ -147,6 +147,10 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 	// Process based on message type
 	switch m.Type {
 	case MsgQueueItemType.SMS:
+		// Calculate SMS encoding and segment count for records
+		smsEncoding := GetSMSEncoding(m.message)
+		smsSegments := GetSMSSegmentCount(m.message)
+
 		// Debug: Log which path we're taking
 		routePath := "CARRIER"
 		if toClient != nil {
@@ -165,6 +169,8 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				"from":      m.From,
 				"to":        m.To,
 				"routePath": routePath,
+				"encoding":  smsEncoding,
+				"segments":  smsSegments,
 			},
 		))
 
@@ -235,6 +241,9 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 						FromClientType: fromClientType,
 						ToClientType:   "web",
 						DeliveryMethod: "webhook",
+						Encoding:       smsEncoding,
+						TotalSegments:  smsSegments,
+						SourceIP:       m.SourceIP,
 					}
 				}
 				router.gateway.MsgRecordChan <- MsgRecord{
@@ -246,6 +255,9 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					FromClientType: fromClientType,
 					ToClientType:   "web",
 					DeliveryMethod: "webhook",
+					Encoding:       smsEncoding,
+					TotalSegments:  smsSegments,
+					SourceIP:       m.SourceIP,
 				}
 				return
 			}
@@ -337,6 +349,9 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					FromClientType: fromClientType,
 					ToClientType:   "legacy",
 					DeliveryMethod: "smpp",
+					Encoding:       smsEncoding,
+					TotalSegments:  smsSegments,
+					SourceIP:       m.SourceIP,
 				}
 			}
 			if toClient != nil {
@@ -349,6 +364,9 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					FromClientType: fromClientType,
 					ToClientType:   "legacy",
 					DeliveryMethod: "smpp",
+					Encoding:       smsEncoding,
+					TotalSegments:  smsSegments,
+					SourceIP:       m.SourceIP,
 				}
 			}
 		} else {
@@ -440,6 +458,9 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 							FromClientType: fromClient.Type,
 							ToClientType:   "carrier",
 							DeliveryMethod: "carrier_api",
+							Encoding:       smsEncoding,
+							TotalSegments:  smsSegments,
+							SourceIP:       m.SourceIP,
 						}
 					}
 					/*if m.Delivery != nil {
@@ -518,6 +539,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 						ToClientType:   "web",
 						DeliveryMethod: "webhook",
 						MediaCount:     len(m.files),
+						SourceIP:       m.SourceIP,
 					}
 				}
 				router.gateway.MsgRecordChan <- MsgRecord{
@@ -530,6 +552,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					ToClientType:   "web",
 					DeliveryMethod: "webhook",
 					MediaCount:     len(m.files),
+					SourceIP:       m.SourceIP,
 				}
 				return
 			}
@@ -561,6 +584,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					ToClientType:   "legacy",
 					DeliveryMethod: "mm4",
 					MediaCount:     len(m.files),
+					SourceIP:       m.SourceIP,
 				}
 			}
 			if toClient != nil {
@@ -574,6 +598,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					ToClientType:   "legacy",
 					DeliveryMethod: "mm4",
 					MediaCount:     len(m.files),
+					SourceIP:       m.SourceIP,
 				}
 			}
 		} else {
@@ -659,6 +684,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 							ToClientType:   "carrier",
 							DeliveryMethod: "carrier_api",
 							MediaCount:     len(m.files),
+							SourceIP:       m.SourceIP,
 						}
 					}
 					return

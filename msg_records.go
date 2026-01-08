@@ -52,10 +52,11 @@ type MsgRecordDBItem struct {
 	ServerID          string    `json:"server_id"`
 
 	// Enhanced tracking fields
-	Direction      string `json:"direction"`        // "inbound" or "outbound" relative to gateway
-	FromClientType string `json:"from_client_type"` // "legacy", "web", or "carrier"
-	ToClientType   string `json:"to_client_type"`   // "legacy", "web", or "carrier"
-	DeliveryMethod string `json:"delivery_method"`  // "smpp", "mm4", "webhook", "carrier_api"
+	Direction      string `json:"direction"`           // "inbound" or "outbound" relative to gateway
+	FromClientType string `json:"from_client_type"`    // "legacy", "web", or "carrier"
+	ToClientType   string `json:"to_client_type"`      // "legacy", "web", or "carrier"
+	DeliveryMethod string `json:"delivery_method"`     // "smpp", "mm4", "webhook", "carrier_api"
+	SourceIP       string `json:"source_ip,omitempty"` // Originating IP address (for web/API messages)
 
 	// SMS specific
 	Encoding      string `json:"encoding,omitempty"` // "gsm7", "ucs2", "ascii"
@@ -112,6 +113,7 @@ func (gateway *Gateway) InsertMsgRecord(record MsgRecord) error {
 		FromClientType:       record.FromClientType,
 		ToClientType:         record.ToClientType,
 		DeliveryMethod:       record.DeliveryMethod,
+		SourceIP:             record.SourceIP,
 		Encoding:             record.Encoding,
 		TotalSegments:        record.TotalSegments,
 		SegmentIndex:         record.SegmentIndex,

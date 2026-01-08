@@ -536,29 +536,31 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					fromClientType = fromClient.Type
 					carrierName = "" // No carrier for client-to-client
 					router.gateway.MsgRecordChan <- MsgRecord{
-						MsgQueueItem:   *m,
-						Carrier:        "",
-						ClientID:       fromClient.ID,
-						Internal:       internal,
-						Direction:      "outbound",
-						FromClientType: fromClientType,
-						ToClientType:   "web",
-						DeliveryMethod: "webhook",
-						MediaCount:     len(m.files),
-						SourceIP:       m.SourceIP,
+						MsgQueueItem:      *m,
+						Carrier:           "",
+						ClientID:          fromClient.ID,
+						Internal:          internal,
+						Direction:         "outbound",
+						FromClientType:    fromClientType,
+						ToClientType:      "web",
+						DeliveryMethod:    "webhook",
+						MediaCount:        len(m.files),
+						OriginalSizeBytes: m.OriginalSizeBytes,
+						SourceIP:          m.SourceIP,
 					}
 				}
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem:   *m,
-					Carrier:        carrierName,
-					ClientID:       toClient.ID,
-					Internal:       internal,
-					Direction:      "inbound",
-					FromClientType: fromClientType,
-					ToClientType:   "web",
-					DeliveryMethod: "webhook",
-					MediaCount:     len(m.files),
-					SourceIP:       m.SourceIP,
+					MsgQueueItem:      *m,
+					Carrier:           carrierName,
+					ClientID:          toClient.ID,
+					Internal:          internal,
+					Direction:         "inbound",
+					FromClientType:    fromClientType,
+					ToClientType:      "web",
+					DeliveryMethod:    "webhook",
+					MediaCount:        len(m.files),
+					OriginalSizeBytes: m.OriginalSizeBytes,
+					SourceIP:          m.SourceIP,
 				}
 				return
 			}
@@ -581,30 +583,32 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				fromClientType = fromClient.Type
 				carrierName = "" // No carrier for client-to-client
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem:   *m,
-					Carrier:        "",
-					ClientID:       fromClient.ID,
-					Internal:       internal,
-					Direction:      "outbound",
-					FromClientType: fromClientType,
-					ToClientType:   "legacy",
-					DeliveryMethod: "mm4",
-					MediaCount:     len(m.files),
-					SourceIP:       m.SourceIP,
+					MsgQueueItem:      *m,
+					Carrier:           "",
+					ClientID:          fromClient.ID,
+					Internal:          internal,
+					Direction:         "outbound",
+					FromClientType:    fromClientType,
+					ToClientType:      "legacy",
+					DeliveryMethod:    "mm4",
+					MediaCount:        len(m.files),
+					OriginalSizeBytes: m.OriginalSizeBytes,
+					SourceIP:          m.SourceIP,
 				}
 			}
 			if toClient != nil {
 				router.gateway.MsgRecordChan <- MsgRecord{
-					MsgQueueItem:   *m,
-					Carrier:        carrierName,
-					ClientID:       toClient.ID,
-					Internal:       internal,
-					Direction:      "inbound",
-					FromClientType: fromClientType,
-					ToClientType:   "legacy",
-					DeliveryMethod: "mm4",
-					MediaCount:     len(m.files),
-					SourceIP:       m.SourceIP,
+					MsgQueueItem:      *m,
+					Carrier:           carrierName,
+					ClientID:          toClient.ID,
+					Internal:          internal,
+					Direction:         "inbound",
+					FromClientType:    fromClientType,
+					ToClientType:      "legacy",
+					DeliveryMethod:    "mm4",
+					MediaCount:        len(m.files),
+					OriginalSizeBytes: m.OriginalSizeBytes,
+					SourceIP:          m.SourceIP,
 				}
 			}
 		} else {
@@ -681,16 +685,17 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 
 					if fromClient != nil {
 						router.gateway.MsgRecordChan <- MsgRecord{
-							MsgQueueItem:   *m,
-							Carrier:        carrier,
-							ClientID:       fromClient.ID,
-							Internal:       false,
-							Direction:      "outbound",
-							FromClientType: fromClient.Type,
-							ToClientType:   "carrier",
-							DeliveryMethod: "carrier_api",
-							MediaCount:     len(m.files),
-							SourceIP:       m.SourceIP,
+							MsgQueueItem:      *m,
+							Carrier:           carrier,
+							ClientID:          fromClient.ID,
+							Internal:          false,
+							Direction:         "outbound",
+							FromClientType:    fromClient.Type,
+							ToClientType:      "carrier",
+							DeliveryMethod:    "carrier_api",
+							MediaCount:        len(m.files),
+							OriginalSizeBytes: m.OriginalSizeBytes,
+							SourceIP:          m.SourceIP,
 						}
 					}
 					return

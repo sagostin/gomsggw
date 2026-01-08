@@ -240,6 +240,12 @@ func (s *MM4Server) transcodeMedia() {
 				))
 			}
 
+			// Calculate original file sizes before transcoding
+			var originalSizeBytes int
+			for _, f := range mm4Message.Files {
+				originalSizeBytes += len(f.Content)
+			}
+
 			msgItem := MsgQueueItem{
 				To:                mm4Message.To,
 				From:              mm4Message.From,
@@ -247,6 +253,7 @@ func (s *MM4Server) transcodeMedia() {
 				Type:              MsgQueueItemType.MMS,
 				files:             ff,
 				LogID:             mm4Message.TransactionID,
+				OriginalSizeBytes: originalSizeBytes,
 			}
 
 			s.gateway.Router.ClientMsgChan <- msgItem

@@ -24,6 +24,7 @@ type MsgQueueItem struct {
 	LogID             string `json:"log_id"`
 	SourceCarrier     string // Carrier name for inbound messages from carrier (e.g., "telnyx")
 	SourceIP          string // Originating IP address for web/API messages
+	OriginalSizeBytes int    // Original media size before transcoding (MMS only)
 	//Delivery          *amqp.Delivery
 	Delivery *MsgQueueDelivery
 }

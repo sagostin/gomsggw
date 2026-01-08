@@ -356,7 +356,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 								"RouterSendCarrier",
 								logrus.ErrorLevel,
 								map[string]interface{}{
-									"client": fromClient.Username,
+									"client": safeClientUsername(fromClient),
 									"logID":  m.LogID,
 								}, err,
 							))
@@ -399,11 +399,13 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					// Update the conversation queue with the expected ack.
 					router.gateway.ConvoManager.SetExpectedAck(convoID, ackID, router, 10*time.Second)
 
-					router.gateway.MsgRecordChan <- MsgRecord{
-						MsgQueueItem: *m,
-						Carrier:      carrier,
-						ClientID:     fromClient.ID,
-						Internal:     false,
+					if fromClient != nil {
+						router.gateway.MsgRecordChan <- MsgRecord{
+							MsgQueueItem: *m,
+							Carrier:      carrier,
+							ClientID:     fromClient.ID,
+							Internal:     false,
+						}
 					}
 					/*if m.Delivery != nil {
 						err = m.Delivery.Ack(false)
@@ -556,7 +558,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 								"RouterSendCarrier",
 								logrus.ErrorLevel,
 								map[string]interface{}{
-									"client": fromClient.Username,
+									"client": safeClientUsername(fromClient),
 									"logID":  m.LogID,
 								}, err,
 							))
@@ -595,11 +597,13 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 						}, nil,
 					))
 
-					router.gateway.MsgRecordChan <- MsgRecord{
-						MsgQueueItem: *m,
-						Carrier:      carrier,
-						ClientID:     fromClient.ID,
-						Internal:     false,
+					if fromClient != nil {
+						router.gateway.MsgRecordChan <- MsgRecord{
+							MsgQueueItem: *m,
+							Carrier:      carrier,
+							ClientID:     fromClient.ID,
+							Internal:     false,
+						}
 					}
 					return
 
@@ -610,7 +614,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					"RouterFindCarrier",
 					logrus.ErrorLevel,
 					map[string]interface{}{
-						"client": fromClient.Username,
+						"client": safeClientUsername(fromClient),
 						"logID":  m.LogID,
 					},
 				))
@@ -622,7 +626,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				"RouterSendFailed",
 				logrus.ErrorLevel,
 				map[string]interface{}{
-					"client": fromClient.Username,
+					"client": safeClientUsername(fromClient),
 					"logID":  m.LogID,
 				},
 			))

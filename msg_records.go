@@ -87,10 +87,10 @@ func (gateway *Gateway) InsertMsgRecord(record MsgRecord) error {
 	if item.Type == MsgQueueItemType.MMS && len(item.files) > 0 {
 		mediaCount = len(item.files)
 		for _, f := range item.files {
+			// Prefer raw Content if available, otherwise estimate from Base64Data
 			if len(f.Content) > 0 {
 				transcodedSize += len(f.Content)
-			}
-			if len(f.Base64Data) > 0 {
+			} else if len(f.Base64Data) > 0 {
 				// Base64 decodes to ~75% of encoded size
 				transcodedSize += len(f.Base64Data) * 3 / 4
 			}

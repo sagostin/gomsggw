@@ -214,15 +214,30 @@ func (s *MM4Server) transcodeMedia() {
 				return
 			}
 
+			// Calculate total transcoded size
+			var totalTranscodedSize int
+			for _, f := range ff {
+				totalTranscodedSize += len(f.Content)
+			}
+
+			// Calculate overall compression ratio
+			var overallCompressionPct float64
+			if originalSizeBytes > 0 {
+				overallCompressionPct = float64(originalSizeBytes-totalTranscodedSize) / float64(originalSizeBytes) * 100
+			}
+
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.TranscodeMedia",
 				"TranscodeSuccess",
 				logrus.InfoLevel,
 				map[string]interface{}{
-					"transaction_id":      mm4Message.TransactionID,
-					"output_files":        len(ff),
-					"original_size_bytes": originalSizeBytes,
-					"duration_ms":         time.Since(start).Milliseconds(),
+					"transaction_id":         mm4Message.TransactionID,
+					"file_count":             len(ff),
+					"original_total_bytes":   originalSizeBytes,
+					"transcoded_total_bytes": totalTranscodedSize,
+					"size_delta_bytes":       originalSizeBytes - totalTranscodedSize,
+					"compression_pct":        fmt.Sprintf("%.1f%%", overallCompressionPct),
+					"duration_ms":            time.Since(start).Milliseconds(),
 				},
 			))
 
@@ -485,12 +500,27 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, int, err
 		file.ContentType = newType
 		file.Base64Data = encodeToBase64(convertedContent)
 
+		// Enhanced logging with transformation details
+		originalType := entryFields["content_type"].(string)
+		originalSize := entryFields["decoded_size"].(int)
+		transcodedSize := len(file.Content)
+		formatChanged := originalType != newType
+
+		// Calculate compression ratio (positive = smaller, negative = larger)
+		var compressionPct float64
+		if originalSize > 0 {
+			compressionPct = float64(originalSize-transcodedSize) / float64(originalSize) * 100
+		}
+
 		entryFields["filename_out"] = file.Filename
-		entryFields["final_type"] = file.ContentType
-		entryFields["final_size"] = len(file.Content)
+		entryFields["original_type"] = originalType
+		entryFields["transcoded_type"] = newType
+		entryFields["format_changed"] = formatChanged
+		entryFields["original_size"] = originalSize
+		entryFields["transcoded_size"] = transcodedSize
+		entryFields["compression_pct"] = fmt.Sprintf("%.1f%%", compressionPct)
+		entryFields["size_delta"] = originalSize - transcodedSize
 		entryFields["duration_ms"] = time.Since(start).Milliseconds()
-		entryFields["new_ext"] = newExt
-		entryFields["compatibleType"] = compatibleTypes[file.ContentType]
 
 		lm.SendLog(lm.BuildLog(
 			"Server.MM4.TranscodeMedia",

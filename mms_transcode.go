@@ -169,7 +169,7 @@ func (s *MM4Server) transcodeMedia() {
 				}
 			}()
 
-			ff, err := mm4Message.processAndConvertFiles(lm)
+			ff, originalSizeBytes, err := mm4Message.processAndConvertFiles(lm)
 			if err != nil {
 				// scrub large / sensitive stuff before logging
 				mm4Message.Files = nil
@@ -219,9 +219,10 @@ func (s *MM4Server) transcodeMedia() {
 				"TranscodeSuccess",
 				logrus.InfoLevel,
 				map[string]interface{}{
-					"transaction_id": mm4Message.TransactionID,
-					"output_files":   len(ff),
-					"duration_ms":    time.Since(start).Milliseconds(),
+					"transaction_id":      mm4Message.TransactionID,
+					"output_files":        len(ff),
+					"original_size_bytes": originalSizeBytes,
+					"duration_ms":         time.Since(start).Milliseconds(),
 				},
 			))
 
@@ -238,12 +239,6 @@ func (s *MM4Server) transcodeMedia() {
 						"size_bytes":     len(f.Content),
 					},
 				))
-			}
-
-			// Calculate original file sizes before transcoding
-			var originalSizeBytes int
-			for _, f := range mm4Message.Files {
-				originalSizeBytes += len(f.Content)
 			}
 
 			msgItem := MsgQueueItem{
@@ -278,8 +273,10 @@ var compatibleTypes = map[string]bool{
 }
 
 // NOTE: requires a *LogManager so we can log without using logrus directly.
-func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
+// Returns: processedFiles, originalDecodedSize, error
+func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, int, error) {
 	var processedFiles []MsgFile
+	var originalDecodedSize int
 
 	baseFields := safeClientInfo(m)
 
@@ -326,10 +323,11 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 				entryFields,
 				err,
 			))
-			return nil, fmt.Errorf("failed to decode Base64 content: %v", err)
+			return nil, 0, fmt.Errorf("failed to decode Base64 content: %v", err)
 		}
 
 		entryFields["decoded_size"] = len(decodedContent)
+		originalDecodedSize += len(decodedContent) // Track original size
 
 		// Check input size limit (10MB max)
 		if len(decodedContent) > maxInputSize {
@@ -339,7 +337,7 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 				logrus.WarnLevel,
 				entryFields,
 			))
-			return nil, ErrFileTooLarge
+			return nil, 0, ErrFileTooLarge
 		}
 
 		// Check for animated GIF (cannot be resized per Telnyx docs)
@@ -353,7 +351,7 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 						logrus.WarnLevel,
 						entryFields,
 					))
-					return nil, ErrGIFTooLarge
+					return nil, 0, ErrGIFTooLarge
 				}
 				// Animated GIF is small enough, pass through unchanged
 				file.Base64Data = encodeToBase64(decodedContent)
@@ -414,7 +412,7 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 					entryFields,
 					err,
 				))
-				return nil, fmt.Errorf("failed to process image: %v", err)
+				return nil, 0, fmt.Errorf("failed to process image: %v", err)
 			}
 
 		case strings.HasPrefix(file.ContentType, "video/"):
@@ -435,7 +433,7 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 					entryFields,
 					err,
 				))
-				return nil, fmt.Errorf("failed to process video: %v", err)
+				return nil, 0, fmt.Errorf("failed to process video: %v", err)
 			}
 
 		case strings.HasPrefix(file.ContentType, "audio/"):
@@ -456,7 +454,7 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 					entryFields,
 					err,
 				))
-				return nil, fmt.Errorf("failed to convert audio: %v", err)
+				return nil, 0, fmt.Errorf("failed to convert audio: %v", err)
 			}
 
 		default:
@@ -476,7 +474,7 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 					entryFields,
 					err,
 				))
-				return nil, fmt.Errorf("failed to compress file: %v", err)
+				return nil, 0, fmt.Errorf("failed to compress file: %v", err)
 			}
 			newType = file.ContentType
 			newExt = filepath.Ext(file.Filename)
@@ -504,7 +502,7 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, error) {
 		processedFiles = append(processedFiles, file)
 	}
 
-	return processedFiles, nil
+	return processedFiles, originalDecodedSize, nil
 }
 
 // convertTo3GPP compresses and converts video content to 3GPP format suitable for MMS transmission.

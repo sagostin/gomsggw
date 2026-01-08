@@ -167,6 +167,33 @@ func (cm *ConvoManager) HandleAck(convoID, receivedAck string, router *Router) {
 	cq.mu.Unlock()
 }
 
+// HandleFailure is called when message processing fails before an Ack is expected.
+// It resets the in-flight state and releases the next message.
+func (cm *ConvoManager) HandleFailure(convoID string, router *Router) {
+	cm.mu.Lock()
+	cq, exists := cm.queues[convoID]
+	cm.mu.Unlock()
+	if !exists {
+		return
+	}
+
+	cq.mu.Lock()
+	if cq.inFlight {
+		// Clear current in-flight state.
+		cq.inFlight = false
+		cq.expectedAckID = ""
+
+		// If there are queued messages, release the next one.
+		if len(cq.queue) > 0 {
+			nextMsg := cq.queue[0]
+			cq.queue = cq.queue[1:]
+			cq.inFlight = true
+			router.ClientMsgChan <- nextMsg
+		}
+	}
+	cq.mu.Unlock()
+}
+
 // HandleCarrierAck looks up the conversation using the ackID from the carrier,
 // then calls HandleAck for that conversation.
 func (cm *ConvoManager) HandleCarrierAck(ackID string, router *Router) {

@@ -643,9 +643,13 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		return
 	}
 
+	// Normalize numbers to ensure consistent ConvoID hash
+	toFormatted, _ := FormatToE164(submitSM.DestAddr.String())
+	fromFormatted, _ := FormatToE164(submitSM.SourceAddr.String())
+
 	msgQueueItem := MsgQueueItem{
-		To:                submitSM.DestAddr.String(),
-		From:              submitSM.SourceAddr.String(),
+		To:                toFormatted,
+		From:              fromFormatted,
 		ReceivedTimestamp: time.Now(),
 		Type:              MsgQueueItemType.SMS,
 		message:           decodedMsg,

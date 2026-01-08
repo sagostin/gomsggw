@@ -52,6 +52,19 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 	from, _ := FormatToE164(m.From)
 	m.From = from
 
+	// Compute convoID for queue management
+	convoID := computeCorrelationKey(m.From, m.To)
+	processingSuccessful := false
+
+	// Ensure we release the queue if processing fails (only for client-origin messages)
+	if origin == "client" {
+		defer func() {
+			if !processingSuccessful {
+				router.gateway.ConvoManager.HandleFailure(convoID, router)
+			}
+		}()
+	}
+
 	// Lookup clients
 	toClient, toClientErr := router.findClientByNumber(m.To)
 	fromClient, fromClientErr := router.findClientByNumber(m.From)
@@ -395,9 +408,13 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					))
 
 					// Compute the conversation hash.
-					convoID := computeCorrelationKey(m.From, m.To)
+					convoID = computeCorrelationKey(m.From, m.To)
 					// Update the conversation queue with the expected ack.
 					router.gateway.ConvoManager.SetExpectedAck(convoID, ackID, router, 10*time.Second)
+
+					// We've successfully handed off to the carrier and are waiting for an async ACK.
+					// Do NOT release the queue yet.
+					processingSuccessful = true
 
 					if fromClient != nil {
 						router.gateway.MsgRecordChan <- MsgRecord{

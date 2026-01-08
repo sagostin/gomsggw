@@ -272,58 +272,38 @@ func (h *SimpleHandler) Serve(session *smpp.Session) {
 }
 func (h *SimpleHandler) enquireLink(session *smpp.Session, ctx context.Context) {
 	lm := h.server.gateway.LogManager
-	tick := time.NewTicker(15 * time.Second) // keep your 15s if that matches clients
-	defer tick.Stop()
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
+	// Use configured timeout or default to 30s
+	timeout := time.Duration(h.server.gateway.Config.SMPPTimeoutSecs) * time.Second
+	if timeout == 0 {
+		timeout = 30 * time.Second
+	}
 
-		case <-tick.C:
-			// Use ctx directly like the old version to keep behavior identical.
-			err := session.EnquireLink(ctx, 15*time.Second, 5*time.Second)
-			if err != nil {
-				username, client := h.server.getSessionClientInfo(session)
-				clientName := ""
-				if client != nil {
-					clientName = client.Username
-				}
+	// session.EnquireLink blocks and handles the ticker internally
+	err := session.EnquireLink(ctx, 15*time.Second, timeout)
+	if err != nil {
+		username, client := h.server.getSessionClientInfo(session)
+		clientName := ""
+		if client != nil {
+			clientName = client.Username
+		}
 
-				lm.SendLog(lm.BuildLog(
-					"Server.SMPP.EnquireLink",
-					"SMPPEnquireLinkError",
-					logrus.WarnLevel,
-					map[string]interface{}{
-						"ip":       session.Parent.RemoteAddr().String(),
-						"username": username,
-						"client":   clientName,
-					},
-					err,
-				))
-
-				// Let the main loop / library handle closing; we just stop pinging.
-				return
-			}
-
-			// Optional; keep at Debug so it doesn't spam.
-			username, client := h.server.getSessionClientInfo(session)
-			clientName := ""
-			if client != nil {
-				clientName = client.Username
-			}
-
+		// Only log as warning if it's not just a context cancellation
+		if ctx.Err() == nil {
 			lm.SendLog(lm.BuildLog(
 				"Server.SMPP.EnquireLink",
-				"EnquireLinkOK",
-				logrus.DebugLevel,
+				"SMPPEnquireLinkError",
+				logrus.WarnLevel,
 				map[string]interface{}{
 					"ip":       session.Parent.RemoteAddr().String(),
 					"username": username,
 					"client":   clientName,
+					"timeout":  timeout.String(),
 				},
+				err,
 			))
 		}
+		return
 	}
 }
 

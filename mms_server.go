@@ -407,6 +407,7 @@ type Session struct {
 	Files      []MsgFile
 	mongo      *mongo.Client
 	SessionID  string // Unique identifier for log correlation
+	State      int    // 0: Init, 1: Helo, 2: Mail, 3: Rcpt, 4: Data
 }
 
 // debugLog is a helper to send debug logs via LogManager.
@@ -488,8 +489,14 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 
 	switch cmd {
 	case "HELO", "EHLO":
+		s.State = 1
 		writeResponse(s.Writer, "250 Hello")
 	case "MAIL":
+		if s.State < 1 {
+			s.debugLog("StateError", map[string]interface{}{"error": "Need HELO first"})
+			writeResponse(s.Writer, "503 Bad sequence of commands: Send HELO/EHLO first")
+			return nil
+		}
 		if err := s.handleMail(arg); err != nil {
 			s.debugLog("MAILError", map[string]interface{}{
 				"arg":   arg,
@@ -497,9 +504,15 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 			})
 			writeResponse(s.Writer, fmt.Sprintf("550 %v", err))
 		} else {
+			s.State = 2
 			writeResponse(s.Writer, "250 OK")
 		}
 	case "RCPT":
+		if s.State < 2 {
+			s.debugLog("StateError", map[string]interface{}{"error": "Need MAIL FROM first"})
+			writeResponse(s.Writer, "503 Bad sequence of commands: Send MAIL FROM first")
+			return nil
+		}
 		if err := s.handleRcpt(arg); err != nil {
 			s.debugLog("RCPTError", map[string]interface{}{
 				"arg":   arg,
@@ -507,11 +520,18 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 			})
 			writeResponse(s.Writer, fmt.Sprintf("550 %v", err))
 		} else {
+			s.State = 3
 			writeResponse(s.Writer, "250 OK")
 		}
 	case "DATA":
+		if s.State < 3 {
+			s.debugLog("StateError", map[string]interface{}{"error": "Need RCPT TO first"})
+			writeResponse(s.Writer, "503 Bad sequence of commands: Send RCPT TO first")
+			return nil
+		}
 		writeResponse(s.Writer, "354 End data with <CR><LF>.<CR><LF>")
 		if err := s.handleData(); err != nil {
+			// ... error handling ...
 			lm := s.Server.gateway.LogManager
 			lm.SendLog(lm.BuildLog(
 				"Server.MM4.HandleCommand",
@@ -525,19 +545,14 @@ func (s *Session) handleCommand(line string, srv *MM4Server) error {
 			))
 			writeResponse(s.Writer, fmt.Sprintf("554 %v", err))
 		} else {
+			// Reset state for next message in same session
+			s.State = 1 // Back to HELO state (ready for MAIL)? Or back to 1 (Authenticated/Helo'd)
 			writeResponse(s.Writer, "250 Message queued for processing")
 		}
-	case "NOOP":
-		writeResponse(s.Writer, "250 OK")
 	case "RSET":
-		s.debugLog("RSET", map[string]interface{}{
-			"from": s.From,
-			"to":   strings.Join(s.To, ","),
-		})
-		s.From = ""
-		s.To = nil
-		s.Data = nil
-		s.Headers = nil
+		s.State = 1 // Reset to HELO state
+		writeResponse(s.Writer, "250 OK")
+	case "NOOP":
 		writeResponse(s.Writer, "250 OK")
 	case "QUIT":
 		writeResponse(s.Writer, "221 Bye")

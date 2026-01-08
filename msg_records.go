@@ -25,6 +25,16 @@ func (gateway *Gateway) processMsgRecords() {
 			))
 			continue
 		}
+
+		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+			"MsgRecords",
+			"InsertSuccess",
+			logrus.DebugLevel,
+			map[string]interface{}{
+				"logID":    msg.MsgQueueItem.LogID,
+				"clientID": msg.ClientID,
+			},
+		))
 	}
 }
 

@@ -1,0 +1,21 @@
+# Ignore environment files - runtime should provide these
+.env
+*.env
+!sample.env
+
+# Ignore build/development files
+.git
+.gitignore
+.idea
+.vscode
+*.md
+!README.md
+
+# Ignore test and migration scripts
+*_test.go
+migration/
+
+# Ignore backup files
+*.backup
+*.bak
+Dockerfile.backup

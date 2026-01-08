@@ -9,3 +9,11 @@ func StringInArray(target string, list []string) bool {
 	}
 	return false
 }
+
+// safeClientUsername helper so we don't nil-deref
+func safeClientUsername(c *Client) string {
+	if c == nil {
+		return ""
+	}
+	return c.Username
+}

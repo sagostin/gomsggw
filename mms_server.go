@@ -613,8 +613,15 @@ func (s *Session) handleData() error {
 
 	// Handle MM4 message
 	if err := s.handleMM4Message(); err != nil {
-		// Catch-all dump for anything that bubbles up
-		s.dumpFullMM4("handle_mm4_message_error")
+		// Only dump full MM4 if it's NOT an empty body error (which is likely a keep-alive/zombie)
+		if err.Error() != "empty message body" {
+			s.dumpFullMM4("handle_mm4_message_error")
+		} else {
+			s.debugLog("EmptyBodyRejected", map[string]interface{}{
+				"from": s.From,
+				"to":   s.To,
+			})
+		}
 		return err
 	}
 	return nil
@@ -622,6 +629,10 @@ func (s *Session) handleData() error {
 
 // handleMM4Message processes the MM4 message based on its type.
 func (s *Session) handleMM4Message() error {
+	if len(s.Data) == 0 {
+		return fmt.Errorf("empty message body")
+	}
+
 	requiredHeaders := []string{
 		"X-Mms-3GPP-MMS-Version",
 		"X-Mms-message-Type",
@@ -671,6 +682,47 @@ func (s *Session) handleMM4Message() error {
 	s.Server.MediaTranscodeChan <- mm
 
 	return nil
+}
+
+// dumpFullMM4 logs the full MM4 request (headers + body preview).
+// No env gating; relies purely on log level filtering.
+func (s *Session) dumpFullMM4(reason string) {
+	lm := s.Server.gateway.LogManager
+
+	// Flatten headers into a simple map[string]string for logging
+	headersFlat := make(map[string]string, len(s.Headers))
+	for k, v := range s.Headers {
+		headersFlat[k] = strings.Join(v, ", ")
+	}
+
+	// Body preview (avoid logging huge binary blobs)
+	const maxPreview = 4096
+	bodyPreview := s.Data
+	truncated := false
+	if len(bodyPreview) > maxPreview {
+		bodyPreview = bodyPreview[:maxPreview]
+		truncated = true
+	}
+
+	lm.SendLog(lm.BuildLog(
+		"Server.MM4.Raw",
+		"MM4RawRequest",
+		logrus.DebugLevel,
+		map[string]interface{}{
+			"reason":           reason,
+			"client":           safeClientUsername(s.Client),
+			"ip":               s.ClientIP,
+			"ip_hash":          s.IPHash,
+			"remote_addr":      s.RemoteAddr,
+			"session_id":       s.SessionID,
+			"envelope_from":    s.From,
+			"envelope_to":      strings.Join(s.To, ","),
+			"headers":          headersFlat,
+			"body_len":         len(s.Data),
+			"body_truncated":   truncated,
+			"body_preview_raw": string(bodyPreview),
+		},
+	))
 }
 
 // parseMIMEParts parses the MIME multipart content to extract files.
@@ -1225,52 +1277,4 @@ func generateBoundary() string {
 func writeResponse(writer *bufio.Writer, response string) {
 	writer.WriteString(response + "\r\n")
 	writer.Flush()
-}
-
-// dumpFullMM4 logs the full MM4 request (headers + body preview).
-// No env gating; relies purely on log level filtering.
-func (s *Session) dumpFullMM4(reason string) {
-	lm := s.Server.gateway.LogManager
-
-	// Flatten headers into a simple map[string]string for logging
-	headersFlat := make(map[string]string, len(s.Headers))
-	for k, v := range s.Headers {
-		headersFlat[k] = strings.Join(v, ", ")
-	}
-
-	// Body preview (avoid logging huge binary blobs)
-	const maxPreview = 4096
-	bodyPreview := s.Data
-	truncated := false
-	if len(bodyPreview) > maxPreview {
-		bodyPreview = bodyPreview[:maxPreview]
-		truncated = true
-	}
-
-	lm.SendLog(lm.BuildLog(
-		"Server.MM4.Raw",
-		"MM4RawRequest",
-		logrus.DebugLevel,
-		map[string]interface{}{
-			"reason":           reason,
-			"client":           safeClientUsername(s.Client),
-			"ip":               s.ClientIP,
-			"ip_hash":          s.IPHash,
-			"remote_addr":      s.RemoteAddr,
-			"envelope_from":    s.From,
-			"envelope_to":      strings.Join(s.To, ","),
-			"headers":          headersFlat,
-			"body_len":         len(s.Data),
-			"body_truncated":   truncated,
-			"body_preview_raw": string(bodyPreview),
-		},
-	))
-}
-
-// helper so we don't nil-deref
-func safeClientUsername(c *Client) string {
-	if c == nil {
-		return ""
-	}
-	return c.Username
 }

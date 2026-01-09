@@ -625,7 +625,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 							msg := &MsgQueueItem{
 								To:              m.From,
 								From:            m.To,
-								Type:            "sms",
+								Type:            "mms",
 								message:         "Blocked due to STOP message. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
 								SkipNumberCheck: false,
 								LogID:           m.LogID,
@@ -653,7 +653,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 								msg := &MsgQueueItem{
 									To:              m.From,
 									From:            m.To,
-									Type:            "sms",
+									Type:            "mms",
 									message:         "An error occurred. Please try again later or contact our support if the issue persists. ID: " + m.LogID,
 									SkipNumberCheck: false,
 									LogID:           m.LogID,
@@ -672,7 +672,7 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 					}
 
 					lm.SendLog(lm.BuildLog(
-						"Router.SMS",
+						"Router.MMS",
 						"Successfully sent MMS",
 						logrus.InfoLevel,
 						map[string]interface{}{

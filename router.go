@@ -840,12 +840,29 @@ func (router *Router) DispatchWebhook(webhookURL string, item *MsgQueueItem, toC
 			"text": item.message,
 		}
 		if item.Type == MsgQueueItemType.MMS && len(item.files) > 0 {
-			// Bicom expects media_urls - we'll need to provide URLs or embed
-			// For now, provide as base64 data URLs since we don't have hosted URLs
+			// Bicom expects media_urls - provide as data URLs or original URLs
 			mediaUrls := make([]string, 0, len(item.files))
 			for _, f := range item.files {
-				if len(f.Base64Data) > 0 {
-					dataURL := fmt.Sprintf("data:%s;base64,%s", f.ContentType, f.Base64Data)
+				// Priority: MediaURL > Base64Data > Content (encoded to base64)
+				if f.MediaURL != "" {
+					// Use original media URL if available
+					mediaUrls = append(mediaUrls, f.MediaURL)
+				} else if len(f.Base64Data) > 0 {
+					// Use existing base64 data as data URL
+					contentType := f.ContentType
+					if contentType == "" {
+						contentType = "application/octet-stream"
+					}
+					dataURL := fmt.Sprintf("data:%s;base64,%s", contentType, f.Base64Data)
+					mediaUrls = append(mediaUrls, dataURL)
+				} else if len(f.Content) > 0 {
+					// Encode raw content to base64 data URL
+					contentType := f.ContentType
+					if contentType == "" {
+						contentType = "application/octet-stream"
+					}
+					b64 := base64.StdEncoding.EncodeToString(f.Content)
+					dataURL := fmt.Sprintf("data:%s;base64,%s", contentType, b64)
 					mediaUrls = append(mediaUrls, dataURL)
 				}
 			}

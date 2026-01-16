@@ -1284,7 +1284,8 @@ type ParsedMessage struct {
 func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 	messages := app.Party("/messages", gateway.clientAuthMiddleware)
 	{
-		messages.Post("/send", func(ctx iris.Context) {
+		// Handler for sending messages - shared between /messages/send and POST /messages
+		sendMessageHandler := func(ctx iris.Context) {
 			lm := gateway.LogManager
 
 			// Log incoming request immediately (before any processing)
@@ -1554,7 +1555,11 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 					"id":     logID,
 				})
 			}
-		})
+		}
+
+		// Register both routes - /messages/send (original) and /messages (Bicom compatibility)
+		messages.Post("/send", sendMessageHandler)
+		messages.Post("/", sendMessageHandler) // Bicom sends to /messages instead of /messages/send
 
 		// GET /messages/usage - Check current usage against limits
 		messages.Get("/usage", func(ctx iris.Context) {

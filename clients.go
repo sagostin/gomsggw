@@ -11,8 +11,8 @@ import (
 type Client struct {
 	ID         uint            `gorm:"primaryKey" json:"id"`
 	Username   string          `gorm:"unique;not null" json:"username"`
-	Password   string          `gorm:"not null" json:"-"` // Never returned in JSON
-	Address    string          `json:"address"`           // IP address or hostname (required for legacy)
+	Password   string          `gorm:"not null" json:"password"` // Never returned in JSON
+	Address    string          `json:"address"`                  // IP address or hostname (required for legacy)
 	Name       string          `json:"name"`
 	Type       string          `json:"type" gorm:"default:'legacy'"`  // 'legacy' or 'web'
 	Timezone   string          `json:"timezone" gorm:"default:'UTC'"` // IANA timezone for limit period calculation

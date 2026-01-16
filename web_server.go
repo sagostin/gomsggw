@@ -1285,6 +1285,29 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 	messages := app.Party("/messages", gateway.clientAuthMiddleware)
 	{
 		messages.Post("/send", func(ctx iris.Context) {
+			lm := gateway.LogManager
+
+			// Log incoming request immediately (before any processing)
+			clientIP := ctx.RemoteAddr()
+			authHeader := ctx.GetHeader("Authorization")
+			authType := "none"
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				authType = "bearer"
+			} else if strings.HasPrefix(authHeader, "Basic ") {
+				authType = "basic"
+			}
+			lm.SendLog(lm.BuildLog(
+				"WebServer.Messages.Send",
+				"IncomingRequest",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"clientIP":    clientIP,
+					"authType":    authType,
+					"userAgent":   ctx.GetHeader("User-Agent"),
+					"contentType": ctx.GetHeader("Content-Type"),
+				},
+			))
+
 			// Get authenticated client
 			client := ctx.Values().Get("client").(*Client)
 
@@ -1294,6 +1317,18 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				apiFormat = client.Settings.APIFormat
 			}
 
+			lm.SendLog(lm.BuildLog(
+				"WebServer.Messages.Send",
+				"ClientAuthenticated",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"clientID":   client.ID,
+					"clientName": client.Username,
+					"apiFormat":  apiFormat,
+					"clientType": client.Type,
+				},
+			))
+
 			// Parse request based on format
 			var parsed ParsedMessage
 			switch apiFormat {
@@ -1301,7 +1336,7 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				var req BicomMessageRequest
 				if err := ctx.ReadJSON(&req); err != nil {
 					ctx.StatusCode(iris.StatusBadRequest)
-					ctx.JSON(iris.Map{"error": "Invalid Bicom format request body"})
+					ctx.JSON(iris.Map{"status": "error", "message": "Invalid Bicom format request body"})
 					return
 				}
 				parsed.From = req.From
@@ -1347,9 +1382,42 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				parsed.Media = req.Media
 			}
 
+			// Log parsed message details (including media URLs for debugging)
+			mediaURLs := make([]string, 0, len(parsed.Media))
+			for _, m := range parsed.Media {
+				if m.URL != "" {
+					mediaURLs = append(mediaURLs, m.URL)
+				}
+			}
+			textPreview := parsed.Text
+			if len(textPreview) > 50 {
+				textPreview = textPreview[:50] + "..."
+			}
+			lm.SendLog(lm.BuildLog(
+				"WebServer.Messages.Send",
+				"MessageParsed",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"clientID":    client.ID,
+					"clientName":  client.Username,
+					"apiFormat":   apiFormat,
+					"from":        parsed.From,
+					"to":          parsed.To,
+					"textPreview": textPreview,
+					"textLength":  len(parsed.Text),
+					"mediaCount":  len(parsed.Media),
+					"mediaURLs":   mediaURLs,
+				},
+			))
+
 			if parsed.To == "" {
-				ctx.StatusCode(iris.StatusBadRequest)
-				ctx.JSON(iris.Map{"error": "'to' field is required"})
+				if apiFormat == "bicom" {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"status": "error", "message": "'to' field is required"})
+				} else {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"error": "'to' field is required"})
+				}
 				return
 			}
 
@@ -1359,8 +1427,13 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				if len(client.Numbers) == 1 {
 					fromNumber = client.Numbers[0].Number
 				} else {
-					ctx.StatusCode(iris.StatusBadRequest)
-					ctx.JSON(iris.Map{"error": "'from' field is required when multiple numbers exist"})
+					if apiFormat == "bicom" {
+						ctx.StatusCode(iris.StatusBadRequest)
+						ctx.JSON(iris.Map{"status": "error", "message": "'from' field is required when multiple numbers exist"})
+					} else {
+						ctx.StatusCode(iris.StatusBadRequest)
+						ctx.JSON(iris.Map{"error": "'from' field is required when multiple numbers exist"})
+					}
 					return
 				}
 			} else {
@@ -1379,8 +1452,13 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 					}
 				}
 				if !owned {
-					ctx.StatusCode(iris.StatusForbidden)
-					ctx.JSON(iris.Map{"error": "You do not own the 'from' number"})
+					if apiFormat == "bicom" {
+						ctx.StatusCode(iris.StatusForbidden)
+						ctx.JSON(iris.Map{"status": "error", "message": "You do not own the 'from' number"})
+					} else {
+						ctx.StatusCode(iris.StatusForbidden)
+						ctx.JSON(iris.Map{"error": "You do not own the 'from' number"})
+					}
 					return
 				}
 			}
@@ -1395,16 +1473,21 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 			// Use the same limit checking logic as the router for consistency
 			limitResult := gateway.CheckMessageLimits(client, fromNumber, string(msgType), "outbound")
 			if limitResult != nil && !limitResult.Allowed {
-				ctx.StatusCode(iris.StatusTooManyRequests)
-				ctx.JSON(iris.Map{
-					"error":         "rate_limit_exceeded",
-					"message":       limitResult.Message,
-					"limit_type":    limitResult.LimitType,
-					"period":        limitResult.Period,
-					"number":        limitResult.Number,
-					"current_usage": limitResult.CurrentUsage,
-					"limit":         limitResult.Limit,
-				})
+				if apiFormat == "bicom" {
+					ctx.StatusCode(iris.StatusTooManyRequests)
+					ctx.JSON(iris.Map{"status": "error", "message": limitResult.Message})
+				} else {
+					ctx.StatusCode(iris.StatusTooManyRequests)
+					ctx.JSON(iris.Map{
+						"error":         "rate_limit_exceeded",
+						"message":       limitResult.Message,
+						"limit_type":    limitResult.LimitType,
+						"period":        limitResult.Period,
+						"number":        limitResult.Number,
+						"current_usage": limitResult.CurrentUsage,
+						"limit":         limitResult.Limit,
+					})
+				}
 				return
 			}
 			// --- END LIMIT CHECK ---
@@ -1425,7 +1508,7 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 			logID := uuid.New().String()
 
 			// Get client IP for tracking
-			clientIP := ctx.Values().GetString("client_ip")
+			clientIP = ctx.Values().GetString("client_ip")
 			if clientIP == "" {
 				clientIP = ctx.RemoteAddr()
 			}
@@ -1460,11 +1543,17 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 			gateway.Router.ClientMsgChan <- item
 
 			// Return success immediately (Async)
-			ctx.StatusCode(iris.StatusAccepted)
-			ctx.JSON(iris.Map{
-				"status": "queued",
-				"id":     logID,
-			})
+			// Bicom expects HTTP 200 with {"status": "success", "message": ""}
+			if apiFormat == "bicom" {
+				ctx.StatusCode(iris.StatusOK)
+				ctx.JSON(iris.Map{"status": "success", "message": ""})
+			} else {
+				ctx.StatusCode(iris.StatusAccepted)
+				ctx.JSON(iris.Map{
+					"status": "queued",
+					"id":     logID,
+				})
+			}
 		})
 
 		// GET /messages/usage - Check current usage against limits

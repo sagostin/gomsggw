@@ -794,11 +794,39 @@ func FormatToE164(number string) (string, error) {
 // - 'bicom': Bicom PBXware format with Bearer auth and media_urls
 // - 'telnyx': Telnyx-style format
 func (router *Router) DispatchWebhook(webhookURL string, item *MsgQueueItem, toClient *Client, fromClient *Client) error {
+	lm := router.gateway.LogManager
+
 	// Determine API format
 	apiFormat := "generic"
 	if toClient != nil && toClient.Settings != nil && toClient.Settings.APIFormat != "" {
 		apiFormat = toClient.Settings.APIFormat
 	}
+
+	// Log outbound webhook dispatch start
+	toClientName := ""
+	if toClient != nil {
+		toClientName = toClient.Username
+	}
+	fromClientName := ""
+	if fromClient != nil {
+		fromClientName = fromClient.Username
+	}
+	lm.SendLog(lm.BuildLog(
+		"Router.Webhook",
+		"DispatchingWebhook",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"logID":      item.LogID,
+			"webhookURL": webhookURL,
+			"apiFormat":  apiFormat,
+			"msgType":    string(item.Type),
+			"from":       item.From,
+			"to":         item.To,
+			"toClient":   toClientName,
+			"fromClient": fromClientName,
+			"mediaCount": len(item.files),
+		},
+	))
 
 	// Build payload based on format
 	var payload map[string]interface{}
@@ -902,33 +930,121 @@ func (router *Router) DispatchWebhook(webhookURL string, item *MsgQueueItem, toC
 	}
 	req, err := http.NewRequest("POST", webhookURL, bytes.NewBuffer(jsonBytes))
 	if err != nil {
+		lm.SendLog(lm.BuildLog(
+			"Router.Webhook",
+			"FailedToCreateRequest",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID":      item.LogID,
+				"webhookURL": webhookURL,
+				"error":      err.Error(),
+			},
+		))
 		return fmt.Errorf("failed to create webhook request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	// Set auth header based on format
+	authType := "none"
 	if toClient != nil {
 		if apiFormat == "bicom" {
 			// Bicom uses Bearer token (base64 of username:password)
 			token := base64.StdEncoding.EncodeToString([]byte(toClient.Username + ":" + toClient.Password))
 			req.Header.Set("Authorization", "Bearer "+token)
+			authType = "bearer"
 		} else {
 			// Default to Basic auth
 			auth := base64.StdEncoding.EncodeToString([]byte(toClient.Username + ":" + toClient.Password))
 			req.Header.Set("Authorization", "Basic "+auth)
+			authType = "basic"
 		}
 	}
 
+	// Log media URLs specifically for bicom format debugging
+	if apiFormat == "bicom" {
+		mediaURLs, hasMedia := payload["media_urls"]
+		lm.SendLog(lm.BuildLog(
+			"Router.Webhook.Bicom",
+			"OutboundPayload",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"logID":       item.LogID,
+				"webhookURL":  webhookURL,
+				"from":        item.From,
+				"to":          item.To,
+				"textLength":  len(item.message),
+				"hasMedia":    hasMedia,
+				"mediaURLs":   mediaURLs,
+				"payloadSize": len(jsonBytes),
+				"authType":    authType,
+				"timeout":     timeoutSecs,
+			},
+		))
+	}
+
+	// Log the outgoing request
+	lm.SendLog(lm.BuildLog(
+		"Router.Webhook",
+		"SendingHTTPRequest",
+		logrus.DebugLevel,
+		map[string]interface{}{
+			"logID":       item.LogID,
+			"webhookURL":  webhookURL,
+			"authType":    authType,
+			"payloadSize": len(jsonBytes),
+			"timeout":     timeoutSecs,
+		},
+	))
+
 	resp, err := client.Do(req)
 	if err != nil {
+		lm.SendLog(lm.BuildLog(
+			"Router.Webhook",
+			"HTTPRequestFailed",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID":      item.LogID,
+				"webhookURL": webhookURL,
+				"apiFormat":  apiFormat,
+				"error":      err.Error(),
+			},
+		))
 		return fmt.Errorf("failed to execute webhook request: %v", err)
 	}
 	defer resp.Body.Close()
 
+	// Read response body for logging
+	respBody, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("webhook replied with failure status %d: %s", resp.StatusCode, string(body))
+		lm.SendLog(lm.BuildLog(
+			"Router.Webhook",
+			"WebhookResponseError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID":        item.LogID,
+				"webhookURL":   webhookURL,
+				"apiFormat":    apiFormat,
+				"statusCode":   resp.StatusCode,
+				"responseBody": string(respBody),
+			},
+		))
+		return fmt.Errorf("webhook replied with failure status %d: %s", resp.StatusCode, string(respBody))
 	}
+
+	// Log successful response
+	lm.SendLog(lm.BuildLog(
+		"Router.Webhook",
+		"WebhookResponseSuccess",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"logID":        item.LogID,
+			"webhookURL":   webhookURL,
+			"apiFormat":    apiFormat,
+			"statusCode":   resp.StatusCode,
+			"responseBody": string(respBody),
+		},
+	))
 
 	return nil
 }

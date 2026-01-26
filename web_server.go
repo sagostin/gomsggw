@@ -1646,10 +1646,13 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 					}
 
 					originalSizeBytes += len(content)
+					// Base64-encode content for transcoder compatibility
+					// The transcoder expects Content to be base64-encoded (as from MM4 MIME parsing)
+					base64Content := base64.StdEncoding.EncodeToString(content)
 					files = append(files, MsgFile{
 						Filename:    filename,
 						ContentType: contentType,
-						Content:     content, // Raw bytes for transcoding
+						Content:     []byte(base64Content), // Base64-encoded for transcoder
 					})
 				}
 			}

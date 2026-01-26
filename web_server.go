@@ -3,9 +3,11 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -1280,6 +1282,48 @@ type ParsedMessage struct {
 	Media []WebMediaItem
 }
 
+// fetchMediaFromURL downloads media content from a URL and returns the content bytes, content type, and filename.
+// This is used when web clients (Bicom/Telnyx) send media_urls instead of base64 content.
+func fetchMediaFromURL(mediaURL string, timeout time.Duration) (content []byte, contentType string, filename string, err error) {
+	client := &http.Client{
+		Timeout: timeout,
+	}
+
+	req, err := http.NewRequest("GET", mediaURL, nil)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", "", fmt.Errorf("non-OK HTTP status: %s", resp.Status)
+	}
+
+	content, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("error reading media content: %w", err)
+	}
+
+	// Get content type from response header
+	contentType = resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	// Derive filename from URL path
+	filename = path.Base(mediaURL)
+	if filename == "" || filename == "." || filename == "/" {
+		filename = uuid.New().String()
+	}
+
+	return content, contentType, filename, nil
+}
+
 // SetupMessageRoutes sets up the HTTP routes for message sending (Web Clients).
 func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 	messages := app.Party("/messages", gateway.clientAuthMiddleware)
@@ -1493,15 +1537,119 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 			}
 			// --- END LIMIT CHECK ---
 
-			// Parse Media
+			// Parse Media - fetch from URLs if needed and prepare for transcoding
 			var files []MsgFile
+			var originalSizeBytes int
 			if msgType == MsgQueueItemType.MMS {
 				for _, media := range parsed.Media {
+					var content []byte
+					var contentType string
+					var filename string
+
+					if media.URL != "" {
+						// Fetch media from URL (for Bicom/Telnyx clients)
+						lm.SendLog(lm.BuildLog(
+							"WebServer.Messages.Send",
+							"FetchingMediaFromURL",
+							logrus.InfoLevel,
+							map[string]interface{}{
+								"clientID":   client.ID,
+								"clientName": client.Username,
+								"url":        media.URL,
+							},
+						))
+
+						fetchedContent, fetchedContentType, fetchedFilename, err := fetchMediaFromURL(media.URL, 30*time.Second)
+						if err != nil {
+							lm.SendLog(lm.BuildLog(
+								"WebServer.Messages.Send",
+								"MediaFetchError",
+								logrus.ErrorLevel,
+								map[string]interface{}{
+									"clientID":   client.ID,
+									"clientName": client.Username,
+									"url":        media.URL,
+									"error":      err.Error(),
+								},
+							))
+							// Return error to client for Bicom format
+							if apiFormat == "bicom" {
+								ctx.StatusCode(iris.StatusBadRequest)
+								ctx.JSON(iris.Map{"status": "error", "message": fmt.Sprintf("Failed to fetch media from URL: %s", media.URL)})
+							} else {
+								ctx.StatusCode(iris.StatusBadRequest)
+								ctx.JSON(iris.Map{"error": fmt.Sprintf("Failed to fetch media from URL: %s", media.URL)})
+							}
+							return
+						}
+
+						content = fetchedContent
+						contentType = fetchedContentType
+						filename = fetchedFilename
+
+						// Use provided content type if available
+						if media.ContentType != "" {
+							contentType = media.ContentType
+						}
+						// Use provided filename if available
+						if media.Filename != "" {
+							filename = media.Filename
+						}
+
+						lm.SendLog(lm.BuildLog(
+							"WebServer.Messages.Send",
+							"MediaFetchSuccess",
+							logrus.InfoLevel,
+							map[string]interface{}{
+								"clientID":    client.ID,
+								"clientName":  client.Username,
+								"url":         media.URL,
+								"contentType": contentType,
+								"filename":    filename,
+								"sizeBytes":   len(content),
+							},
+						))
+					} else if media.Content != "" {
+						// Decode base64 content (for generic format with inline content)
+						decodedContent, err := base64.StdEncoding.DecodeString(media.Content)
+						if err != nil {
+							lm.SendLog(lm.BuildLog(
+								"WebServer.Messages.Send",
+								"Base64DecodeError",
+								logrus.ErrorLevel,
+								map[string]interface{}{
+									"clientID":   client.ID,
+									"clientName": client.Username,
+									"filename":   media.Filename,
+									"error":      err.Error(),
+								},
+							))
+							ctx.StatusCode(iris.StatusBadRequest)
+							ctx.JSON(iris.Map{"error": "Invalid base64 content in media"})
+							return
+						}
+						content = decodedContent
+						contentType = media.ContentType
+						filename = media.Filename
+					} else {
+						// No content or URL provided
+						lm.SendLog(lm.BuildLog(
+							"WebServer.Messages.Send",
+							"MediaNoContentOrURL",
+							logrus.WarnLevel,
+							map[string]interface{}{
+								"clientID":   client.ID,
+								"clientName": client.Username,
+							},
+						))
+						continue
+					}
+
+					originalSizeBytes += len(content)
 					files = append(files, MsgFile{
-						Filename:    media.Filename,
-						ContentType: media.ContentType,
-						Base64Data:  media.Content,
-						MediaURL:    media.URL,
+						Filename:    filename,
+						ContentType: contentType,
+						Content:     content, // Raw bytes for transcoding
 					})
 				}
 			}
@@ -1514,34 +1662,52 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				clientIP = ctx.RemoteAddr()
 			}
 
-			// Calculate original size for MMS
-			var originalSizeBytes int
-			if msgType == MsgQueueItemType.MMS {
-				for _, f := range files {
-					// Content size (if set)
-					originalSizeBytes += len(f.Content)
-					// Base64Data decodes to ~75% of encoded size
-					if len(f.Base64Data) > 0 {
-						originalSizeBytes += len(f.Base64Data) * 3 / 4
-					}
+			// For MMS with files, route through transcoding pipeline (like MM4)
+			if msgType == MsgQueueItemType.MMS && len(files) > 0 {
+				// Create MM4Message for transcoding (similar to MM4 inbound flow)
+				mm4Message := &MM4Message{
+					From:          fromNumber,
+					To:            parsed.To,
+					Files:         files,
+					TransactionID: logID,
+					MessageID:     logID,
+					Client:        client,
 				}
-			}
 
-			item := MsgQueueItem{
-				LogID:             logID,
-				To:                parsed.To,
-				From:              fromNumber,
-				Type:              msgType,
-				message:           parsed.Text,
-				files:             files,
-				ReceivedTimestamp: time.Now(),
-				SourceIP:          clientIP,
-				OriginalSizeBytes: originalSizeBytes,
-			}
+				lm.SendLog(lm.BuildLog(
+					"WebServer.Messages.Send",
+					"RoutingToTranscoder",
+					logrus.InfoLevel,
+					map[string]interface{}{
+						"logID":             logID,
+						"clientID":          client.ID,
+						"clientName":        client.Username,
+						"from":              fromNumber,
+						"to":                parsed.To,
+						"fileCount":         len(files),
+						"originalSizeBytes": originalSizeBytes,
+					},
+				))
 
-			// Inject into Router
-			// The router handles routing, logging, and additional LIMITS for non-API sources.
-			gateway.Router.ClientMsgChan <- item
+				// Send to transcoding channel (async processing)
+				gateway.MM4Server.MediaTranscodeChan <- mm4Message
+			} else {
+				// SMS or MMS without media - route directly
+				item := MsgQueueItem{
+					LogID:             logID,
+					To:                parsed.To,
+					From:              fromNumber,
+					Type:              msgType,
+					message:           parsed.Text,
+					files:             files,
+					ReceivedTimestamp: time.Now(),
+					SourceIP:          clientIP,
+					OriginalSizeBytes: originalSizeBytes,
+				}
+
+				// Inject into Router
+				gateway.Router.ClientMsgChan <- item
+			}
 
 			// Return success immediately (Async)
 			// Bicom expects HTTP 200 with {"status": "success", "message": ""}

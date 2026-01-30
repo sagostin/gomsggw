@@ -221,4 +221,4 @@ Interactive menu for managing carriers, clients, and numbers. See [scripts/READM
 
 ## License
 
-See `smpp/LICENSE` file.
+See `LICENSE.md` file.

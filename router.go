@@ -747,6 +747,9 @@ func (router *Router) findClientByNumber(number string) (*Client, error) {
 	// Normalize the input number by removing the leading `+`, if present
 	searchNumber := strings.TrimPrefix(number, "+")
 
+	router.gateway.mu.RLock()
+	defer router.gateway.mu.RUnlock()
+
 	for _, client := range router.gateway.Clients {
 		for _, num := range client.Numbers {
 			// Compare the normalized input number with the stored number

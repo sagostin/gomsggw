@@ -232,12 +232,15 @@ func SetupCarrierRoutes(app *iris.Application, gateway *Gateway) {
 			defer gateway.mu.RUnlock()
 
 			var carrierList []Carrier
-			/*for _, handler := range gateway.Carriers {
-				// Assuming each handler can provide its Carrier information
-				if base, ok := handler.(*BaseCarrierHandler); ok {
-					carrierList = append(carrierList, Carrier{Name: base.Name})
+			for _, carrier := range gateway.CarrierUUIDs {
+				// Return carriers without exposing sensitive information
+				c := Carrier{
+					ID:   carrier.ID,
+					Name: carrier.Name,
+					Type: carrier.Type,
 				}
-			}*/
+				carrierList = append(carrierList, c)
+			}
 
 			ctx.JSON(carrierList)
 		})

@@ -136,6 +136,7 @@ func (gateway *Gateway) addCarrier(carrier *Carrier) error {
 	gateway.mu.Lock()
 	defer gateway.mu.Unlock()
 	gateway.Carriers[carrier.Name] = handler
+	gateway.CarrierUUIDs[carrier.UUID] = *carrier
 
 	return nil
 }

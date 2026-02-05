@@ -716,11 +716,14 @@ def menu() -> None:
             carrier_names = [c.get("name", "") for c in (carriers or [])]
             
             carrier = input("Carrier name (default: telnyx): ").strip() or "telnyx"
-            print("Enter numbers (comma-separated or one per line, Ctrl+D when done):")
+            print("Enter numbers (comma-separated or one per line).")
+            print("Press ENTER on an empty line to finish (or Ctrl+D).")
             try:
                 lines = []
                 while True:
                     line = input()
+                    if not line:
+                        break
                     lines.append(line)
             except EOFError:
                 pass

@@ -232,7 +232,7 @@ def list_clients() -> Optional[List[Dict[str, Any]]]:
         ctype = c.get("type", "legacy")[:8]
         limit = c.get("sms_limit", 0)
         limit_str = str(limit) if limit > 0 else "∞"
-        num_count = len(c.get("numbers", []))
+        num_count = len(c.get("numbers") or [])
         print(f"{cid:<6} {username:<18} {name:<22} {ctype:<8} {limit_str:<10} {num_count:<6}")
 
     print(f"\nTotal: {len(clients)} clients")
@@ -293,7 +293,7 @@ def show_client_details(identifier: str) -> None:
         print(f"    Timeout: {ws.get('webhook_timeout_secs', 10)}s")
 
     # Numbers
-    numbers = client.get("numbers", [])
+    numbers = client.get("numbers") or []
     if numbers:
         print(f"\n  Numbers ({len(numbers)}):")
         for n in numbers:
@@ -445,7 +445,7 @@ def get_client_numbers(username: str) -> List[str]:
     client = get_client(username)
     if not client:
         return []
-    return [n.get("number", "") for n in client.get("numbers", [])]
+    return [n.get("number", "") for n in (client.get("numbers") or [])]
 
 
 def normalize_number(num: str) -> str:
@@ -454,16 +454,30 @@ def normalize_number(num: str) -> str:
 
 
 def parse_numbers_csv(raw: str) -> List[str]:
-    """Parse comma-separated numbers, validating format."""
+    """Parse comma-separated numbers, validating format.
+    
+    Accepts formats:
+      - 10-digit:  2505551234      → 12505551234
+      - 11-digit:  12505551234     → 12505551234
+      - E.164:     +12505551234    → 12505551234
+      - With dashes/spaces: +1-250-555-1234 → 12505551234
+    """
     parts = [p.strip() for p in raw.replace("\n", ",").split(",") if p.strip()]
     valid, invalid = [], []
     for p in parts:
-        normalized = normalize_number(p)
-        if len(normalized) >= 10 and len(normalized) <= 11:
-            # Ensure 11 digits (add 1 if 10)
+        normalized = normalize_number(p)  # strips to digits only
+        if len(normalized) >= 10 and len(normalized) <= 15:
+            # E.164 can be up to 15 digits; we want NANP 11-digit
             if len(normalized) == 10:
                 normalized = "1" + normalized
+            elif len(normalized) > 11:
+                # Likely E.164 with country code; take last 11 for NANP
+                # e.g. digits "12505551234" from "+12505551234" is already 11
+                # but "112505551234" (extra leading 1) → take last 11
+                normalized = normalized[-11:]
             valid.append(normalized)
+            if normalized != normalize_number(p):
+                print(f"  ℹ️  {p} → {normalized}")
         else:
             invalid.append(p)
     if invalid:
@@ -487,7 +501,7 @@ def add_numbers_to_client(
 
     existing = []
     if skip_existing:
-        existing = [n.get("number", "") for n in client.get("numbers", [])]
+        existing = [n.get("number", "") for n in (client.get("numbers") or [])]
         print(f"  Client has {len(existing)} existing numbers.")
 
     added, skipped, failed = 0, 0, 0
@@ -533,7 +547,7 @@ def list_client_numbers(username: str) -> None:
         print(f"Client '{username}' not found.")
         return
 
-    numbers = client.get("numbers", [])
+    numbers = client.get("numbers") or []
     if not numbers:
         print("No numbers configured.")
         return
@@ -716,7 +730,7 @@ def menu() -> None:
             carrier_names = [c.get("name", "") for c in (carriers or [])]
             
             carrier = input("Carrier name (default: telnyx): ").strip() or "telnyx"
-            print("Enter numbers (comma-separated or one per line).")
+            print("Enter numbers (comma-separated or one per line, E.164 OK e.g. +12505551234).")
             print("Press ENTER on an empty line to finish (or Ctrl+D).")
             try:
                 lines = []
@@ -750,7 +764,18 @@ def menu() -> None:
             list_carriers()
             
             carrier = input("Carrier name (default: telnyx): ").strip() or "telnyx"
-            raw = input("Comma-separated numbers: ").strip()
+            print("Enter numbers (comma-separated or one per line, E.164 OK e.g. +12505551234).")
+            print("Press ENTER on an empty line to finish (or Ctrl+D).")
+            try:
+                lines = []
+                while True:
+                    line = input()
+                    if not line:
+                        break
+                    lines.append(line)
+            except EOFError:
+                pass
+            raw = ",".join(lines)
             nums = parse_numbers_csv(raw)
             if nums:
                 add_numbers_to_client(username, nums, carrier=carrier)

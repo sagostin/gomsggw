@@ -29,6 +29,7 @@ graph TB
         LC2[Legacy System<br/>SMPP/MM4]
         WC1[Web App<br/>REST API]
         WC2[Web Service<br/>REST API]
+        EA1[External App<br/>API Key Auth]
     end
     
     subgraph "GOMSGGW"
@@ -40,10 +41,12 @@ graph TB
         ROUTER[Unified Router]
         TRANS[Media Transcoder]
         CONVO[ConvoManager]
+        BATCH[Batch Processor]
         
         SMPP --> ROUTER
         MM4 --> ROUTER
         WEB --> ROUTER
+        BATCH --> ROUTER
         ROUTER <--> TRANS
         SMPP <--> CONVO
     end
@@ -57,6 +60,8 @@ graph TB
     LC2 --> MM4
     WC1 --> WEB
     WC2 --> WEB
+    EA1 --> WEB
+    WEB --> BATCH
     
     ROUTER --> TEL
     ROUTER --> TWI
@@ -251,9 +256,11 @@ HTTP API server for management, carrier webhooks, and web clients.
 **Endpoint Categories:**
 1. **Health & Monitoring**: `/health`, `/stats`
 2. **Management**: `/clients`, `/carriers`, `/reload`
-3. **Carrier Webhooks**: `/inbound/{carrier}`
-4. **Web Client API**: `/messages/send`
-5. **Media Serving**: `/media/{token}` (UUID-based access tokens for security)
+3. **API Key Management**: `/clients/{id}/api-keys` (admin auth)
+4. **Carrier Webhooks**: `/inbound/{carrier}`
+5. **Web Client API**: `/messages/send`, `/messages/usage`
+6. **Batch Sending**: `/messages/batch` (client or API key auth)
+7. **Media Serving**: `/media/{token}` (UUID-based access tokens for security)
 
 ### Transcoder (`mms_transcode.go`)
 
@@ -444,6 +451,8 @@ See [Web Clients](./web_clients.md) for details.
 
 - [Data Models](./data_models.md) - Database schema
 - [API Reference](./api_reference.md) - REST endpoints
+- [API Keys](./api_keys.md) - Tenant API key management
+- [Batch Sending](./batch_sending.md) - Bulk message delivery
 - [Legacy Clients](./legacy_clients.md) - SMPP/MM4 details
 - [Web Clients](./web_clients.md) - HTTP API details
 - [Transcoding](./transcoding.md) - Media processing

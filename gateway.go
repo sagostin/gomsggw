@@ -42,6 +42,7 @@ type Gateway struct {
 	//AMPQClient    *AMPQClient
 	Clients       map[string]*Client
 	Numbers       map[string]*ClientNumber
+	APIKeys       map[string]*TenantAPIKey // Keyed by SHA-256 hash of raw key
 	LogManager    *LogManager
 	mu            sync.RWMutex
 	MsgRecordChan chan MsgRecord
@@ -185,6 +186,7 @@ func NewGateway() (*Gateway, error) {
 		MsgRecordChan: make(chan MsgRecord),
 		Clients:       make(map[string]*Client),
 		Numbers:       make(map[string]*ClientNumber),
+		APIKeys:       make(map[string]*TenantAPIKey),
 		ServerID:      os.Getenv("SERVER_ID"),
 		EncryptionKey: os.Getenv("ENCRYPTION_KEY"),
 		DB:            db,
@@ -214,6 +216,11 @@ func NewGateway() (*Gateway, error) {
 
 	if err := gateway.loadNumbers(); err != nil {
 		return nil, fmt.Errorf("failed to load numbers: %v", err)
+	}
+
+	// Load API keys into memory
+	if err := gateway.loadAPIKeys(); err != nil {
+		return nil, fmt.Errorf("failed to load API keys: %v", err)
 	}
 
 	return gateway, nil

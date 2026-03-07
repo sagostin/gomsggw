@@ -10,8 +10,12 @@ Complete reference for all database entities in GOMSGGW.
 erDiagram
     Client ||--o{ ClientNumber : has
     Client ||--o| ClientSettings : has
+    Client ||--o{ TenantAPIKey : has
+    Client ||--o{ BatchJob : submits
     ClientNumber ||--o| NumberSettings : has
     ClientNumber }o--|| Carrier : uses
+    TenantAPIKey ||--o{ APIKeyNumber : scopes
+    APIKeyNumber }o--|| ClientNumber : references
     Client ||--o{ MsgRecordDBItem : generates
 ```
 
@@ -233,6 +237,62 @@ Message tracking with enhanced metadata.
 
 ---
 
+## TenantAPIKey
+
+API keys scoped to a client for external application authentication.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | uint | Primary key |
+| `client_id` | uint | Foreign key to Client |
+| `name` | string | Human label (e.g., "CSV Import App") |
+| `key_hash` | string | SHA-256 hash of the raw key (unique) |
+| `key_prefix` | string | First 16 chars for identification |
+| `scopes` | string | Comma-separated: `send`, `batch`, `usage` |
+| `rate_limit` | int | Requests per minute (0 = use client limit) |
+| `active` | bool | Whether the key is active (default: true) |
+| `expires_at` | *time | Optional expiration timestamp |
+| `last_used_at` | *time | Updated on each authentication |
+| `created_at` | time | Creation timestamp |
+| `allowed_numbers` | []APIKeyNumber | Number-level scoping (empty = all) |
+
+---
+
+## APIKeyNumber
+
+Join table scoping an API key to specific client numbers.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | uint | Primary key |
+| `api_key_id` | uint | Foreign key to TenantAPIKey |
+| `number_id` | uint | Foreign key to ClientNumber |
+| `number` | string | Denormalized E.164 for fast lookup |
+
+---
+
+## BatchJob
+
+Tracks a batch message sending job.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | UUID primary key |
+| `client_id` | uint | Foreign key to Client |
+| `api_key_id` | *uint | Foreign key to TenantAPIKey (if used) |
+| `status` | string | `pending`, `processing`, `completed`, `failed` |
+| `total_count` | int | Total messages in batch |
+| `sent_count` | int | Successfully queued messages |
+| `failed_count` | int | Failed messages |
+| `from_number` | string | Source number for all messages |
+| `errors` | text | JSON array of per-message errors |
+| `webhook_url` | string | Completion webhook URL |
+| `throttle_per_second` | int | Messages per second rate |
+| `created_at` | time | Job creation time |
+| `completed_at` | *time | Job completion time |
+
+---
+
 ## Security
 
 ### Encryption
@@ -244,6 +304,9 @@ Sensitive fields are encrypted at rest using AES-256:
 
 > [!NOTE]
 > `Client.username` is stored in plaintext since it's used as the authentication identifier and lookup key.
+
+> [!NOTE]
+> API keys are **SHA-256 hashed** at rest — the raw key is never stored. See [API Keys](./api_keys.md).
 
 Encryption key is set via `ENCRYPTION_KEY` environment variable.
 

@@ -1148,13 +1148,15 @@ func ProxyIPMiddleware(ctx iris.Context) {
 
 // clientAuthMiddleware authenticates using Basic Auth (username:password) or Bearer token.
 // Bearer token should be the base64-encoded username:password (for Bicom compatibility).
+// Also supports API key tokens: Bearer gw_live_<key> for external app authentication.
 // Only 'web' type clients can use this API - legacy clients must use SMPP.
 // Auth method is validated against client's api_format setting:
 // - bicom: expects Bearer token
 // - generic/telnyx/other: expects Basic Auth
 func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 	var username, password string
-	var authMethod string // "basic" or "bearer"
+	var authMethod string // "basic", "bearer", or "api_key"
+	var apiKey *TenantAPIKey
 
 	// Try Basic Auth first
 	username, password, ok := ctx.Request().BasicAuth()
@@ -1167,38 +1169,71 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 		authHeader := ctx.GetHeader("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
-			// Token is base64(username:password)
-			decoded, err := base64.StdEncoding.DecodeString(token)
-			if err == nil {
-				parts := strings.SplitN(string(decoded), ":", 2)
-				if len(parts) == 2 {
-					username = parts[0]
-					password = parts[1]
-					authMethod = "bearer"
+
+			// Check if this is a gw_live_ API key
+			if strings.HasPrefix(token, "gw_live_") {
+				apiKey = gateway.lookupAPIKey(token)
+				if apiKey != nil {
+					authMethod = "api_key"
 					ok = true
+				} else {
+					unauthorized(ctx, gateway, "Invalid or expired API key")
+					return
+				}
+			} else {
+				// Traditional Bearer: base64(username:password)
+				decoded, err := base64.StdEncoding.DecodeString(token)
+				if err == nil {
+					parts := strings.SplitN(string(decoded), ":", 2)
+					if len(parts) == 2 {
+						username = parts[0]
+						password = parts[1]
+						authMethod = "bearer"
+						ok = true
+					}
 				}
 			}
 		}
 	}
 
-	if !ok || username == "" {
+	if !ok {
 		unauthorized(ctx, gateway, "Authentication required")
 		return
 	}
 
-	gateway.mu.RLock()
-	client, exists := gateway.Clients[username]
-	gateway.mu.RUnlock()
+	var client *Client
 
-	if !exists {
-		unauthorized(ctx, gateway, "Invalid credentials")
-		return
-	}
+	if authMethod == "api_key" {
+		// API key auth: resolve client from key's ClientID
+		client = gateway.getClientByID(apiKey.ClientID)
+		if client == nil {
+			unauthorized(ctx, gateway, "API key's associated client not found")
+			return
+		}
+		// Touch last used timestamp (async)
+		apiKey.TouchLastUsed(gateway.DB)
+	} else {
+		// Traditional auth: look up client by username
+		if username == "" {
+			unauthorized(ctx, gateway, "Authentication required")
+			return
+		}
 
-	// Password check
-	if client.Password != password {
-		unauthorized(ctx, gateway, "Invalid credentials")
-		return
+		gateway.mu.RLock()
+		var exists bool
+		client, exists = gateway.Clients[username]
+		gateway.mu.RUnlock()
+
+		if !exists {
+			unauthorized(ctx, gateway, "Invalid credentials")
+			return
+		}
+
+		// Password check
+		if client.Password != password {
+			unauthorized(ctx, gateway, "Invalid credentials")
+			return
+		}
 	}
 
 	// Only web clients can use REST API - legacy clients must use SMPP
@@ -1211,24 +1246,29 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 		return
 	}
 
-	// Validate auth method matches client's auth_method setting
-	expectedAuth := "basic" // default
-	if client.Settings != nil && client.Settings.AuthMethod != "" {
-		expectedAuth = client.Settings.AuthMethod
-	}
+	// Validate auth method matches client's auth_method setting (skip for API key auth)
+	if authMethod != "api_key" {
+		expectedAuth := "basic" // default
+		if client.Settings != nil && client.Settings.AuthMethod != "" {
+			expectedAuth = client.Settings.AuthMethod
+		}
 
-	if expectedAuth != authMethod {
-		ctx.StatusCode(iris.StatusUnauthorized)
-		ctx.JSON(iris.Map{
-			"status":  "error",
-			"message": fmt.Sprintf("Client requires %s authentication", expectedAuth),
-		})
-		return
+		if expectedAuth != authMethod {
+			ctx.StatusCode(iris.StatusUnauthorized)
+			ctx.JSON(iris.Map{
+				"status":  "error",
+				"message": fmt.Sprintf("Client requires %s authentication", expectedAuth),
+			})
+			return
+		}
 	}
 
 	// Set client in context
 	ctx.Values().Set("client", client)
 	ctx.Values().Set("auth_method", authMethod)
+	if apiKey != nil {
+		ctx.Values().Set("api_key", apiKey)
+	}
 	ctx.Next()
 }
 
@@ -1358,6 +1398,18 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 
 			// Get authenticated client
 			client := ctx.Values().Get("client").(*Client)
+
+			// Check API key scope if authenticated via API key
+			apiKeyVal := ctx.Values().Get("api_key")
+			var apiKey *TenantAPIKey
+			if apiKeyVal != nil {
+				apiKey = apiKeyVal.(*TenantAPIKey)
+				if !apiKey.HasScope("send") {
+					ctx.StatusCode(iris.StatusForbidden)
+					ctx.JSON(iris.Map{"error": "API key does not have 'send' scope"})
+					return
+				}
+			}
 
 			// Determine API format from client settings
 			apiFormat := "generic"
@@ -1509,6 +1561,13 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 					}
 					return
 				}
+			}
+
+			// API key number scoping check
+			if apiKey != nil && !apiKey.IsNumberAllowed(fromNumber) {
+				ctx.StatusCode(iris.StatusForbidden)
+				ctx.JSON(iris.Map{"error": "API key is not authorized to send from this number"})
+				return
 			}
 
 			// Construct Queue Item
@@ -1736,6 +1795,17 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 		// GET /messages/usage - Check current usage against limits
 		messages.Get("/usage", func(ctx iris.Context) {
 			client := ctx.Values().Get("client").(*Client)
+
+			// Check API key scope if authenticated via API key
+			apiKeyVal := ctx.Values().Get("api_key")
+			if apiKeyVal != nil {
+				apiKey := apiKeyVal.(*TenantAPIKey)
+				if !apiKey.HasScope("usage") {
+					ctx.StatusCode(iris.StatusForbidden)
+					ctx.JSON(iris.Map{"error": "API key does not have 'usage' scope"})
+					return
+				}
+			}
 
 			// Helper to build period usage
 			buildPeriodUsage := func(msgType string, period string) iris.Map {

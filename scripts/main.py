@@ -602,6 +602,16 @@ def patch_json(path: str, payload: dict) -> requests.Response:
     )
 
 
+def delete_json(path: str) -> requests.Response:
+    """Send DELETE request."""
+    url = f"{base_url()}{path}"
+    return requests.delete(
+        url,
+        auth=auth_tuple(),
+        timeout=TIMEOUT,
+    )
+
+
 def change_client_password(identifier: str) -> None:
     """Change client password (by ID or username)."""
     client = get_client_by_identifier(identifier)
@@ -638,6 +648,311 @@ def change_client_password(identifier: str) -> None:
         except Exception:
             print(resp.text)
 
+
+# =============================================================================
+# API Key Operations
+# =============================================================================
+
+def list_api_keys(identifier: str) -> Optional[List[Dict[str, Any]]]:
+    """List all API keys for a client."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return None
+
+    client_id = client.get("id")
+    print(f"\n=== API Keys for '{client.get('username')}' (ID: {client_id}) ===")
+
+    try:
+        resp = get_json(f"/clients/{client_id}/api-keys")
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return None
+
+    if resp.status_code != 200:
+        print(f"❌ Failed to list API keys ({resp.status_code})")
+        return None
+
+    keys = resp.json()
+    if not keys:
+        print("No API keys found.")
+        return []
+
+    print(f"\n{'ID':<6} {'Name':<20} {'Prefix':<20} {'Scopes':<20} {'Active':<8} {'Expires':<12}")
+    print("-" * 90)
+    for k in keys:
+        kid = str(k.get("id", ""))[:6]
+        name = (k.get("name") or "")[:20]
+        prefix = (k.get("key_prefix") or "")[:20]
+        scopes = (k.get("scopes") or "")[:20]
+        active = "✅" if k.get("active", True) else "❌"
+        expires = str(k.get("expires_at") or "never")[:12]
+        nums = k.get("allowed_numbers") or []
+        num_str = f" [{len(nums)} nums]" if nums else ""
+        print(f"{kid:<6} {name:<20} {prefix:<20} {scopes:<20} {active:<8} {expires:<12}{num_str}")
+
+    print(f"\nTotal: {len(keys)} keys")
+    return keys
+
+
+def create_api_key_interactive(identifier: str) -> Optional[str]:
+    """Interactively create a new API key for a client."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return None
+
+    client_id = client.get("id")
+    print(f"\n=== Create API Key for '{client.get('username')}' (ID: {client_id}) ===")
+
+    name = input("Key Name (e.g., 'CSV Import App'): ").strip()
+    if not name:
+        name = "API Key"
+
+    print("\nScopes (comma-separated):")
+    print("  send  - Send individual messages")
+    print("  batch - Submit and track batch jobs")
+    print("  usage - Read usage statistics")
+    scopes = input("Scopes [default: send,batch,usage]: ").strip()
+    if not scopes:
+        scopes = "send,batch,usage"
+
+    rate_limit_str = input("Rate Limit (requests/min, 0 = use client limit): ").strip()
+    try:
+        rate_limit = int(rate_limit_str) if rate_limit_str else 0
+    except ValueError:
+        rate_limit = 0
+
+    expires_str = input("Expires in days (0 = never): ").strip()
+    try:
+        expires_in_days = int(expires_str) if expires_str else 0
+    except ValueError:
+        expires_in_days = 0
+
+    # Number scoping
+    numbers = client.get("numbers") or []
+    allowed_number_ids = []
+    if numbers:
+        print(f"\nClient has {len(numbers)} numbers:")
+        for n in numbers:
+            print(f"  ID {n.get('id')}: {n.get('number')} ({n.get('carrier', '')})")
+        scope_nums = input("Restrict to number IDs (comma-separated, blank = all): ").strip()
+        if scope_nums:
+            try:
+                allowed_number_ids = [int(x.strip()) for x in scope_nums.split(",") if x.strip()]
+            except ValueError:
+                print("⚠️ Invalid number IDs, using all numbers.")
+                allowed_number_ids = []
+
+    payload = {
+        "name": name,
+        "scopes": scopes,
+        "rate_limit": rate_limit,
+        "expires_in_days": expires_in_days,
+        "allowed_number_ids": allowed_number_ids,
+    }
+
+    try:
+        resp = post_json(f"/clients/{client_id}/api-keys", payload)
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return None
+
+    if 200 <= resp.status_code < 300:
+        data = resp.json()
+        raw_key = data.get("key", "")
+        print(f"\n✅ API Key created: {name}")
+        print(f"\n🔑 Raw Key (SAVE NOW — will not be shown again):")
+        print(f"  {raw_key}\n")
+        print(f"  Prefix:  {data.get('key_prefix')}")
+        print(f"  Scopes:  {data.get('scopes')}")
+        print(f"  Expires: {data.get('expires_at') or 'never'}")
+        return raw_key
+    else:
+        print(f"❌ Failed to create API key ({resp.status_code})")
+        try:
+            print(resp.json())
+        except Exception:
+            print(resp.text)
+        return None
+
+
+def revoke_api_key(identifier: str) -> None:
+    """Revoke an API key for a client."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return
+
+    client_id = client.get("id")
+
+    # List keys first
+    keys = list_api_keys(identifier)
+    if not keys:
+        return
+
+    key_id_str = input("\nKey ID to revoke: ").strip()
+    if not key_id_str:
+        print("Key ID required.")
+        return
+
+    confirm = input(f"Revoke key {key_id_str}? This cannot be undone. [y/N]: ").strip().lower()
+    if confirm != "y":
+        print("Cancelled.")
+        return
+
+    try:
+        resp = delete_json(f"/clients/{client_id}/api-keys/{key_id_str}")
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if 200 <= resp.status_code < 300:
+        print(f"✅ API key {key_id_str} revoked.")
+    else:
+        print(f"❌ Failed ({resp.status_code})")
+        try:
+            print(resp.json())
+        except Exception:
+            print(resp.text)
+
+
+# =============================================================================
+# Batch Job Operations
+# =============================================================================
+
+def list_batch_jobs(identifier: str) -> Optional[List[Dict[str, Any]]]:
+    """List recent batch jobs for a client (uses client credentials)."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return None
+
+    # We need client credentials for this endpoint
+    username = client.get("username", "")
+    print(f"\n=== Batch Jobs for '{username}' ===")
+    print("Note: This endpoint requires client credentials (not admin key).")
+
+    client_password = getpass.getpass(f"Client password for '{username}': ").strip()
+    if not client_password:
+        print("Password required.")
+        return None
+
+    try:
+        url = f"{base_url()}/messages/batch"
+        resp = requests.get(url, auth=(username, client_password), timeout=TIMEOUT)
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return None
+
+    if resp.status_code != 200:
+        print(f"❌ Failed ({resp.status_code})")
+        try:
+            print(resp.json())
+        except Exception:
+            print(resp.text)
+        return None
+
+    jobs = resp.json()
+    if not jobs:
+        print("No batch jobs found.")
+        return []
+
+    print(f"\n{'ID':<38} {'Status':<18} {'Total':<7} {'Sent':<6} {'Failed':<7} {'Queued':<7} {'Created':<20}")
+    print("-" * 110)
+    for j in jobs:
+        jid = (j.get("id") or "")[:38]
+        status = (j.get("status") or "")[:18]
+        total = j.get("total_count", 0)
+        sent = j.get("sent_count", 0)
+        failed = j.get("failed_count", 0)
+        queued = j.get("queued_count", 0)
+        created = str(j.get("created_at") or "")[:20]
+        print(f"{jid:<38} {status:<18} {total:<7} {sent:<6} {failed:<7} {queued:<7} {created:<20}")
+
+    print(f"\nTotal: {len(jobs)} jobs")
+    return jobs
+
+
+def show_batch_job_detail(identifier: str) -> None:
+    """Show detail for a specific batch job including per-message status."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return
+
+    username = client.get("username", "")
+    job_id = input("Batch Job ID: ").strip()
+    if not job_id:
+        print("Job ID required.")
+        return
+
+    client_password = getpass.getpass(f"Client password for '{username}': ").strip()
+    if not client_password:
+        print("Password required.")
+        return
+
+    # Get job status
+    try:
+        url = f"{base_url()}/messages/batch/{job_id}"
+        resp = requests.get(url, auth=(username, client_password), timeout=TIMEOUT)
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if resp.status_code != 200:
+        print(f"❌ Job not found ({resp.status_code})")
+        return
+
+    job = resp.json()
+    print(f"\n=== Batch Job {job_id} ===")
+    print(f"  Status:     {job.get('status')}")
+    print(f"  Total:      {job.get('total_count', 0)}")
+    print(f"  Sent:       {job.get('sent_count', 0)}")
+    print(f"  Failed:     {job.get('failed_count', 0)}")
+    print(f"  Queued:     {job.get('queued_count', 0)}")
+    print(f"  From:       {job.get('from_number')}")
+    print(f"  Throttle:   {job.get('throttle_rps', 30)} msg/sec")
+    print(f"  Max Retry:  {job.get('max_retry_mins', 60)} min")
+    print(f"  Created:    {job.get('created_at')}")
+
+    errors = job.get("errors") or []
+    if errors:
+        print(f"\n  Errors ({len(errors)}):")
+        for e in errors[:10]:
+            print(f"    - {e}")
+        if len(errors) > 10:
+            print(f"    ... and {len(errors) - 10} more")
+
+    # Ask to list messages
+    show_msgs = input("\nList individual messages? [y/N]: ").strip().lower()
+    if show_msgs == "y":
+        status_filter = input("Filter by status (pending/sent/queued/failed/cancelled, blank=all): ").strip()
+        try:
+            msg_url = f"{base_url()}/messages/batch/{job_id}/messages"
+            if status_filter:
+                msg_url += f"?status={status_filter}"
+            msg_resp = requests.get(msg_url, auth=(username, client_password), timeout=TIMEOUT)
+        except requests.RequestException as e:
+            print(f"Network error: {e}")
+            return
+
+        if msg_resp.status_code == 200:
+            items = msg_resp.json()
+            print(f"\n  Messages ({len(items)}):")
+            print(f"  {'#':<5} {'ID':<38} {'To':<15} {'Status':<12} {'Error':<30}")
+            print("  " + "-" * 105)
+            for item in items[:50]:
+                idx = item.get("index", 0)
+                mid = (item.get("id") or "")[:38]
+                to = (item.get("to") or "")[:15]
+                status = (item.get("status") or "")[:12]
+                error = (item.get("error") or "")[:30]
+                print(f"  {idx:<5} {mid:<38} {to:<15} {status:<12} {error:<30}")
+            if len(items) > 50:
+                print(f"  ... and {len(items) - 50} more")
+
+
 # =============================================================================
 # Menu
 # =============================================================================
@@ -667,6 +982,15 @@ def menu() -> None:
         print("\n📞 Numbers:")
         print("  8) List client numbers")
         print("  9) Add numbers to client")
+
+        print("\n🔑 API Keys:")
+        print("  a) List API keys for client")
+        print("  b) Create API key for client")
+        print("  c) Revoke API key")
+
+        print("\n📦 Batch Jobs:")
+        print("  d) List batch jobs for client")
+        print("  e) Show batch job detail")
 
         print("\n⚙️ Admin:")
         print("  r) Reload all (clients + carriers)")
@@ -748,6 +1072,48 @@ def menu() -> None:
                 last_client = identifier
             else:
                 print("No valid numbers provided.")
+
+        # --- API Key Operations ---
+        elif choice == "a":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                list_api_keys(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        elif choice == "b":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                create_api_key_interactive(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        elif choice == "c":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                revoke_api_key(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        # --- Batch Job Operations ---
+        elif choice == "d":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                list_batch_jobs(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        elif choice == "e":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                show_batch_job_detail(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
 
         elif choice == "r":
             reload_all()

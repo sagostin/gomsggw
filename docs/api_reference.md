@@ -32,6 +32,16 @@ curl -H "Authorization: Basic $(echo -n 'client:password' | base64)" ...
 curl -H "Authorization: Bearer $(echo -n 'client:password' | base64)" ...
 ```
 
+### API Key Authentication
+
+External applications can authenticate using tenant API keys:
+
+```bash
+curl -H "Authorization: Bearer gw_live_your_api_key_here" ...
+```
+
+API keys support number-level scoping and permission scopes (`send`, `batch`, `usage`). See [API Keys](api_keys.md) for setup details.
+
 ---
 
 ## Health & Status
@@ -385,6 +395,87 @@ Check current usage and limits (client auth).
 ```
 
 > The `direction` field indicates outbound-only counting by default. Set `limit_both: true` on number settings to count both directions.
+
+---
+
+## API Key Management
+
+Admin endpoints for managing tenant API keys. See [API Keys](api_keys.md) for full details.
+
+### POST /clients/{id}/api-keys
+Create an API key (admin auth).
+
+**Request**:
+```json
+{
+  "name": "CSV Import App",
+  "scopes": "send,batch,usage",
+  "rate_limit": 0,
+  "expires_in_days": 90,
+  "allowed_number_ids": [1, 3]
+}
+```
+
+**Response** (201): Returns the raw key (shown once only), key ID, prefix, and allowed numbers.
+
+---
+
+### GET /clients/{id}/api-keys
+List API keys for a client (admin auth).
+
+---
+
+### DELETE /clients/{id}/api-keys/{key_id}
+Revoke an API key (admin auth).
+
+---
+
+## Batch Sending
+
+Send messages in bulk. See [Batch Sending](batch_sending.md) for full details.
+
+### POST /messages/batch
+Submit a batch job (client or API key auth with `batch` scope).
+
+Accepts JSON or `multipart/form-data` with CSV file.
+
+**JSON Request**:
+```json
+{
+  "from": "+12505551234",
+  "text_template": "Hi {{name}}, your code is {{code}}",
+  "throttle_per_second": 30,
+  "webhook_url": "https://myapp.com/batch-done",
+  "messages": [
+    {"to": "+14155551111", "variables": {"name": "Alice", "code": "A123"}}
+  ]
+}
+```
+
+**Response** (202 Accepted):
+```json
+{"id": "uuid", "status": "pending", "total_count": 1}
+```
+
+---
+
+### GET /messages/batch/{id}
+Get batch job status (client or API key auth).
+
+---
+
+### GET /messages/batch
+List recent batch jobs (client or API key auth).
+
+---
+
+### GET /messages/batch/{id}/messages
+List all messages in a batch job with per-message statuses. Optional query: `?status=queued`
+
+---
+
+### DELETE /messages/batch/{id}/messages/{msg_id}
+Cancel a `pending` or `queued` message. Returns `409` if already sent/failed.
 
 ---
 

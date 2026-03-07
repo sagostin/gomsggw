@@ -99,7 +99,14 @@ Authorization: Bearer <base64(username:password)>
 
 The password acts as an API key - use a secure random string.
 
----
+### API Key Authentication
+
+For external applications, use tenant API keys instead of client credentials:
+```
+Authorization: Bearer gw_live_<your_api_key>
+```
+
+API keys support number-level scoping and permission scopes (`send`, `batch`, `usage`). See [API Keys](./api_keys.md) for setup.
 
 ---
 
@@ -356,11 +363,34 @@ Your PBXware webhook endpoint should:
 
 ---
 
+## Batch Sending
+
+Send messages in bulk via JSON or CSV uploads:
+
+```bash
+curl -X POST http://gateway:3000/messages/batch \
+  -H "Authorization: Bearer gw_live_your_api_key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "from": "+12505551234",
+    "text_template": "Hi {{name}}, your code is {{code}}",
+    "messages": [
+      {"to": "+14155551111", "variables": {"name": "Alice", "code": "A123"}}
+    ]
+  }'
+```
+
+See [Batch Sending](./batch_sending.md) for full details including CSV format, job tracking, and webhooks.
+
+---
+
 ## Best Practices
 
 1. **Use HTTPS** for webhook URLs
 2. **Verify** Authorization header on webhooks
 3. **Monitor** usage with `/messages/usage`
-4. **Use tags/groups** to organize numbers
-5. **Set per-number limits** for important numbers
-6. **Configure retries** appropriately for your use case
+4. **Use API keys** for external applications instead of sharing client credentials
+5. **Use tags/groups** to organize numbers
+6. **Set per-number limits** for important numbers
+7. **Configure retries** appropriately for your use case
+8. **Scope API keys** to specific numbers when possible

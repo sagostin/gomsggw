@@ -9,7 +9,10 @@ Complete documentation for the GOMSGGW messaging gateway.
 | Document | Description |
 |----------|-------------|
 | [API Reference](api_reference.md) | All REST API endpoints |
+| [Setup Guide](setup_guide.md) | Setup procedure & interaction examples |
 | [Web Clients](web_clients.md) | REST API & webhook integration |
+| [API Keys](api_keys.md) | Tenant API keys for external apps |
+| [Batch Sending](batch_sending.md) | Bulk message delivery (JSON/CSV) |
 | [Legacy Clients](legacy_clients.md) | SMPP/MM4 integration (Zultys, Bicom) |
 | [Data Models](data_models.md) | Database entities and schemas |
 | [Usage Limits](usage_limits.md) | Quota management |

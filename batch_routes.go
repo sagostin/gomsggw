@@ -11,6 +11,21 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// requireBatchScope is a helper that checks if an API key (if present) has the "batch" scope.
+// Returns true if the request should be blocked (scope missing). Writes the error response.
+func requireBatchScope(ctx iris.Context) bool {
+	apiKeyVal := ctx.Values().Get("api_key")
+	if apiKeyVal != nil {
+		apiKey := apiKeyVal.(*TenantAPIKey)
+		if !apiKey.HasScope("batch") {
+			ctx.StatusCode(iris.StatusForbidden)
+			ctx.JSON(iris.Map{"error": "API key does not have 'batch' scope"})
+			return true
+		}
+	}
+	return false
+}
+
 // SetupAPIKeyRoutes sets up admin endpoints for managing tenant API keys.
 // These are under /clients/{id}/api-keys and require admin auth (basicAuthMiddleware).
 func SetupAPIKeyRoutes(app *iris.Application, gateway *Gateway) {
@@ -152,19 +167,18 @@ func SetupBatchRoutes(app *iris.Application, gateway *Gateway) {
 	{
 		// POST /messages/batch - Submit a batch job
 		batch.Post("/", func(ctx iris.Context) {
+			if requireBatchScope(ctx) {
+				return
+			}
+
 			lm := gateway.LogManager
 			client := ctx.Values().Get("client").(*Client)
 
-			// Check API key scope if authenticated via API key
+			// Get API key if present (for number scoping)
 			apiKeyVal := ctx.Values().Get("api_key")
 			var apiKey *TenantAPIKey
 			if apiKeyVal != nil {
 				apiKey = apiKeyVal.(*TenantAPIKey)
-				if !apiKey.HasScope("batch") {
-					ctx.StatusCode(iris.StatusForbidden)
-					ctx.JSON(iris.Map{"error": "API key does not have 'batch' scope"})
-					return
-				}
 			}
 
 			// Parse request
@@ -312,8 +326,185 @@ func SetupBatchRoutes(app *iris.Application, gateway *Gateway) {
 			})
 		})
 
+		// POST /messages/batch/check - Pre-check batch limits before sending
+		batch.Post("/check", func(ctx iris.Context) {
+			if requireBatchScope(ctx) {
+				return
+			}
+
+			client := ctx.Values().Get("client").(*Client)
+
+			var req struct {
+				From         string `json:"from"`
+				MessageCount int    `json:"message_count"`
+				MsgType      string `json:"msg_type"` // "sms" or "mms", default "sms"
+			}
+			if err := ctx.ReadJSON(&req); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request body"})
+				return
+			}
+
+			if req.MessageCount <= 0 {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "'message_count' must be greater than 0"})
+				return
+			}
+
+			if req.MsgType == "" {
+				req.MsgType = "sms"
+			}
+
+			// Resolve from number
+			fromNumber := req.From
+			if fromNumber == "" {
+				if len(client.Numbers) == 1 {
+					fromNumber = client.Numbers[0].Number
+				} else {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"error": "'from' field is required when client has multiple numbers"})
+					return
+				}
+			}
+
+			// Verify ownership
+			owned := false
+			for _, n := range client.Numbers {
+				if n.Number == fromNumber || strings.TrimPrefix(n.Number, "+") == strings.TrimPrefix(fromNumber, "+") {
+					owned = true
+					break
+				}
+			}
+			if !owned {
+				ctx.StatusCode(iris.StatusForbidden)
+				ctx.JSON(iris.Map{"error": "Client does not own the specified 'from' number"})
+				return
+			}
+
+			// API key number scoping
+			apiKeyVal := ctx.Values().Get("api_key")
+			if apiKeyVal != nil {
+				apiKey := apiKeyVal.(*TenantAPIKey)
+				if !apiKey.IsNumberAllowed(fromNumber) {
+					ctx.StatusCode(iris.StatusForbidden)
+					ctx.JSON(iris.Map{"error": "API key is not authorized to send from this number"})
+					return
+				}
+			}
+
+			// Build limit info for each period
+			buildPeriodInfo := func(period string) iris.Map {
+				periodStart := GetPeriodStart(client, period)
+				used, _ := gateway.GetUsageCountByType(client.ID, "", req.MsgType, periodStart)
+
+				var limit int64
+				if client.Settings != nil {
+					limit, _, _ = getEffectiveLimit(client.Settings, nil, req.MsgType, period)
+				}
+
+				var remaining interface{} = nil
+				if limit > 0 {
+					rem := limit - used
+					if rem < 0 {
+						rem = 0
+					}
+					remaining = rem
+				}
+
+				return iris.Map{
+					"current_usage": used,
+					"limit":         limit,
+					"remaining":     remaining,
+				}
+			}
+
+			burstInfo := buildPeriodInfo("burst")
+			dailyInfo := buildPeriodInfo("daily")
+			monthlyInfo := buildPeriodInfo("monthly")
+
+			// Per-number limits
+			var numberInfo iris.Map
+			for _, n := range client.Numbers {
+				if n.Number == fromNumber || strings.TrimPrefix(n.Number, "+") == strings.TrimPrefix(fromNumber, "+") {
+					dailyStart := GetPeriodStart(client, "daily")
+					numUsed, _ := gateway.GetUsageCountWithDirection(client.ID, n.Number, req.MsgType, "outbound", dailyStart)
+					var numLimit int64
+					if n.Settings != nil {
+						numLimit, _, _ = getEffectiveLimit(client.Settings, n.Settings, req.MsgType, "daily")
+					}
+					var numRemaining interface{} = nil
+					if numLimit > 0 {
+						rem := numLimit - numUsed
+						if rem < 0 {
+							rem = 0
+						}
+						numRemaining = rem
+					}
+					numberInfo = iris.Map{
+						"number":        n.Number,
+						"current_usage": numUsed,
+						"limit":         numLimit,
+						"remaining":     numRemaining,
+					}
+					break
+				}
+			}
+
+			// Determine if the batch can proceed
+			allowed := true
+			var blockingReason string
+
+			// Check each period's remaining against message_count
+			checkRemaining := func(info iris.Map, period string) {
+				if rem, ok := info["remaining"]; ok && rem != nil {
+					if remInt, ok := rem.(int64); ok && remInt < int64(req.MessageCount) {
+						allowed = false
+						blockingReason = fmt.Sprintf("%s %s limit would be exceeded (%d remaining, %d requested)", req.MsgType, period, remInt, req.MessageCount)
+					}
+				}
+			}
+			checkRemaining(burstInfo, "burst")
+			checkRemaining(dailyInfo, "daily")
+			checkRemaining(monthlyInfo, "monthly")
+
+			if numberInfo != nil {
+				if rem, ok := numberInfo["remaining"]; ok && rem != nil {
+					if remInt, ok := rem.(int64); ok && remInt < int64(req.MessageCount) {
+						allowed = false
+						blockingReason = fmt.Sprintf("number daily limit would be exceeded (%d remaining, %d requested)", remInt, req.MessageCount)
+					}
+				}
+			}
+
+			result := iris.Map{
+				"allowed":       allowed,
+				"message_count": req.MessageCount,
+				"msg_type":      req.MsgType,
+				"from":          fromNumber,
+				"limits": iris.Map{
+					"burst":   burstInfo,
+					"daily":   dailyInfo,
+					"monthly": monthlyInfo,
+				},
+			}
+
+			if numberInfo != nil {
+				result["number_limit"] = numberInfo
+			}
+
+			if !allowed {
+				result["reason"] = blockingReason
+			}
+
+			ctx.JSON(result)
+		})
+
 		// GET /messages/batch/{id} - Get batch job status
 		batch.Get("/{id}", func(ctx iris.Context) {
+			if requireBatchScope(ctx) {
+				return
+			}
+
 			jobID := ctx.Params().Get("id")
 			client := ctx.Values().Get("client").(*Client)
 
@@ -330,21 +521,82 @@ func SetupBatchRoutes(app *iris.Application, gateway *Gateway) {
 			})
 		})
 
-		// GET /messages/batch - List recent batch jobs
+		// GET /messages/batch - List recent batch jobs (with pagination and filtering)
 		batch.Get("/", func(ctx iris.Context) {
+			if requireBatchScope(ctx) {
+				return
+			}
+
 			client := ctx.Values().Get("client").(*Client)
 
+			// Pagination
+			page, _ := strconv.Atoi(ctx.URLParamDefault("page", "1"))
+			perPage, _ := strconv.Atoi(ctx.URLParamDefault("per_page", "50"))
+			if page < 1 {
+				page = 1
+			}
+			if perPage < 1 {
+				perPage = 50
+			}
+			if perPage > 100 {
+				perPage = 100
+			}
+			offset := (page - 1) * perPage
+
+			// Build query with filters
+			query := gateway.DB.Where("client_id = ?", client.ID)
+
+			// Status filter
+			if status := ctx.URLParam("status"); status != "" {
+				query = query.Where("status = ?", status)
+			}
+
+			// From number filter
+			if from := ctx.URLParam("from"); from != "" {
+				cleanFrom := strings.TrimPrefix(from, "+")
+				query = query.Where("from_number = ? OR from_number = ?", from, cleanFrom)
+			}
+
+			// Date filter
+			if since := ctx.URLParam("since"); since != "" {
+				if t, err := time.Parse("2006-01-02", since); err == nil {
+					query = query.Where("created_at >= ?", t)
+				} else if t, err := time.Parse(time.RFC3339, since); err == nil {
+					query = query.Where("created_at >= ?", t)
+				}
+			}
+			if until := ctx.URLParam("until"); until != "" {
+				if t, err := time.Parse("2006-01-02", until); err == nil {
+					query = query.Where("created_at <= ?", t.Add(24*time.Hour))
+				} else if t, err := time.Parse(time.RFC3339, until); err == nil {
+					query = query.Where("created_at <= ?", t)
+				}
+			}
+
+			// Total count
+			var totalCount int64
+			query.Model(&BatchJob{}).Count(&totalCount)
+
+			// Fetch page
 			var jobs []BatchJob
-			gateway.DB.Where("client_id = ?", client.ID).
-				Order("created_at DESC").
-				Limit(50).
+			query.Order("created_at DESC").
+				Offset(offset).
+				Limit(perPage).
 				Find(&jobs)
+
+			ctx.Header("X-Total-Count", strconv.FormatInt(totalCount, 10))
+			ctx.Header("X-Page", strconv.Itoa(page))
+			ctx.Header("X-Per-Page", strconv.Itoa(perPage))
 
 			ctx.JSON(jobs)
 		})
 
-		// GET /messages/batch/{id}/messages - List all messages in a batch job
+		// GET /messages/batch/{id}/messages - List all messages in a batch job (with pagination)
 		batch.Get("/{id}/messages", func(ctx iris.Context) {
+			if requireBatchScope(ctx) {
+				return
+			}
+
 			jobID := ctx.Params().Get("id")
 			client := ctx.Values().Get("client").(*Client)
 
@@ -356,21 +608,125 @@ func SetupBatchRoutes(app *iris.Application, gateway *Gateway) {
 				return
 			}
 
-			// Optional status filter
-			statusFilter := ctx.URLParam("status")
+			// Pagination
+			page, _ := strconv.Atoi(ctx.URLParamDefault("page", "1"))
+			perPage, _ := strconv.Atoi(ctx.URLParamDefault("per_page", "100"))
+			if page < 1 {
+				page = 1
+			}
+			if perPage < 1 {
+				perPage = 100
+			}
+			if perPage > 500 {
+				perPage = 500
+			}
+			offset := (page - 1) * perPage
 
-			var items []BatchMessageItem
+			// Build query
 			query := gateway.DB.Where("batch_job_id = ?", jobID)
-			if statusFilter != "" {
+
+			// Optional status filter
+			if statusFilter := ctx.URLParam("status"); statusFilter != "" {
 				query = query.Where("status = ?", statusFilter)
 			}
-			query.Order("\"index\" ASC").Find(&items)
+
+			// Total count
+			var totalCount int64
+			query.Model(&BatchMessageItem{}).Count(&totalCount)
+
+			// Fetch page
+			var items []BatchMessageItem
+			query.Order("\"index\" ASC").
+				Offset(offset).
+				Limit(perPage).
+				Find(&items)
+
+			ctx.Header("X-Total-Count", strconv.FormatInt(totalCount, 10))
+			ctx.Header("X-Page", strconv.Itoa(page))
+			ctx.Header("X-Per-Page", strconv.Itoa(perPage))
 
 			ctx.JSON(items)
 		})
 
+		// POST /messages/batch/{id}/cancel - Cancel an entire batch job
+		batch.Post("/{id}/cancel", func(ctx iris.Context) {
+			if requireBatchScope(ctx) {
+				return
+			}
+
+			jobID := ctx.Params().Get("id")
+			client := ctx.Values().Get("client").(*Client)
+
+			// Verify job belongs to client
+			var job BatchJob
+			if err := gateway.DB.Where("id = ? AND client_id = ?", jobID, client.ID).First(&job).Error; err != nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Batch job not found"})
+				return
+			}
+
+			// Only active jobs can be cancelled
+			if job.Status == "completed" || job.Status == "failed" || job.Status == "cancelled" {
+				ctx.StatusCode(iris.StatusConflict)
+				ctx.JSON(iris.Map{
+					"error":  "Batch job cannot be cancelled",
+					"status": job.Status,
+					"detail": fmt.Sprintf("Job is already '%s'", job.Status),
+				})
+				return
+			}
+
+			// Cancel all pending and queued messages
+			result := gateway.DB.Model(&BatchMessageItem{}).
+				Where("batch_job_id = ? AND status IN ('pending', 'queued')", jobID).
+				Updates(map[string]interface{}{
+					"status": "cancelled",
+					"error":  "batch job cancelled by user",
+				})
+
+			cancelledCount := int(result.RowsAffected)
+
+			// Recount final stats
+			var sentCount, failedCount, totalCancelled int64
+			gateway.DB.Model(&BatchMessageItem{}).Where("batch_job_id = ? AND status = 'sent'", jobID).Count(&sentCount)
+			gateway.DB.Model(&BatchMessageItem{}).Where("batch_job_id = ? AND status = 'failed'", jobID).Count(&failedCount)
+			gateway.DB.Model(&BatchMessageItem{}).Where("batch_job_id = ? AND status = 'cancelled'", jobID).Count(&totalCancelled)
+
+			now := time.Now()
+			gateway.DB.Model(&job).Updates(map[string]interface{}{
+				"status":       "cancelled",
+				"sent_count":   int(sentCount),
+				"failed_count": int(failedCount + totalCancelled),
+				"queued_count": 0,
+				"completed_at": now,
+			})
+
+			gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+				"Batch.Cancel",
+				"Batch job cancelled",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"jobID":          jobID,
+					"clientID":       client.ID,
+					"cancelledCount": cancelledCount,
+				},
+			))
+
+			ctx.JSON(iris.Map{
+				"message":         "Batch job cancelled",
+				"job_id":          jobID,
+				"status":          "cancelled",
+				"cancelled_count": cancelledCount,
+				"sent_count":      int(sentCount),
+			})
+		})
+
 		// DELETE /messages/batch/{id}/messages/{msg_id} - Cancel a queued/pending message
 		batch.Delete("/{id}/messages/{msg_id}", func(ctx iris.Context) {
+			if requireBatchScope(ctx) {
+				return
+			}
+
 			jobID := ctx.Params().Get("id")
 			msgID := ctx.Params().Get("msg_id")
 			client := ctx.Values().Get("client").(*Client)

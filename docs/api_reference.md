@@ -42,6 +42,8 @@ curl -H "Authorization: Bearer gw_live_your_api_key_here" ...
 
 API keys support number-level scoping and permission scopes (`send`, `batch`, `usage`). See [API Keys](api_keys.md) for setup details.
 
+**Rate Limiting**: API keys with a non-zero `rate_limit` are enforced at the specified requests-per-minute. Exceeding the limit returns `429 Too Many Requests`.
+
 ---
 
 ## Health & Status
@@ -398,6 +400,48 @@ Check current usage and limits (client auth).
 
 ---
 
+### GET /messages/history
+Retrieve message history for the authenticated client (client or API key auth with `usage` scope).
+
+**Query Parameters**:
+
+| Parameter | Description |
+|-----------|-------------|
+| `from` | Filter by sender number |
+| `to` | Filter by destination number |
+| `type` | `sms` or `mms` |
+| `direction` | `inbound` or `outbound` |
+| `since` | Start date (`2026-03-01` or RFC3339) |
+| `until` | End date (`2026-03-31` or RFC3339) |
+| `page` | Page number (default: 1) |
+| `per_page` | Results per page (default: 50, max: 200) |
+
+**Response**:
+```json
+{
+  "messages": [
+    {
+      "id": 1234,
+      "client_id": 1,
+      "from_number": "12505551234",
+      "to_number": "+14155559876",
+      "type": "sms",
+      "direction": "outbound",
+      "delivery_method": "carrier_api",
+      "received_timestamp": "2026-03-07T06:00:00Z",
+      "log_id": "abc123-def456"
+    }
+  ],
+  "total_count": 150,
+  "page": 1,
+  "per_page": 50
+}
+```
+
+**Response Headers**: `X-Total-Count`, `X-Page`, `X-Per-Page`
+
+---
+
 ## API Key Management
 
 Admin endpoints for managing tenant API keys. See [API Keys](api_keys.md) for full details.
@@ -459,23 +503,93 @@ Accepts JSON or `multipart/form-data` with CSV file.
 
 ---
 
+### POST /messages/batch/check
+Pre-check limits before submitting a batch (client or API key auth with `batch` scope).
+
+**Request**:
+```json
+{
+  "from": "+12505551234",
+  "message_count": 500,
+  "msg_type": "sms"
+}
+```
+
+**Response**:
+```json
+{
+  "allowed": true,
+  "message_count": 500,
+  "msg_type": "sms",
+  "from": "12505551234",
+  "limits": {
+    "burst":   {"current_usage": 5, "limit": 100, "remaining": 95},
+    "daily":   {"current_usage": 150, "limit": 1000, "remaining": 850},
+    "monthly": {"current_usage": 3500, "limit": 10000, "remaining": 6500}
+  },
+  "number_limit": {
+    "number": "12505551234",
+    "current_usage": 50,
+    "limit": 500,
+    "remaining": 450
+  }
+}
+```
+
+---
+
 ### GET /messages/batch/{id}
-Get batch job status (client or API key auth).
+Get batch job status (client or API key auth with `batch` scope).
 
 ---
 
 ### GET /messages/batch
-List recent batch jobs (client or API key auth).
+List recent batch jobs (client or API key auth with `batch` scope).
+
+**Query Parameters**:
+
+| Parameter | Description |
+|-----------|-------------|
+| `status` | Filter by job status (`pending`, `processing`, `completed`, etc.) |
+| `from` | Filter by from-number |
+| `since` | Start date (`2026-03-01` or RFC3339) |
+| `until` | End date |
+| `page` | Page number (default: 1) |
+| `per_page` | Results per page (default: 50, max: 100) |
+
+**Response Headers**: `X-Total-Count`, `X-Page`, `X-Per-Page`
 
 ---
 
 ### GET /messages/batch/{id}/messages
-List all messages in a batch job with per-message statuses. Optional query: `?status=queued`
+List all messages in a batch job with per-message statuses. Requires `batch` scope.
+
+**Query Parameters**: `?status=queued`, `?page=1&per_page=100` (max: 500)
+
+**Response Headers**: `X-Total-Count`, `X-Page`, `X-Per-Page`
+
+---
+
+### POST /messages/batch/{id}/cancel
+Cancel an entire batch job (client or API key auth with `batch` scope).
+
+Cancels all `pending` and `queued` messages. Returns `409` if the job is already completed/failed/cancelled.
+
+**Response** (200):
+```json
+{
+  "message": "Batch job cancelled",
+  "job_id": "uuid",
+  "status": "cancelled",
+  "cancelled_count": 42,
+  "sent_count": 8
+}
+```
 
 ---
 
 ### DELETE /messages/batch/{id}/messages/{msg_id}
-Cancel a `pending` or `queued` message. Returns `409` if already sent/failed.
+Cancel a `pending` or `queued` message. Requires `batch` scope. Returns `409` if already sent/failed.
 
 ---
 

@@ -13,8 +13,11 @@ The batch sending system enables high-volume message delivery with:
 - **Throttled delivery** — configurable messages-per-second
 - **Queue-on-limit** — rate-limited messages are queued for retry, not failed
 - **Per-message IDs** — cancel individual messages by UUID
+- **Batch cancellation** — cancel entire batch jobs in one call
 - **Job tracking** — poll status or receive webhook callbacks
+- **Limit pre-check** — verify limits before submitting
 - **Per-message error reporting** — individual failure reasons
+- **Pagination & filtering** — page through jobs and messages
 
 Maximum batch size: **10,000 messages** per request.
 
@@ -102,6 +105,42 @@ If a message has its own `text` field, it takes precedence over the template.
 
 ---
 
+## Limit Pre-Check
+
+Before submitting a batch, verify that your limits can handle it:
+
+```bash
+curl -X POST http://gateway:3000/messages/batch/check \
+  -H "Authorization: Bearer gw_live_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"from": "+12505551234", "message_count": 500, "msg_type": "sms"}'
+```
+
+**Response**:
+```json
+{
+  "allowed": true,
+  "message_count": 500,
+  "msg_type": "sms",
+  "from": "12505551234",
+  "limits": {
+    "burst":   {"current_usage": 5, "limit": 100, "remaining": 95},
+    "daily":   {"current_usage": 150, "limit": 1000, "remaining": 850},
+    "monthly": {"current_usage": 3500, "limit": 10000, "remaining": 6500}
+  },
+  "number_limit": {
+    "number": "12505551234",
+    "current_usage": 50,
+    "limit": 500,
+    "remaining": 450
+  }
+}
+```
+
+If `allowed` is `false`, the `reason` field explains which limit would be exceeded.
+
+---
+
 ## Job Tracking
 
 ### Poll Status
@@ -137,22 +176,34 @@ curl http://gateway:3000/messages/batch/f47ac10b-58cc-4372-a567-0e02b2c3d479 \
 ### List Recent Jobs
 
 ```bash
-curl http://gateway:3000/messages/batch \
+curl "http://gateway:3000/messages/batch?page=1&per_page=20&status=completed" \
   -H "Authorization: Bearer gw_live_your_api_key_here"
 ```
 
-Returns the 50 most recent batch jobs.
+Supports pagination and filtering:
+
+| Parameter | Description |
+|-----------|-------------|
+| `page` | Page number (default: 1) |
+| `per_page` | Results per page (default: 50, max: 100) |
+| `status` | Filter by job status |
+| `from` | Filter by from-number |
+| `since` | Start date (`2026-03-01` or RFC3339) |
+| `until` | End date |
+
+Response includes `X-Total-Count`, `X-Page`, `X-Per-Page` headers.
 
 ### List Messages in a Job
 
 ```bash
-curl http://gateway:3000/messages/batch/f47ac10b-58cc-4372-a567-0e02b2c3d479/messages \
+curl "http://gateway:3000/messages/batch/f47ac10b-.../messages?page=1&per_page=100&status=queued" \
   -H "Authorization: Bearer gw_live_your_api_key_here"
 ```
 
-Optional filter: `?status=queued` (or `pending`, `sent`, `failed`, `cancelled`)
+Supports pagination (`?page=1&per_page=100`, max: 500) and status filter (`?status=queued`).
 
 Returns all individual message items with their IDs, statuses, and error details.
+Response includes `X-Total-Count`, `X-Page`, `X-Per-Page` headers.
 
 ### Cancel a Message
 
@@ -171,6 +222,31 @@ curl -X DELETE http://gateway:3000/messages/batch/f47ac10b-.../messages/msg-uuid
 **Response** (409 — already sent/failed):
 ```json
 {"error": "Message cannot be cancelled", "status": "sent", "detail": "Message is already 'sent'"}
+```
+
+### Cancel Entire Batch Job
+
+Cancel all pending/queued messages in a batch at once:
+
+```bash
+curl -X POST http://gateway:3000/messages/batch/f47ac10b-.../cancel \
+  -H "Authorization: Bearer gw_live_your_api_key_here"
+```
+
+**Response** (200):
+```json
+{
+  "message": "Batch job cancelled",
+  "job_id": "f47ac10b-...",
+  "status": "cancelled",
+  "cancelled_count": 42,
+  "sent_count": 8
+}
+```
+
+**Response** (409 — job already finished):
+```json
+{"error": "Batch job cannot be cancelled", "status": "completed", "detail": "Job is already 'completed'"}
 ```
 
 ### Webhook Callback
@@ -238,6 +314,7 @@ Per-message errors include an HTTP-style code:
 | `processing` | Actively sending messages |
 | `partially_queued` | Initial pass done, some messages queued for retry |
 | `completed` | All messages resolved (sent/failed/cancelled) |
+| `cancelled` | Entire job cancelled by user (via `POST /cancel`) |
 | `failed` | All messages failed |
 
 ---

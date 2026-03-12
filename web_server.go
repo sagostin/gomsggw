@@ -10,12 +10,54 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/kataras/iris/v12"
 	"github.com/sirupsen/logrus"
 )
+
+// --- API Key Rate Limiter (sliding window, in-memory) ---
+
+type apiKeyRateLimiter struct {
+	mu      sync.Mutex
+	windows map[uint][]time.Time // keyID -> request timestamps within current window
+}
+
+var globalAPIKeyRateLimiter = &apiKeyRateLimiter{
+	windows: make(map[uint][]time.Time),
+}
+
+// checkRateLimit returns true if the request is allowed, false if rate limited.
+// windowSize is 1 minute. maxRequests is the key's RateLimit.
+func (rl *apiKeyRateLimiter) checkRateLimit(keyID uint, maxRequests int) bool {
+	if maxRequests <= 0 {
+		return true // no limit
+	}
+
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	now := time.Now()
+	windowStart := now.Add(-1 * time.Minute)
+
+	// Prune old entries
+	var active []time.Time
+	for _, t := range rl.windows[keyID] {
+		if t.After(windowStart) {
+			active = append(active, t)
+		}
+	}
+
+	if len(active) >= maxRequests {
+		rl.windows[keyID] = active
+		return false // rate limited
+	}
+
+	rl.windows[keyID] = append(active, now)
+	return true
+}
 
 // PasswordUpdateRequest defines the expected JSON request body
 type PasswordUpdateRequest struct {
@@ -1210,6 +1252,18 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 			unauthorized(ctx, gateway, "API key's associated client not found")
 			return
 		}
+		// Enforce per-key rate limit
+		if apiKey.RateLimit > 0 {
+			if !globalAPIKeyRateLimiter.checkRateLimit(apiKey.ID, apiKey.RateLimit) {
+				ctx.StatusCode(iris.StatusTooManyRequests)
+				ctx.JSON(iris.Map{
+					"error":      "rate_limit_exceeded",
+					"message":    fmt.Sprintf("API key rate limit exceeded (%d requests/minute)", apiKey.RateLimit),
+					"rate_limit": apiKey.RateLimit,
+				})
+				return
+			}
+		}
 		// Touch last used timestamp (async)
 		apiKey.TouchLastUsed(gateway.DB)
 	} else {
@@ -1908,6 +1962,101 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 					"monthly": monthlyReset.Format(time.RFC3339),
 				},
 				"timestamp": time.Now().Format(time.RFC3339),
+			})
+		})
+
+		// GET /messages/history - Retrieve message history for the authenticated client
+		messages.Get("/history", func(ctx iris.Context) {
+			client := ctx.Values().Get("client").(*Client)
+
+			// Check API key scope if authenticated via API key
+			apiKeyVal := ctx.Values().Get("api_key")
+			if apiKeyVal != nil {
+				apiKey := apiKeyVal.(*TenantAPIKey)
+				if !apiKey.HasScope("usage") {
+					ctx.StatusCode(iris.StatusForbidden)
+					ctx.JSON(iris.Map{"error": "API key does not have 'usage' scope"})
+					return
+				}
+			}
+
+			// Pagination
+			page, _ := strconv.Atoi(ctx.URLParamDefault("page", "1"))
+			perPage, _ := strconv.Atoi(ctx.URLParamDefault("per_page", "50"))
+			if page < 1 {
+				page = 1
+			}
+			if perPage < 1 {
+				perPage = 50
+			}
+			if perPage > 200 {
+				perPage = 200
+			}
+			offset := (page - 1) * perPage
+
+			// Build query
+			query := gateway.DB.Where("client_id = ?", client.ID)
+
+			// Filter: from number
+			if from := ctx.URLParam("from"); from != "" {
+				cleanFrom := strings.TrimPrefix(from, "+")
+				query = query.Where("`from` = ? OR `from` = ?", from, cleanFrom)
+			}
+
+			// Filter: to number
+			if to := ctx.URLParam("to"); to != "" {
+				cleanTo := strings.TrimPrefix(to, "+")
+				query = query.Where("`to` = ? OR `to` = ?", to, cleanTo)
+			}
+
+			// Filter: message type (sms/mms)
+			if msgType := ctx.URLParam("type"); msgType != "" {
+				query = query.Where("type = ?", msgType)
+			}
+
+			// Filter: direction (inbound/outbound)
+			if direction := ctx.URLParam("direction"); direction != "" {
+				query = query.Where("direction = ?", direction)
+			}
+
+			// Filter: since (date or RFC3339)
+			if since := ctx.URLParam("since"); since != "" {
+				if t, err := time.Parse("2006-01-02", since); err == nil {
+					query = query.Where("received_timestamp >= ?", t)
+				} else if t, err := time.Parse(time.RFC3339, since); err == nil {
+					query = query.Where("received_timestamp >= ?", t)
+				}
+			}
+
+			// Filter: until (date or RFC3339)
+			if until := ctx.URLParam("until"); until != "" {
+				if t, err := time.Parse("2006-01-02", until); err == nil {
+					query = query.Where("received_timestamp <= ?", t.Add(24*time.Hour))
+				} else if t, err := time.Parse(time.RFC3339, until); err == nil {
+					query = query.Where("received_timestamp <= ?", t)
+				}
+			}
+
+			// Total count
+			var totalCount int64
+			query.Model(&MsgRecordDBItem{}).Count(&totalCount)
+
+			// Fetch page
+			var records []MsgRecordDBItem
+			query.Order("received_timestamp DESC").
+				Offset(offset).
+				Limit(perPage).
+				Find(&records)
+
+			ctx.Header("X-Total-Count", strconv.FormatInt(totalCount, 10))
+			ctx.Header("X-Page", strconv.Itoa(page))
+			ctx.Header("X-Per-Page", strconv.Itoa(perPage))
+
+			ctx.JSON(iris.Map{
+				"messages":    records,
+				"total_count": totalCount,
+				"page":        page,
+				"per_page":    perPage,
 			})
 		})
 	}

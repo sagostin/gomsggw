@@ -265,8 +265,9 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				return
 			}
 
-			// ... Legacy SMPP Handling (Existing Code) ...
-			// Get session directly by client username (more efficient than searching by number)
+			// ... Legacy SMPP Handling with Failover ...
+			// Try primary client's session first, then failovers if offline or send fails
+			deliveryClient := toClient // tracks which client actually receives the message
 			session, err := router.gateway.SMPPServer.getSessionByUsername(toClient.Username)
 
 			// Debug: Log session lookup result
@@ -284,16 +285,37 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				},
 			))
 
+			// If primary session not found, try failover immediately
 			if err != nil || session == nil {
-
-				lm.SendLog(lm.BuildLog("Router.SMS", "Failed to find SMPP session", logrus.ErrorLevel, map[string]interface{}{
+				lm.SendLog(lm.BuildLog("Router.SMS", "Primary SMPP session offline, trying failovers", logrus.WarnLevel, map[string]interface{}{
 					"toClient": toClient.Username,
 					"logID":    m.LogID,
 				}, err))
-				if m.Retry("failed to find SMPP session", retryChan) {
-					// todo send error message back to sender if it is a found client as the sender
+
+				fallbackClient, fbErr := router.gateway.resolveFailoverSession(toClient)
+				if fbErr != nil || fallbackClient == nil {
+					lm.SendLog(lm.BuildLog("Router.SMS", "No failover session available", logrus.ErrorLevel, map[string]interface{}{
+						"toClient": toClient.Username,
+						"logID":    m.LogID,
+					}, fbErr))
+					if m.Retry("no SMPP session available (primary or failover)", retryChan) {
+					}
+					return
 				}
-				return
+
+				// Use the fallback client's session
+				deliveryClient = fallbackClient
+				session, err = router.gateway.SMPPServer.getSessionByUsername(fallbackClient.Username)
+				if err != nil || session == nil {
+					lm.SendLog(lm.BuildLog("Router.SMS", "Failover session lookup failed", logrus.ErrorLevel, map[string]interface{}{
+						"toClient":       toClient.Username,
+						"fallbackClient": fallbackClient.Username,
+						"logID":          m.LogID,
+					}, err))
+					if m.Retry("failover session lookup failed", retryChan) {
+					}
+					return
+				}
 			}
 
 			// Debug: Log before sending SMPP
@@ -302,24 +324,47 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				"SendingSMPP",
 				logrus.DebugLevel,
 				map[string]interface{}{
-					"logID":    m.LogID,
-					"from":     m.From,
-					"to":       m.To,
-					"toClient": toClient.Username,
+					"logID":          m.LogID,
+					"from":           m.From,
+					"to":             m.To,
+					"deliveryClient": deliveryClient.Username,
+					"isFailover":     deliveryClient.ID != toClient.ID,
 				},
 			))
 
-			if err := router.gateway.SMPPServer.sendSMPP(*m, session); err != nil {
+			sendErr := router.gateway.SMPPServer.sendSMPP(*m, session)
+			if sendErr != nil {
+				// Primary send failed — try failover if we haven't already
+				if deliveryClient.ID == toClient.ID {
+					lm.SendLog(lm.BuildLog("Router.SMS", "Primary SMPP send failed, trying failovers", logrus.WarnLevel, map[string]interface{}{
+						"toClient": toClient.Username,
+						"logID":    m.LogID,
+					}, sendErr))
 
-				lm.SendLog(lm.BuildLog("Router.SMS", "Failed to send via SMPP", logrus.ErrorLevel, map[string]interface{}{
-					"toClient": toClient.Username,
-					"logID":    m.LogID,
-					"msg":      m,
-				}, err))
-				if m.Retry("failed to send SMPP", retryChan) {
-					// todo send error message back to sender if it is a found client as the sender
+					fallbackClient, fbErr := router.gateway.resolveFailoverSession(toClient)
+					if fbErr == nil && fallbackClient != nil {
+						fbSession, fbSessErr := router.gateway.SMPPServer.getSessionByUsername(fallbackClient.Username)
+						if fbSessErr == nil && fbSession != nil {
+							sendErr = router.gateway.SMPPServer.sendSMPP(*m, fbSession)
+							if sendErr == nil {
+								deliveryClient = fallbackClient
+								session = fbSession
+							}
+						}
+					}
 				}
-				return
+
+				// If still failed after failover attempt
+				if sendErr != nil {
+					lm.SendLog(lm.BuildLog("Router.SMS", "Failed to send via SMPP (all attempts)", logrus.ErrorLevel, map[string]interface{}{
+						"toClient": toClient.Username,
+						"logID":    m.LogID,
+						"msg":      m,
+					}, sendErr))
+					if m.Retry("failed to send SMPP", retryChan) {
+					}
+					return
+				}
 			}
 
 			// Debug: Log successful SMPP send
@@ -328,11 +373,12 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 				"SMPPSentSuccess",
 				logrus.InfoLevel,
 				map[string]interface{}{
-					"logID":    m.LogID,
-					"from":     m.From,
-					"to":       m.To,
-					"toClient": toClient.Username,
-					"internal": fromClient != nil && toClient != nil,
+					"logID":          m.LogID,
+					"from":           m.From,
+					"to":             m.To,
+					"deliveryClient": deliveryClient.Username,
+					"isFailover":     deliveryClient.ID != toClient.ID,
+					"internal":       fromClient != nil && toClient != nil,
 				},
 			))
 

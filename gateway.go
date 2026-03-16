@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sirupsen/logrus"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -277,4 +278,71 @@ func (gateway *Gateway) getClientCarrier(number string) (string, error) {
 	}
 
 	return "", nil
+}
+
+// resolveFailoverSession finds the first active fallback SMPP session for a client
+// whose primary session is offline or failed. Returns the session, the fallback client
+// that owns the session, and any error. Failovers are tried in priority order (lowest first).
+func (gateway *Gateway) resolveFailoverSession(primaryClient *Client) (*Client, error) {
+	if primaryClient == nil || len(primaryClient.Failovers) == 0 {
+		return nil, fmt.Errorf("no failovers configured for client %s", primaryClient.Username)
+	}
+
+	lm := gateway.LogManager
+
+	gateway.mu.RLock()
+	defer gateway.mu.RUnlock()
+
+	for _, failover := range primaryClient.Failovers {
+		// Find the fallback client in memory
+		var fallbackClient *Client
+		for _, c := range gateway.Clients {
+			if c.ID == failover.FallbackClientID {
+				fallbackClient = c
+				break
+			}
+		}
+
+		if fallbackClient == nil {
+			lm.SendLog(lm.BuildLog(
+				"Gateway.Failover",
+				"FallbackClientNotFound",
+				logrus.WarnLevel,
+				map[string]interface{}{
+					"primaryClient":    primaryClient.Username,
+					"fallbackClientID": failover.FallbackClientID,
+					"priority":         failover.Priority,
+				},
+			))
+			continue
+		}
+
+		// Check if the fallback client has an active SMPP session
+		if gateway.SMPPServer.isSessionActive(fallbackClient.Username) {
+			lm.SendLog(lm.BuildLog(
+				"Gateway.Failover",
+				"FailoverActivated",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"primaryClient":  primaryClient.Username,
+					"fallbackClient": fallbackClient.Username,
+					"priority":       failover.Priority,
+				},
+			))
+			return fallbackClient, nil
+		}
+
+		lm.SendLog(lm.BuildLog(
+			"Gateway.Failover",
+			"FallbackClientOffline",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"primaryClient":  primaryClient.Username,
+				"fallbackClient": fallbackClient.Username,
+				"priority":       failover.Priority,
+			},
+		))
+	}
+
+	return nil, fmt.Errorf("all failover clients offline for %s", primaryClient.Username)
 }

@@ -6,19 +6,32 @@ import (
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"gorm.io/gorm"
 )
 
 type Client struct {
-	ID         uint            `gorm:"primaryKey" json:"id"`
-	Username   string          `gorm:"unique;not null" json:"username"`
-	Password   string          `gorm:"not null" json:"password"` // Never returned in JSON
-	Address    string          `json:"address"`                  // IP address or hostname (required for legacy)
-	Name       string          `json:"name"`
-	Type       string          `json:"type" gorm:"default:'legacy'"`  // 'legacy' or 'web'
-	Timezone   string          `json:"timezone" gorm:"default:'UTC'"` // IANA timezone for limit period calculation
-	LogPrivacy bool            `json:"log_privacy"`
-	Settings   *ClientSettings `gorm:"foreignKey:ClientID" json:"settings,omitempty"`
-	Numbers    []ClientNumber  `gorm:"foreignKey:ClientID" json:"numbers"`
+	ID         uint             `gorm:"primaryKey" json:"id"`
+	Username   string           `gorm:"unique;not null" json:"username"`
+	Password   string           `gorm:"not null" json:"password"` // Never returned in JSON
+	Address    string           `json:"address"`                  // IP address or hostname (required for legacy)
+	Name       string           `json:"name"`
+	Type       string           `json:"type" gorm:"default:'legacy'"`  // 'legacy' or 'web'
+	Timezone   string           `json:"timezone" gorm:"default:'UTC'"` // IANA timezone for limit period calculation
+	LogPrivacy bool             `json:"log_privacy"`
+	Settings   *ClientSettings  `gorm:"foreignKey:ClientID" json:"settings,omitempty"`
+	Numbers    []ClientNumber   `gorm:"foreignKey:ClientID" json:"numbers"`
+	Failovers  []ClientFailover `gorm:"foreignKey:PrimaryClientID" json:"failovers,omitempty"`
+}
+
+// ClientFailover defines a failover relationship between clients.
+// If PrimaryClientID's SMPP session is offline, the router will attempt
+// delivery to FallbackClientID's session instead, ordered by Priority.
+type ClientFailover struct {
+	ID               uint `gorm:"primaryKey" json:"id"`
+	PrimaryClientID  uint `gorm:"index;not null;uniqueIndex:idx_primary_fallback" json:"primary_client_id"`
+	FallbackClientID uint `gorm:"not null;uniqueIndex:idx_primary_fallback" json:"fallback_client_id"`
+	Priority         int  `gorm:"default:0;not null" json:"priority"` // Lower = tried first
+	Enabled          bool `gorm:"default:true" json:"enabled"`
 }
 
 // ClientSettings contains all client configuration (applies to all client types)
@@ -291,8 +304,10 @@ func (gateway *Gateway) CheckMessageLimits(client *Client, fromNumber string, ms
 // loadClients loads clients from the database, decrypts passwords, and populates the in-memory map.
 func (gateway *Gateway) loadClients() error {
 	var clients []Client
-	// Preload Numbers, Settings, and NumberSettings
-	if err := gateway.DB.Preload("Numbers").Preload("Numbers.Settings").Preload("Settings").Find(&clients).Error; err != nil {
+	// Preload Numbers, Settings, NumberSettings, and Failovers
+	if err := gateway.DB.Preload("Numbers").Preload("Numbers.Settings").Preload("Settings").Preload("Failovers", func(db *gorm.DB) *gorm.DB {
+		return db.Where("enabled = ?", true).Order("priority ASC")
+	}).Find(&clients).Error; err != nil {
 		return err
 	}
 

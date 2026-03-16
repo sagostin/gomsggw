@@ -1186,3 +1186,11 @@ func (srv *SMPPServer) getSessionByUsername(username string) (*smpp.Session, err
 	}
 	return nil, fmt.Errorf("no active session for client: %s", username)
 }
+
+// isSessionActive checks if a client has an active SMPP session.
+func (srv *SMPPServer) isSessionActive(username string) bool {
+	srv.mu.RLock()
+	defer srv.mu.RUnlock()
+	_, ok := srv.conns[username]
+	return ok
+}

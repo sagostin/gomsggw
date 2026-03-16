@@ -834,6 +834,262 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 
 			ctx.JSON(iris.Map{"message": "Client deleted", "client_id": clientID})
 		})
+
+		// === Failover Management ===
+
+		// List failovers for a client
+		clients.Get("/{id}/failovers", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			// Load all failovers (including disabled) from DB for management view
+			var failovers []ClientFailover
+			gateway.DB.Where("primary_client_id = ?", clientID).Order("priority ASC").Find(&failovers)
+
+			// Enrich with fallback client names
+			type FailoverResponse struct {
+				ClientFailover
+				FallbackClientName     string `json:"fallback_client_name"`
+				FallbackClientUsername string `json:"fallback_client_username"`
+				FallbackOnline         bool   `json:"fallback_online"`
+			}
+
+			var response []FailoverResponse
+			for _, fo := range failovers {
+				fr := FailoverResponse{ClientFailover: fo}
+				fbClient := gateway.getClientByID(fo.FallbackClientID)
+				if fbClient != nil {
+					fr.FallbackClientName = fbClient.Name
+					fr.FallbackClientUsername = fbClient.Username
+					if gateway.SMPPServer != nil {
+						fr.FallbackOnline = gateway.SMPPServer.isSessionActive(fbClient.Username)
+					}
+				}
+				response = append(response, fr)
+			}
+
+			ctx.JSON(response)
+		})
+
+		// Add a failover entry
+		clients.Post("/{id}/failovers", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Primary client not found"})
+				return
+			}
+
+			var req struct {
+				FallbackClientID uint `json:"fallback_client_id"`
+				Priority         int  `json:"priority"`
+			}
+
+			if err := ctx.ReadJSON(&req); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request body"})
+				return
+			}
+
+			if req.FallbackClientID == 0 {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "fallback_client_id is required"})
+				return
+			}
+
+			if req.FallbackClientID == uint(clientID) {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "A client cannot be its own failover"})
+				return
+			}
+
+			// Verify fallback client exists
+			fbClient := gateway.getClientByID(req.FallbackClientID)
+			if fbClient == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Fallback client not found"})
+				return
+			}
+
+			failover := ClientFailover{
+				PrimaryClientID:  uint(clientID),
+				FallbackClientID: req.FallbackClientID,
+				Priority:         req.Priority,
+				Enabled:          true,
+			}
+
+			if err := gateway.DB.Create(&failover).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to create failover: " + err.Error()})
+				return
+			}
+
+			// Reload clients to pick up the new failover
+			gateway.reloadClientsAndNumbers()
+
+			ctx.StatusCode(iris.StatusCreated)
+			ctx.JSON(failover)
+		})
+
+		// Update a failover entry (priority, enabled)
+		clients.Put("/{id}/failovers/{failover_id}", func(ctx iris.Context) {
+			failoverIDStr := ctx.Params().Get("failover_id")
+			failoverID, err := strconv.ParseUint(failoverIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid failover ID"})
+				return
+			}
+
+			var failover ClientFailover
+			if err := gateway.DB.First(&failover, failoverID).Error; err != nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Failover not found"})
+				return
+			}
+
+			var req struct {
+				Priority *int  `json:"priority,omitempty"`
+				Enabled  *bool `json:"enabled,omitempty"`
+			}
+
+			if err := ctx.ReadJSON(&req); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request body"})
+				return
+			}
+
+			if req.Priority != nil {
+				failover.Priority = *req.Priority
+			}
+			if req.Enabled != nil {
+				failover.Enabled = *req.Enabled
+			}
+
+			if err := gateway.DB.Save(&failover).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to update failover"})
+				return
+			}
+
+			// Reload to update in-memory failover lists
+			gateway.reloadClientsAndNumbers()
+
+			ctx.JSON(iris.Map{
+				"message":  "Failover updated",
+				"failover": failover,
+			})
+		})
+
+		// Delete a failover entry
+		clients.Delete("/{id}/failovers/{failover_id}", func(ctx iris.Context) {
+			failoverIDStr := ctx.Params().Get("failover_id")
+			failoverID, err := strconv.ParseUint(failoverIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid failover ID"})
+				return
+			}
+
+			if err := gateway.DB.Delete(&ClientFailover{}, failoverID).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to delete failover"})
+				return
+			}
+
+			// Reload to update in-memory failover lists
+			gateway.reloadClientsAndNumbers()
+
+			ctx.JSON(iris.Map{"message": "Failover deleted", "failover_id": failoverID})
+		})
+
+		// SMPP session status for a client
+		clients.Get("/{id}/smpp-status", func(ctx iris.Context) {
+			clientIDStr := ctx.Params().Get("id")
+			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			online := false
+			ip := ""
+			if gateway.SMPPServer != nil {
+				online = gateway.SMPPServer.isSessionActive(client.Username)
+				if online {
+					session, _ := gateway.SMPPServer.getSessionByUsername(client.Username)
+					if session != nil {
+						ipAddr, err := gateway.SMPPServer.GetClientIP(session)
+						if err == nil {
+							ip = ipAddr
+						}
+					}
+				}
+			}
+
+			// Also check failover status
+			type FailoverStatus struct {
+				ClientID uint   `json:"client_id"`
+				Username string `json:"username"`
+				Name     string `json:"name"`
+				Priority int    `json:"priority"`
+				Online   bool   `json:"online"`
+			}
+
+			var failoverStatuses []FailoverStatus
+			for _, fo := range client.Failovers {
+				fbClient := gateway.getClientByID(fo.FallbackClientID)
+				if fbClient != nil {
+					fbOnline := false
+					if gateway.SMPPServer != nil {
+						fbOnline = gateway.SMPPServer.isSessionActive(fbClient.Username)
+					}
+					failoverStatuses = append(failoverStatuses, FailoverStatus{
+						ClientID: fbClient.ID,
+						Username: fbClient.Username,
+						Name:     fbClient.Name,
+						Priority: fo.Priority,
+						Online:   fbOnline,
+					})
+				}
+			}
+
+			ctx.JSON(iris.Map{
+				"client_id": client.ID,
+				"username":  client.Username,
+				"online":    online,
+				"ip":        ip,
+				"failovers": failoverStatuses,
+			})
+		})
 	}
 }
 

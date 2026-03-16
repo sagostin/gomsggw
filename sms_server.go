@@ -840,6 +840,34 @@ func cleanSMSMessage(input string) string {
 	return output.String()
 }
 
+// dataCodingName returns a human-readable name for a DataCoding value.
+func dataCodingName(dc coding.DataCoding) string {
+	switch dc {
+	case coding.GSM7BitCoding:
+		return "GSM7Bit"
+	case coding.ASCIICoding:
+		return "ASCII"
+	case coding.Latin1Coding:
+		return "Latin1"
+	case coding.ShiftJISCoding:
+		return "ShiftJIS"
+	case coding.CyrillicCoding:
+		return "Cyrillic"
+	case coding.HebrewCoding:
+		return "Hebrew"
+	case coding.UCS2Coding:
+		return "UCS2"
+	case coding.ISO2022JPCoding:
+		return "ISO2022JP"
+	case coding.EUCJPCoding:
+		return "EUCJP"
+	case coding.EUCKRCoding:
+		return "EUCKR"
+	default:
+		return fmt.Sprintf("Unknown(%d)", dc)
+	}
+}
+
 // sendSMPP attempts to send an SMPPMessage via the SMPP server.
 // The session parameter should be a valid, already-looked-up session from the router.
 func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
@@ -956,11 +984,19 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 				"SendError",
 				logrus.ErrorLevel,
 				map[string]interface{}{
-					"to":       msg.To,
-					"from":     msg.From,
-					"sequence": seq,
-					"username": username,
-					"client":   clientName,
+					"to":              msg.To,
+					"from":            msg.From,
+					"sequence":        seq,
+					"username":        username,
+					"client":          clientName,
+					"encoding":        dataCodingName(bestCoding),
+					"dataCoding":      bestCoding,
+					"encodedByteLen":  len(encoded),
+					"encodedHex":      fmt.Sprintf("%x", encoded),
+					"originalMessage": msg.message,
+					"segment":         segment,
+					"segmentIndex":    i + 1,
+					"totalSegments":   len(segments),
 				}, err,
 			))
 			return fmt.Errorf("error sending SubmitSM: %v", err)
@@ -974,15 +1010,24 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"AckNonOK",
 					logrus.ErrorLevel,
 					map[string]interface{}{
-						"to":            msg.To,
-						"from":          msg.From,
-						"sequence":      seq,
-						"commandStatus": respPDU.Header.CommandStatus,
-						"username":      username,
-						"client":        clientName,
+						"to":                msg.To,
+						"from":              msg.From,
+						"sequence":          seq,
+						"commandStatus":     respPDU.Header.CommandStatus,
+						"commandStatusName": respPDU.Header.CommandStatus.String(),
+						"username":          username,
+						"client":            clientName,
+						"encoding":          dataCodingName(bestCoding),
+						"dataCoding":        bestCoding,
+						"encodedByteLen":    len(encoded),
+						"encodedHex":        fmt.Sprintf("%x", encoded),
+						"originalMessage":   msg.message,
+						"segment":           segment,
+						"segmentIndex":      i + 1,
+						"totalSegments":     len(segments),
 					},
 				))
-				return fmt.Errorf("non-OK response for sequence %d: %d", seq, respPDU.Header.CommandStatus)
+				return fmt.Errorf("non-OK response for sequence %d: %s (%d)", seq, respPDU.Header.CommandStatus.String(), respPDU.Header.CommandStatus)
 			}
 			lm.SendLog(lm.BuildLog(
 				"Server.SMPP.sendSMPP",
@@ -1004,11 +1049,19 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 				"AckTimeout",
 				logrus.WarnLevel,
 				map[string]interface{}{
-					"to":       msg.To,
-					"from":     msg.From,
-					"sequence": seq,
-					"username": username,
-					"client":   clientName,
+					"to":              msg.To,
+					"from":            msg.From,
+					"sequence":        seq,
+					"username":        username,
+					"client":          clientName,
+					"encoding":        dataCodingName(bestCoding),
+					"dataCoding":      bestCoding,
+					"encodedByteLen":  len(encoded),
+					"encodedHex":      fmt.Sprintf("%x", encoded),
+					"originalMessage": msg.message,
+					"segment":         segment,
+					"segmentIndex":    i + 1,
+					"totalSegments":   len(segments),
 				},
 			))
 			return fmt.Errorf("timeout waiting for ack for sequence %d", seq)

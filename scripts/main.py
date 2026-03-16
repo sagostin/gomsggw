@@ -954,6 +954,218 @@ def show_batch_job_detail(identifier: str) -> None:
 
 
 # =============================================================================
+# Failover Operations
+# =============================================================================
+
+def list_failovers(identifier: str) -> None:
+    """List failover entries for a client."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return
+
+    client_id = client.get("id")
+    username = client.get("username", "")
+    print(f"\n=== Failovers for '{username}' (ID: {client_id}) ===")
+
+    try:
+        resp = get_json(f"/clients/{client_id}/failovers")
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if resp.status_code != 200:
+        print(f"❌ Failed to list failovers ({resp.status_code})")
+        return
+
+    failovers = resp.json()
+    if not failovers:
+        print("No failovers configured.")
+        return
+
+    print(f"\n{'ID':<6} {'Fallback Client':<22} {'Username':<18} {'Priority':<10} {'Enabled':<9} {'Online':<8}")
+    print("-" * 80)
+    for fo in failovers:
+        fid = str(fo.get("id", ""))[:6]
+        fb_name = (fo.get("fallback_client_name") or "N/A")[:22]
+        fb_user = (fo.get("fallback_client_username") or "N/A")[:18]
+        priority = str(fo.get("priority", 0))[:10]
+        enabled = "✅" if fo.get("enabled", True) else "❌"
+        online = "🟢" if fo.get("fallback_online", False) else "🔴"
+        print(f"{fid:<6} {fb_name:<22} {fb_user:<18} {priority:<10} {enabled:<9} {online:<8}")
+
+    print(f"\nTotal: {len(failovers)} failovers")
+
+
+def add_failover_interactive(identifier: str) -> None:
+    """Interactively add a failover client."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return
+
+    client_id = client.get("id")
+    print(f"\n=== Add Failover for '{client.get('username')}' (ID: {client_id}) ===")
+
+    # List available clients for selection
+    print("\nAvailable clients:")
+    try:
+        resp = get_json("/clients")
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if resp.status_code != 200:
+        print("❌ Failed to list clients")
+        return
+
+    all_clients = resp.json()
+    # Filter out the primary client and web-only clients
+    eligible = [c for c in all_clients if c.get("id") != client_id and c.get("type", "legacy") == "legacy"]
+
+    if not eligible:
+        print("No eligible failover clients available (need other legacy clients).")
+        return
+
+    print(f"\n{'#':<4} {'ID':<6} {'Username':<18} {'Name':<22} {'Type':<8}")
+    print("-" * 60)
+    for i, c in enumerate(eligible, 1):
+        cid = str(c.get("id", ""))[:6]
+        username = c.get("username", "")[:18]
+        name = (c.get("name") or "")[:22]
+        ctype = c.get("type", "legacy")[:8]
+        print(f"{i:<4} {cid:<6} {username:<18} {name:<22} {ctype:<8}")
+
+    choice_str = input("\nSelect client # (or enter client ID): ").strip()
+    if not choice_str:
+        print("Selection required.")
+        return
+
+    fallback_client_id = None
+    if choice_str.isdigit():
+        choice_num = int(choice_str)
+        if 1 <= choice_num <= len(eligible):
+            fallback_client_id = eligible[choice_num - 1].get("id")
+        else:
+            # Maybe it's a direct client ID
+            for c in all_clients:
+                if c.get("id") == choice_num:
+                    fallback_client_id = choice_num
+                    break
+
+    if fallback_client_id is None:
+        print("Invalid selection.")
+        return
+
+    if fallback_client_id == client_id:
+        print("❌ A client cannot be its own failover.")
+        return
+
+    priority_str = input("Priority (lower = tried first, default 0): ").strip()
+    try:
+        priority = int(priority_str) if priority_str else 0
+    except ValueError:
+        priority = 0
+
+    payload = {
+        "fallback_client_id": fallback_client_id,
+        "priority": priority,
+    }
+
+    try:
+        resp = post_json(f"/clients/{client_id}/failovers", payload)
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if 200 <= resp.status_code < 300:
+        print("✅ Failover added.")
+    else:
+        print(f"❌ Failed ({resp.status_code})")
+        try:
+            print(resp.json())
+        except Exception:
+            print(resp.text)
+
+
+def remove_failover(identifier: str) -> None:
+    """Remove a failover entry."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return
+
+    client_id = client.get("id")
+
+    # List failovers first
+    list_failovers(identifier)
+
+    failover_id_str = input("\nFailover ID to remove: ").strip()
+    if not failover_id_str:
+        print("Failover ID required.")
+        return
+
+    confirm = input(f"Remove failover {failover_id_str}? [y/N]: ").strip().lower()
+    if confirm != "y":
+        print("Cancelled.")
+        return
+
+    try:
+        resp = delete_json(f"/clients/{client_id}/failovers/{failover_id_str}")
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if 200 <= resp.status_code < 300:
+        print(f"✅ Failover {failover_id_str} removed.")
+    else:
+        print(f"❌ Failed ({resp.status_code})")
+        try:
+            print(resp.json())
+        except Exception:
+            print(resp.text)
+
+
+def show_smpp_status(identifier: str) -> None:
+    """Show SMPP session and failover status for a client."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return
+
+    client_id = client.get("id")
+    print(f"\n=== SMPP Status for '{client.get('username')}' (ID: {client_id}) ===")
+
+    try:
+        resp = get_json(f"/clients/{client_id}/smpp-status")
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if resp.status_code != 200:
+        print(f"❌ Failed ({resp.status_code})")
+        return
+
+    data = resp.json()
+    online = data.get("online", False)
+    ip = data.get("ip", "")
+
+    status_icon = "🟢 ONLINE" if online else "🔴 OFFLINE"
+    print(f"\n  Primary: {status_icon}")
+    if ip:
+        print(f"  IP: {ip}")
+
+    failovers = data.get("failovers") or []
+    if failovers:
+        print(f"\n  Failovers ({len(failovers)}):")
+        for fo in failovers:
+            fo_status = "🟢" if fo.get("online", False) else "🔴"
+            print(f"    {fo_status} {fo.get('username', '')} ({fo.get('name', '')}) - priority {fo.get('priority', 0)}")
+    else:
+        print("\n  No failovers configured.")
+
+
+# =============================================================================
 # Menu
 # =============================================================================
 
@@ -991,6 +1203,12 @@ def menu() -> None:
         print("\n📦 Batch Jobs:")
         print("  d) List batch jobs for client")
         print("  e) Show batch job detail")
+
+        print("\n🔄 Failover:")
+        print("  f) List failovers for client")
+        print("  g) Add failover client")
+        print("  h) Remove failover")
+        print("  i) SMPP session status")
 
         print("\n⚙️ Admin:")
         print("  r) Reload all (clients + carriers)")
@@ -1111,6 +1329,39 @@ def menu() -> None:
             identifier = input("Client ID or username: ").strip() or last_client
             if identifier:
                 show_batch_job_detail(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        # --- Failover Operations ---
+        elif choice == "f":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                list_failovers(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        elif choice == "g":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                add_failover_interactive(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        elif choice == "h":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                remove_failover(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        elif choice == "i":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                show_smpp_status(identifier)
                 last_client = identifier
             else:
                 print("Client ID or username required.")

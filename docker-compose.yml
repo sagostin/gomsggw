@@ -41,6 +41,7 @@ services:
     environment:
       - SERVER_ID=gomsggw1
       - POSTGRES_HOST=postgres
+
   # Optional: Automated backup container
   # Uncomment to enable scheduled backups
   # backup:
@@ -57,7 +58,8 @@ services:
   #     - ./backups:/var/backups/gomsggw
   #     - ./.env:/app/.env:ro
   #   depends_on:
-  #     - postgres
+  #     postgres:
+  #       condition: service_healthy
   #   restart: always
   #   networks:
   #     - gomsggw-network

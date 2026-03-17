@@ -7,12 +7,13 @@ SCHEDULE="${BACKUP_SCHEDULE:-0 2 * * *}"
 
 echo "[INFO] Setting up backup schedule: $SCHEDULE"
 
-# Write cron job (with all env vars passed through)
-printenv | grep -E '^(POSTGRES_|BACKUP_|ENCRYPTION_|FTP_)' > /etc/environment
+# Write env vars as sourceable export statements for cron
+printenv | grep -E '^(POSTGRES_|BACKUP_|ENCRYPTION_|FTP_|ENV_FILE)' | \
+    sed 's/^/export /' > /etc/backup.env
 
 cat > /etc/crontabs/root <<EOF
 # GOMSGGW Backup Schedule
-$SCHEDULE /app/backup.sh >> /var/log/backup.log 2>&1
+$SCHEDULE . /etc/backup.env; /app/backup.sh >> /var/log/backup.log 2>&1
 EOF
 
 # Create log file

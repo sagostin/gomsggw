@@ -1,37 +1,54 @@
-# GOMSGGW Backup System
+# Backup & Restore Guide
 
-This document describes the automated backup functionality for the GOMSGGW message gateway.
-
-## Overview
-
-The backup system provides:
-
-- **PostgreSQL database backups** - Compressed SQL dumps
-- **Configuration backups** - Encrypted `.env` file snapshots
-- **Optional FTP upload** - Offsite storage to remote FTP server
-- **Automated scheduling** - Docker-based cron execution
-- **Retention management** - Automatic cleanup of old backups
+This guide covers how to set up, automate, and restore backups for GOMSGGW.
 
 ---
 
-## Components
+## What Gets Backed Up
 
-| File | Purpose |
-|------|---------|
-| `scripts/backup.sh` | Core backup script (database + config) |
-| `scripts/backup-entrypoint.sh` | Container entrypoint for scheduled backups |
-| `Dockerfile.backup` | Docker image for backup container |
+| Data | File Pattern | Format |
+|------|-------------|--------|
+| PostgreSQL database | `db_smsgw_YYYYMMDD_HHMMSS.sql.gz` | Gzip-compressed SQL dump |
+| `.env` configuration | `env_YYYYMMDD_HHMMSS.enc` | Plain copy (or AES-256 encrypted if configured) |
 
 ---
 
-## Quick Start
+## 1. Configuration
 
-### Manual Backup (One-time)
-
-Run directly from the repository root:
+Add the following to your `.env` file:
 
 ```bash
-# Backup everything (database + .env)
+# ----------------------
+# Backup Settings
+# ----------------------
+BACKUP_LOCAL_DIR=/var/backups/gomsggw    # Where backups are stored
+BACKUP_RETENTION_DAYS=7                  # Auto-delete backups older than N days (0 = keep forever)
+BACKUP_SCHEDULE=0 2 * * *               # Cron schedule for automated backups
+
+# Optional: Encrypt .env backups with AES-256-CBC
+# Leave empty for plain-text backups (default)
+# ENCRYPTION_KEY=your-32-character-key
+
+# Optional: Upload backups to FTP server
+# Leave empty to disable FTP upload
+# BACKUP_FTP_HOST=ftp.example.com
+# BACKUP_FTP_PORT=21
+# BACKUP_FTP_USER=backup_user
+# BACKUP_FTP_PASSWORD=secure_password
+# BACKUP_FTP_DIR=/gomsggw
+```
+
+> [!TIP]
+> All settings have sensible defaults. The minimum you need is a working PostgreSQL connection (which you already have if the gateway is running).
+
+---
+
+## 2. Running a Manual Backup
+
+From the repository root:
+
+```bash
+# Full backup (database + .env)
 ./scripts/backup.sh
 
 # Database only
@@ -41,9 +58,15 @@ Run directly from the repository root:
 ./scripts/backup.sh --env-only
 ```
 
-### Automated Backups (Docker)
+Backup files are saved to `BACKUP_LOCAL_DIR` (default: `/var/backups/gomsggw`).
 
-Enable the backup container in `docker-compose.yml`:
+---
+
+## 3. Automating Backups (Docker)
+
+The backup system runs as a dedicated Docker container using `dcron`. It will run backups on the schedule defined by `BACKUP_SCHEDULE`.
+
+### Step 1: Uncomment the backup service in `docker-compose.yml`
 
 ```yaml
 backup:
@@ -55,162 +78,143 @@ backup:
     - .env
   environment:
     - POSTGRES_HOST=postgres
-    - BACKUP_SCHEDULE=0 2 * * *  # Daily at 2am
+    - BACKUP_SCHEDULE=0 2 * * *     # Daily at 2am (change as needed)
   volumes:
-    - ./backups:/var/backups/gomsggw
-    - ./.env:/app/.env:ro
+    - ./backups:/var/backups/gomsggw  # Backup files appear here on the host
+    - ./.env:/app/.env:ro             # Read-only access to .env for backup
   depends_on:
-    - postgres
+    postgres:
+      condition: service_healthy
   restart: always
   networks:
     - gomsggw-network
 ```
 
-Then start the backup service:
+### Step 2: Start the backup service
 
 ```bash
 docker compose up -d backup
 ```
 
----
+### Step 3: Verify it's running
 
-## Configuration
+```bash
+# Check the container is up
+docker ps | grep gomsggw-backup
 
-All settings are configured via environment variables:
+# View the configured schedule
+docker exec gomsggw-backup crontab -l
 
-### PostgreSQL Connection
+# Check logs
+docker exec gomsggw-backup cat /var/log/backup.log
+```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_HOST` | `localhost` | Database host |
-| `POSTGRES_PORT` | `5432` | Database port |
-| `POSTGRES_USER` | `smsgw` | Database user |
-| `POSTGRES_PASSWORD` | *(required)* | Database password |
-| `POSTGRES_DB` | `smsgw` | Database name |
-
-### Backup Settings
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKUP_LOCAL_DIR` | `/var/backups/gomsggw` | Local backup directory |
-| `BACKUP_RETENTION_DAYS` | `7` | Days to keep backups (0 = keep forever) |
-| `BACKUP_SCHEDULE` | `0 2 * * *` | Cron expression for scheduled backups |
-| `ENCRYPTION_KEY` | *(optional)* | AES-256 key for .env encryption |
-
-### FTP Upload (Optional)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `BACKUP_FTP_HOST` | *(empty)* | FTP server hostname |
-| `BACKUP_FTP_PORT` | `21` | FTP port |
-| `BACKUP_FTP_USER` | *(empty)* | FTP username |
-| `BACKUP_FTP_PASSWORD` | *(empty)* | FTP password |
-| `BACKUP_FTP_DIR` | `/gomsggw` | Remote directory |
-
----
-
-## Backup Output
-
-### Database Backups
-
-- **Format**: Gzip-compressed SQL dump
-- **Filename**: `db_<database>_<timestamp>.sql.gz`
-- **Example**: `db_smsgw_20260112_020000.sql.gz`
-
-### Configuration Backups
-
-- **Format**: Encrypted (AES-256-CBC) or plain copy
-- **Filename**: `env_<timestamp>.enc`
-- **Example**: `env_20260112_020000.enc`
-
-> [!TIP]
-> Set `ENCRYPTION_KEY` to encrypt .env backups. Without it, backups are plain-text copies with `chmod 600` permissions.
-
----
-
-## Usage Examples
-
-### Run Manual Backup in Docker
+### Trigger a manual backup inside Docker
 
 ```bash
 docker exec gomsggw-backup /app/backup.sh
 ```
 
-### View Backup Logs
+### Common Schedules
+
+| Schedule | Cron Expression |
+|----------|----------------|
+| Daily at 2am | `0 2 * * *` |
+| Every 6 hours | `0 */6 * * *` |
+| Every 12 hours | `0 0,12 * * *` |
+| Weekly (Sunday 3am) | `0 3 * * 0` |
+
+---
+
+## 4. Restore Procedures
+
+### Restore the Database
 
 ```bash
-docker exec gomsggw-backup tail -f /var/log/backup.log
-```
-
-### Restore Database from Backup
-
-```bash
-# Decompress and restore
-gunzip -c backups/db_smsgw_20260112_020000.sql.gz | \
+# Option A: Pipe directly from backup
+gunzip -c backups/db_smsgw_20260315_020000.sql.gz | \
   docker exec -i gomsggw-db psql -U smsgw -d smsgw
+
+# Option B: Extract first, then restore
+gunzip backups/db_smsgw_20260315_020000.sql.gz
+docker exec -i gomsggw-db psql -U smsgw -d smsgw < backups/db_smsgw_20260315_020000.sql
 ```
 
-### Decrypt .env Backup
+> [!IMPORTANT]
+> This will overwrite the current database contents. Stop the gateway first to avoid conflicts:
+> ```bash
+> docker compose stop gomsggw
+> # ... restore ...
+> docker compose start gomsggw
+> ```
+
+### Restore the .env File
+
+**If the backup is unencrypted (default):**
+
+```bash
+cp backups/env_20260315_020000.enc .env
+chmod 600 .env
+```
+
+**If the backup was encrypted with `ENCRYPTION_KEY`:**
 
 ```bash
 openssl enc -aes-256-cbc -d -pbkdf2 \
-  -in backups/env_20260112_020000.enc \
-  -out restored.env \
-  -pass pass:your-encryption-key
+  -in backups/env_20260315_020000.enc \
+  -out .env \
+  -pass pass:"your-encryption-key"
+chmod 600 .env
+```
+
+### Full Disaster Recovery
+
+1. Deploy a fresh instance (`git clone`, `cp sample.env .env`)
+2. Restore `.env` from backup (see above)
+3. Start postgres: `docker compose up -d postgres`
+4. Wait for it to be healthy: `docker compose ps`
+5. Restore the database (see above)
+6. Start the gateway: `docker compose up -d gomsggw`
+7. Verify: `curl http://localhost:3000/health`
+
+---
+
+## 5. FTP Offsite Uploads
+
+When `BACKUP_FTP_HOST` and `BACKUP_FTP_USER` are set, every backup file is automatically uploaded after creation. The container includes both `lftp` and `curl` as FTP clients.
+
+To test FTP connectivity:
+
+```bash
+docker exec gomsggw-backup lftp -u backup_user,password -p 21 ftp.example.com -e "ls; bye"
 ```
 
 ---
 
-## Scheduling (Cron Expressions)
+## 6. Architecture
 
-| Schedule | Expression |
-|----------|------------|
-| Daily at 2am | `0 2 * * *` |
-| Every 6 hours | `0 */6 * * *` |
-| Weekly Sunday 3am | `0 3 * * 0` |
-| Every 12 hours | `0 0,12 * * *` |
-
----
-
-## Architecture
-
-```mermaid
-flowchart LR
-    subgraph Docker
-        CRON["dcron\n(scheduler)"] --> SCRIPT["backup.sh"]
-        SCRIPT --> DB[(PostgreSQL)]
-        SCRIPT --> ENV[".env file"]
-    end
-    
-    SCRIPT --> LOCAL["Local Volume\n/var/backups/gomsggw"]
-    SCRIPT -.-> FTP["FTP Server\n(optional)"]
-    
-    style LOCAL fill:#2d5a2d,color:#fff
-    style FTP fill:#4a4a6a,color:#fff,stroke-dasharray:5,5
+```
+┌──────────────────────────────────┐
+│  gomsggw-backup container        │
+│                                  │
+│  dcron ──► backup.sh             │
+│              ├─► pg_dump → .gz   │──► ./backups/ (host volume)
+│              ├─► cp .env → .enc  │──► ./backups/ (host volume)
+│              └─► upload_to_ftp() │──► FTP server (optional)
+│                                  │
+│  cleanup: delete files > N days  │
+└──────────────────────────────────┘
 ```
 
 ---
 
-## Security Notes
+## 7. Troubleshooting
 
-> [!IMPORTANT]
-> - Mount `.env` as read-only (`:ro`) in the backup container
-> - Set `ENCRYPTION_KEY` for encrypted configuration backups
-> - Backup directory has `chmod 700` (owner-only access)
-> - Use secure FTP (FTPS) when uploading to remote servers
-
----
-
-## Troubleshooting
-
-### Backup fails with "pg_dump: connection refused"
-
-Ensure `POSTGRES_HOST` is set to `postgres` (not `localhost`) when running in Docker.
-
-### FTP upload fails
-
-The container supports both `lftp` and `curl`. Check FTP credentials and ensure the remote directory exists.
-
-### Large backups take too long
-
-Consider running backups during off-peak hours or increasing the cron interval.
+| Problem | Solution |
+|---------|----------|
+| `pg_dump: connection refused` | Set `POSTGRES_HOST=postgres` (not `localhost`) in Docker |
+| `POSTGRES_PASSWORD is not set` | Ensure `.env` is loaded or vars are exported |
+| Backup files not appearing | Check volume mount: `./backups:/var/backups/gomsggw` |
+| FTP upload fails | Verify credentials and that remote directory exists |
+| Cron not running | Check `docker exec gomsggw-backup crontab -l` |
+| Old backups not cleaned up | Verify `BACKUP_RETENTION_DAYS` is set and > 0 |

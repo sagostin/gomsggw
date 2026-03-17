@@ -61,14 +61,21 @@ log_success() { echo "[SUCCESS] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 backup_database() {
     local backup_file="$BACKUP_DIR/db_${PG_DATABASE}_${TIMESTAMP}.sql.gz"
     
+    if [[ -z "$PG_PASSWORD" ]]; then
+        log_error "POSTGRES_PASSWORD is not set — cannot back up database"
+        return 1
+    fi
+    
     log_info "Backing up PostgreSQL database: $PG_DATABASE"
     
     export PGPASSWORD="$PG_PASSWORD"
     
     if pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" "$PG_DATABASE" | gzip > "$backup_file"; then
+        unset PGPASSWORD
         log_success "Database backup created: $backup_file"
         echo "$backup_file"
     else
+        unset PGPASSWORD
         log_error "Failed to backup database"
         return 1
     fi

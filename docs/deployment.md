@@ -72,12 +72,9 @@ PROMETHEUS_PATH=/metrics
 > Use the CLI tool or API to add carriers after initial startup.
 
 ```bash
-# Twilio credentials (used by carrier initialization)
-TWILIO_ACCOUNT_SID=your-account-sid
-TWILIO_AUTH_TOKEN=your-auth-token
-
-# Optional: Telnyx messaging profile
-# TELNYX_MESSAGING_PROFILE_ID=your-profile-id
+# All carrier credentials are managed via the database.
+# Use POST /carriers to add carriers (twilio, telnyx, onevoiceplus).
+# See API Reference for details.
 ```
 
 ### Global Retry Settings

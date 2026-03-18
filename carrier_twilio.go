@@ -20,9 +20,11 @@ import (
 // TwilioHandler implements CarrierHandler for Twilio
 type TwilioHandler struct {
 	BaseCarrierHandler
-	client  *twilio.RestClient
-	gateway *Gateway
-	carrier *Carrier
+	client   *twilio.RestClient
+	gateway  *Gateway
+	carrier  *Carrier
+	username string // Account SID (used for media fetching auth)
+	password string // Auth Token (used for media fetching auth)
 }
 
 func NewTwilioHandler(gateway *Gateway, carrier *Carrier, decryptedUsername string, decryptedPassword string) *TwilioHandler {
@@ -32,13 +34,17 @@ func NewTwilioHandler(gateway *Gateway, carrier *Carrier, decryptedUsername stri
 			Username: decryptedUsername,
 			Password: decryptedPassword,
 		}),
-		gateway: gateway,
-		carrier: carrier,
+		gateway:  gateway,
+		carrier:  carrier,
+		username: decryptedUsername,
+		password: decryptedPassword,
 	}
 }
 
 // Inbound handles incoming Twilio webhooks for MMS and SMS messages.
 func (h *TwilioHandler) Inbound(c iris.Context) error {
+	lm := h.gateway.LogManager
+
 	// Initialize logging with a unique transaction ID
 	transId := primitive.NewObjectID().Hex()
 
@@ -54,13 +60,12 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 	to := c.FormValue("To")
 	body := c.FormValue("Body")
 	messageSid := c.FormValue("MessageSid")
-	accountSid := c.FormValue("AccountSid")
 
 	var files []MsgFile
 
 	// Fetch media files if present
 	if numMedia > 0 {
-		ff := h.fetchMediaFiles(c, numMedia, accountSid, messageSid)
+		ff := h.fetchMediaFiles(c, numMedia, messageSid)
 		if len(ff) <= 0 {
 			c.StatusCode(http.StatusBadRequest)
 			return nil
@@ -87,7 +92,6 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 			SourceCarrier:     h.carrier.Name,
 			OriginalSizeBytes: originalSizeBytes,
 		}
-		//h.gateway.MM4Server.msgToClientChannel <- mm4Message
 		h.gateway.Router.CarrierMsgChan <- msg
 	}
 
@@ -108,23 +112,36 @@ func (h *TwilioHandler) Inbound(c iris.Context) error {
 		}
 	}
 
+	lm.SendLog(lm.BuildLog(
+		"Carrier.Twilio.Inbound",
+		"received",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"logID":     transId,
+			"carrierID": messageSid,
+			"from":      from,
+			"to":        to,
+		}, nil,
+	))
+
 	// Prepare the TwiML response
 	twiml := "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Response>\n</Response>"
 
-	// Set the correct Msg-Type header
-	c.Header("Msg-Type", "application/xml")
+	// Set the correct Content-Type header
+	c.Header("Content-Type", "application/xml")
 
 	_, err = c.Write([]byte(twiml))
 	if err != nil {
 		return err
 	}
 
-	// Send the TwiML response
-	return err
+	return nil
 }
 
 // fetchMediaFiles retrieves media files from Twilio and returns a slice of MsgFile structs.
-func (h *TwilioHandler) fetchMediaFiles(c iris.Context, numMedia int, accountSid, messageSid string) []MsgFile {
+// Uses the carrier's stored credentials (Account SID + Auth Token) for Basic Auth.
+func (h *TwilioHandler) fetchMediaFiles(c iris.Context, numMedia int, messageSid string) []MsgFile {
+	lm := h.gateway.LogManager
 	var files []MsgFile
 
 	for i := 0; i < numMedia; i++ {
@@ -138,7 +155,7 @@ func (h *TwilioHandler) fetchMediaFiles(c iris.Context, numMedia int, accountSid
 		}
 
 		extension := parts[1]
-		filename := fmt.Sprintf("%s.%s", mediaSid, extension) // e.g., mediaSid.jpg
+		filename := fmt.Sprintf("%s.%s", mediaSid, extension)
 
 		// Fetch the media content
 		req, err := http.NewRequest("GET", mediaURL, nil)
@@ -146,10 +163,8 @@ func (h *TwilioHandler) fetchMediaFiles(c iris.Context, numMedia int, accountSid
 			continue
 		}
 
-		// Set Basic Auth
-		twilioAccountSid := os.Getenv("TWILIO_ACCOUNT_SID")
-		twilioAuthToken := os.Getenv("TWILIO_AUTH_TOKEN")
-		req.SetBasicAuth(twilioAccountSid, twilioAuthToken)
+		// Use the carrier's stored credentials for auth
+		req.SetBasicAuth(h.username, h.password)
 
 		// Perform the request
 		client := &http.Client{
@@ -157,7 +172,6 @@ func (h *TwilioHandler) fetchMediaFiles(c iris.Context, numMedia int, accountSid
 		}
 		resp, err := client.Do(req)
 		if err != nil {
-			var lm = h.gateway.LogManager
 			lm.SendLog(lm.BuildLog(
 				"Carrier.FetchMedia.Twilio",
 				"CarrierFetchMediaError",
@@ -172,6 +186,16 @@ func (h *TwilioHandler) fetchMediaFiles(c iris.Context, numMedia int, accountSid
 
 		// Check for successful response
 		if resp.StatusCode != http.StatusOK {
+			lm.SendLog(lm.BuildLog(
+				"Carrier.FetchMedia.Twilio",
+				"CarrierFetchMediaNonOK",
+				logrus.ErrorLevel,
+				map[string]interface{}{
+					"logID":      messageSid,
+					"statusCode": resp.StatusCode,
+					"mediaURL":   mediaURL,
+				},
+			))
 			continue
 		}
 
@@ -220,47 +244,48 @@ func splitSMS(body string, maxBytes int) []string {
 
 	return smsSegments
 }
+
+// SendSMS sends an SMS message via the Twilio API.
 func (h *TwilioHandler) SendSMS(sms *MsgQueueItem) (string, error) {
+	lm := h.gateway.LogManager
+
 	params := &twilioApi.CreateMessageParams{}
 	params.SetTo(sms.To)
 	params.SetFrom(sms.From)
 	params.SetBody(sms.message)
 
-	// todo support for MMS??
-
-	_, err := h.client.Api.CreateMessage(params)
+	msg, err := h.client.Api.CreateMessage(params)
 	if err != nil {
-		var lm = h.gateway.LogManager
 		lm.SendLog(lm.BuildLog(
-			"Carrier.SendSMS.Telnyx",
-			"GenericError",
+			"Carrier.SendSMS.Twilio",
+			"Failed to send SMS to Carrier",
 			logrus.ErrorLevel,
 			map[string]interface{}{
 				"logID": sms.LogID,
+				"to":    sms.To,
+				"from":  sms.From,
 			}, err,
 		))
 		return "", err
 	}
 
-	/*	logf.Level = logrus.InfoLevel
-		// direction, carrier, type (mms/sms), sid/msid, from, to
-		logf.message = fmt.Sprintf(LogMessages.Transaction, "outbound", logf.AdditionalData["carrier"], sms.From, sms.To)
-		logf.AddField("messageSid", *msg.Sid)
-		logf.AddField("from", sms.From)
-		logf.AddField("to", sms.To)
-		logf.Print()*/
+	// Extract message SID from response
+	messageSid := ""
+	if msg != nil && msg.Sid != nil {
+		messageSid = *msg.Sid
+	}
 
-	return "", nil
+	return messageSid, nil
 }
 
+// SendMMS sends an MMS message via the Twilio API.
 func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) (string, error) {
+	lm := h.gateway.LogManager
 
 	params := &twilioApi.CreateMessageParams{}
-	// clean to & from
-
 	params.SetTo(mms.To)
 	params.SetFrom(mms.From)
-	params.SetBody("")
+	params.SetBody("") // MMS body (Twilio uses empty body with media)
 
 	var mediaUrls []string
 
@@ -272,7 +297,6 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 
 			accessToken, err := h.gateway.saveMsgFileMedia(i)
 			if err != nil {
-				var lm = h.gateway.LogManager
 				lm.SendLog(lm.BuildLog(
 					"Carrier.SendMMS.Twilio",
 					"SaveMediaError",
@@ -289,21 +313,26 @@ func (h *TwilioHandler) SendMMS(mms *MsgQueueItem) (string, error) {
 		params.MediaUrl = &mediaUrls
 	}
 
-	// todo support for MMS??
-
-	_, err := h.client.Api.CreateMessage(params)
+	msg, err := h.client.Api.CreateMessage(params)
 	if err != nil {
-		var lm = h.gateway.LogManager
 		lm.SendLog(lm.BuildLog(
-			"Carrier.SendSMS.Telnyx",
-			"GenericError",
+			"Carrier.SendMMS.Twilio",
+			"Failed to send MMS to Carrier",
 			logrus.ErrorLevel,
 			map[string]interface{}{
 				"logID": mms.LogID,
+				"to":    mms.To,
+				"from":  mms.From,
 			}, err,
 		))
 		return "", err
 	}
 
-	return "", nil
+	// Extract message SID from response
+	messageSid := ""
+	if msg != nil && msg.Sid != nil {
+		messageSid = *msg.Sid
+	}
+
+	return messageSid, nil
 }

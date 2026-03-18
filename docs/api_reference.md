@@ -104,6 +104,17 @@ Add a carrier (admin auth).
 
 > `profile_id` is optional. For Telnyx, this is the messaging_profile_id.
 
+**OneVoicePlus Example:**
+```json
+{
+  "name": "Telus OVP",
+  "type": "onevoiceplus",
+  "username": "admin",
+  "password": "your-X-TELUS-SDF-Developer-Key"
+}
+```
+> For OneVoicePlus, `password` stores the `X-TELUS-SDF-Developer-Key`.
+
 ---
 
 ### POST /carriers/reload

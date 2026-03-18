@@ -182,7 +182,7 @@ Carrier configuration for outbound routing.
 |-------|------|-------------|
 | `id` | uint | Primary key |
 | `name` | string | Unique carrier identifier |
-| `type` | string | Carrier type: `"telnyx"`, `"twilio"` |
+| `type` | string | Carrier type: `"telnyx"`, `"twilio"`, `"onevoiceplus"` |
 | `username` | string | Encrypted API credentials (e.g., API key, Account SID) |
 | `password` | string | Encrypted API credentials (e.g., API secret, Auth Token) |
 | `uuid` | string | Internal UUID for inbound webhook routing |

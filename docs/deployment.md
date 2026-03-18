@@ -8,7 +8,7 @@ Complete guide for deploying GOMSGGW.
 
 - Docker & Docker Compose
 - PostgreSQL (or use included container)
-- Carrier API credentials (Telnyx, Twilio, etc.)
+- Carrier API credentials (Telnyx, Twilio, OneVoicePlus/Telus, etc.)
 
 ---
 

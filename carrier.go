@@ -83,7 +83,8 @@ func (gateway *Gateway) loadCarriers() error {
 			handler = NewTwilioHandler(gateway, &carrier, carrier.Username, decryptedPassword)
 		case "telnyx":
 			handler = NewTelnyxHandler(gateway, &carrier, carrier.Username, decryptedPassword)
-		// Add cases for other carrier types here
+		case "onevoiceplus":
+			handler = NewOneVoicePlusHandler(gateway, &carrier, carrier.Username, decryptedPassword)
 		default:
 			return fmt.Errorf("unknown carrier type: %s", carrier.Type)
 		}
@@ -127,7 +128,8 @@ func (gateway *Gateway) addCarrier(carrier *Carrier) error {
 		handler = NewTwilioHandler(gateway, carrier, plaintextUsername, plaintextPassword)
 	case "telnyx":
 		handler = NewTelnyxHandler(gateway, carrier, plaintextUsername, plaintextPassword)
-	// Add cases for other carrier types here
+	case "onevoiceplus":
+		handler = NewOneVoicePlusHandler(gateway, carrier, plaintextUsername, plaintextPassword)
 	default:
 		return fmt.Errorf("unknown carrier type: %s", carrier.Type)
 	}

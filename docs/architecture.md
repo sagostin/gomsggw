@@ -54,6 +54,7 @@ graph TB
     subgraph "Carriers"
         TEL[Telnyx API]
         TWI[Twilio API]
+        OVP[OneVoicePlus API]
     end
     
     LC1 --> SMPP

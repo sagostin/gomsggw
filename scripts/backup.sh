@@ -11,6 +11,7 @@
 # - BACKUP_FTP_HOST, BACKUP_FTP_USER, BACKUP_FTP_PASSWORD, BACKUP_FTP_DIR
 # - BACKUP_LOCAL_DIR (default: /var/backups/gomsggw)
 # - BACKUP_RETENTION_DAYS (default: 7, set to 0 to disable cleanup)
+# - BACKUP_ENCRYPT_KEY (optional: encrypt .env backups with this key)
 #
 # Usage:
 #   ./backup.sh              # Run backup
@@ -103,21 +104,20 @@ backup_env_file() {
     fi
     
     local backup_file="$BACKUP_DIR/env_${TIMESTAMP}.enc"
+    local encrypt_key="${BACKUP_ENCRYPT_KEY:-}"
     
-    log_info "Backing up .env file (encrypted)"
-    
-    # Encrypt with openssl if ENCRYPTION_KEY is available
-    if [[ -n "${ENCRYPTION_KEY:-}" ]]; then
+    if [[ -n "$encrypt_key" ]]; then
+        log_info "Backing up .env file (AES-256-CBC encrypted)"
         openssl enc -aes-256-cbc -salt -pbkdf2 \
             -in "$ENV_FILE" \
             -out "$backup_file" \
-            -pass pass:"$ENCRYPTION_KEY"
-        log_success "Encrypted .env backup created: $backup_file"
+            -pass pass:"$encrypt_key"
+        log_success ".env backup created (encrypted): $backup_file"
     else
-        # Plain copy with restrictive permissions
+        log_info "Backing up .env file (plain copy)"
         cp "$ENV_FILE" "$backup_file"
         chmod 600 "$backup_file"
-        log_info ".env backup created (unencrypted): $backup_file"
+        log_success ".env backup created (unencrypted): $backup_file"
     fi
     
     echo "$backup_file"

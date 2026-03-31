@@ -26,7 +26,7 @@ BACKUP_RETENTION_DAYS=7                  # Auto-delete backups older than N days
 
 # Optional: Encrypt .env backups with AES-256-CBC
 # Leave empty for plain-text backups (default)
-# ENCRYPTION_KEY=your-32-character-key
+# BACKUP_ENCRYPT_KEY=your-32-character-key
 
 # Optional: Upload backups to FTP server
 # Leave empty to disable FTP upload
@@ -134,7 +134,7 @@ cp backups/env_20260315_020000.enc .env
 chmod 600 .env
 ```
 
-**If the backup was encrypted with `ENCRYPTION_KEY`:**
+**If the backup was encrypted with `BACKUP_ENCRYPT_KEY`:**
 
 ```bash
 openssl enc -aes-256-cbc -d -pbkdf2 \

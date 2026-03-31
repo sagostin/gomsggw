@@ -60,6 +60,7 @@ log_success() { echo "[SUCCESS] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
 
 backup_database() {
     local backup_file="$BACKUP_DIR/db_${PG_DATABASE}_${TIMESTAMP}.sql.gz"
+    local pg_dump_cmd=""
     
     if [[ -z "$PG_PASSWORD" ]]; then
         log_error "POSTGRES_PASSWORD is not set — cannot back up database"
@@ -70,7 +71,21 @@ backup_database() {
     
     export PGPASSWORD="$PG_PASSWORD"
     
-    if pg_dump -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" "$PG_DATABASE" | gzip > "$backup_file"; then
+    if command -v docker &>/dev/null; then
+        local container_name
+        container_name=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -E "^${PG_HOST}$|^postgres$|^gomsggw-db$" | head -1)
+        if [[ -n "$container_name" ]]; then
+            pg_dump_cmd="docker exec -i $container_name pg_dump -h localhost"
+        fi
+    fi
+    
+    if [[ -z "$pg_dump_cmd" ]]; then
+        pg_dump_cmd="pg_dump -h $PG_HOST"
+    else
+        log_info "Using Docker exec for pg_dump (container: $container_name)"
+    fi
+    
+    if $pg_dump_cmd -p "$PG_PORT" -U "$PG_USER" "$PG_DATABASE" | gzip > "$backup_file"; then
         unset PGPASSWORD
         log_success "Database backup created: $backup_file"
         echo "$backup_file"

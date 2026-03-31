@@ -204,7 +204,10 @@ main() {
     esac
     
     # Upload files
+    log_info "FTP config: HOST=$FTP_HOST USER=$FTP_USER PORT=$FTP_PORT DIR=$FTP_REMOTE_DIR"
+    log_info "Files to upload: ${#files_to_upload[@]}"
     for file in "${files_to_upload[@]}"; do
+        log_info "Checking file: '$file' exists=$([[ -f "$file" ]] && echo yes || echo no)"
         if [[ -n "$file" ]] && [[ -f "$file" ]]; then
             upload_to_ftp "$file"
         fi

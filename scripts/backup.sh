@@ -55,9 +55,9 @@ FTP_REMOTE_DIR="${BACKUP_FTP_DIR:-/gomsggw}"
 
 # === FUNCTIONS ===
 
-log_info() { echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
+log_info() { echo "[INFO] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2; }
 log_error() { echo "[ERROR] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2; }
-log_success() { echo "[SUCCESS] $(date '+%Y-%m-%d %H:%M:%S') $*"; }
+log_success() { echo "[SUCCESS] $(date '+%Y-%m-%d %H:%M:%S') $*" >&2; }
 
 backup_database() {
     local backup_file="$BACKUP_DIR/db_${PG_DATABASE}_${TIMESTAMP}.sql.gz"

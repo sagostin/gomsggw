@@ -125,25 +125,42 @@ backup_env_file() {
 
 upload_to_ftp() {
     local file="$1"
+    local filename="$(basename "$file")"
     
     if [[ -z "$FTP_HOST" ]] || [[ -z "$FTP_USER" ]]; then
         log_info "FTP not configured, skipping upload"
         return 0
     fi
     
-    log_info "Uploading to FTP: $FTP_HOST"
+    log_info "Uploading to FTP: $FTP_HOST:$FTP_PORT$FTP_REMOTE_DIR"
+    log_info "File: $filename"
     
     if command -v lftp &>/dev/null; then
+        log_info "Using lftp..."
         lftp -u "$FTP_USER","$FTP_PASSWORD" -p "$FTP_PORT" "$FTP_HOST" <<EOF
+debug 3
 mkdir -p $FTP_REMOTE_DIR
 cd $FTP_REMOTE_DIR
 put "$file"
 bye
 EOF
-        log_success "Uploaded: $(basename "$file")"
+        local lftp_exit=$?
+        if [[ $lftp_exit -eq 0 ]]; then
+            log_success "Uploaded: $filename"
+        else
+            log_error "lftp failed with exit code: $lftp_exit"
+            return 1
+        fi
     elif command -v curl &>/dev/null; then
-        curl -T "$file" "ftp://$FTP_USER:$FTP_PASSWORD@$FTP_HOST:$FTP_PORT$FTP_REMOTE_DIR/"
-        log_success "Uploaded: $(basename "$file")"
+        log_info "Using curl..."
+        curl -v -T "$file" "ftp://$FTP_USER:$FTP_PASSWORD@$FTP_HOST:$FTP_PORT$FTP_REMOTE_DIR/" 2>&1
+        local curl_exit=$?
+        if [[ $curl_exit -eq 0 ]]; then
+            log_success "Uploaded: $filename"
+        else
+            log_error "curl failed with exit code: $curl_exit"
+            return 1
+        fi
     else
         log_error "No FTP client available (lftp or curl required)"
         return 1

@@ -18,4 +18,3 @@ migration/
 # Ignore backup files
 *.backup
 *.bak
-Dockerfile.backup

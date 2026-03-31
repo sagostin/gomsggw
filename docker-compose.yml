@@ -42,28 +42,6 @@ services:
       - SERVER_ID=gomsggw1
       - POSTGRES_HOST=postgres
 
-  # Optional: Automated backup container
-  # Uncomment to enable scheduled backups
-  # backup:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.backup
-  #   container_name: gomsggw-backup
-  #   env_file:
-  #     - .env
-  #   environment:
-  #     - POSTGRES_HOST=postgres
-  #     - BACKUP_SCHEDULE=0 2 * * *
-  #   volumes:
-  #     - ./backups:/var/backups/gomsggw
-  #     - ./.env:/app/.env:ro
-  #   depends_on:
-  #     postgres:
-  #       condition: service_healthy
-  #   restart: always
-  #   networks:
-  #     - gomsggw-network
-
 networks:
   gomsggw-network:
     driver: bridge

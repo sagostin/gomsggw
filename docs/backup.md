@@ -23,7 +23,6 @@ Add the following to your `.env` file:
 # ----------------------
 BACKUP_LOCAL_DIR=/var/backups/gomsggw    # Where backups are stored
 BACKUP_RETENTION_DAYS=7                  # Auto-delete backups older than N days (0 = keep forever)
-BACKUP_SCHEDULE=0 2 * * *               # Cron schedule for automated backups
 
 # Optional: Encrypt .env backups with AES-256-CBC
 # Leave empty for plain-text backups (default)
@@ -62,63 +61,41 @@ Backup files are saved to `BACKUP_LOCAL_DIR` (default: `/var/backups/gomsggw`).
 
 ---
 
-## 3. Automating Backups (Docker)
+## 3. Automating Backups (Host Cron)
 
-The backup system runs as a dedicated Docker container using `dcron`. It will run backups on the schedule defined by `BACKUP_SCHEDULE`.
+The simplest approach is to run the backup script via the host's cron scheduler.
 
-### Step 1: Uncomment the backup service in `docker-compose.yml`
-
-```yaml
-backup:
-  build:
-    context: .
-    dockerfile: Dockerfile.backup
-  container_name: gomsggw-backup
-  env_file:
-    - .env
-  environment:
-    - POSTGRES_HOST=postgres
-    - BACKUP_SCHEDULE=0 2 * * *     # Daily at 2am (change as needed)
-  volumes:
-    - ./backups:/var/backups/gomsggw  # Backup files appear here on the host
-    - ./.env:/app/.env:ro             # Read-only access to .env for backup
-  depends_on:
-    postgres:
-      condition: service_healthy
-  restart: always
-  networks:
-    - gomsggw-network
-```
-
-### Step 2: Start the backup service
+### Step 1: Create the backup directory
 
 ```bash
-docker compose up -d backup
+sudo mkdir -p /var/backups/gomsggw
+sudo chown $USER:$USER /var/backups/gomsggw
 ```
 
-### Step 3: Verify it's running
+### Step 2: Add cron job
+
+Edit your crontab:
 
 ```bash
-# Check the container is up
-docker ps | grep gomsggw-backup
-
-# View the configured schedule
-docker exec gomsggw-backup crontab -l
-
-# Check logs
-docker exec gomsggw-backup cat /var/log/backup.log
+crontab -e
 ```
 
-### Trigger a manual backup inside Docker
+Add this line for daily backups at 2am:
 
-```bash
-docker exec gomsggw-backup /app/backup.sh
+```
+0 2 * * * /opt/gomsggw/scripts/backup.sh >> /var/log/backup.log 2>&1
+```
+
+To also upload to FTP, source the .env first:
+
+```
+0 2 * * * cd /opt/gomsggw && ./scripts/backup.sh >> /var/log/backup.log 2>&1
 ```
 
 ### Common Schedules
 
 | Schedule | Cron Expression |
-|----------|----------------|
+|----------|-----------------|
 | Daily at 2am | `0 2 * * *` |
 | Every 6 hours | `0 */6 * * *` |
 | Every 12 hours | `0 0,12 * * *` |
@@ -181,40 +158,23 @@ chmod 600 .env
 
 ## 5. FTP Offsite Uploads
 
-When `BACKUP_FTP_HOST` and `BACKUP_FTP_USER` are set, every backup file is automatically uploaded after creation. The container includes both `lftp` and `curl` as FTP clients.
+When `BACKUP_FTP_HOST` and `BACKUP_FTP_USER` are set, every backup file is automatically uploaded after creation.
 
 To test FTP connectivity:
 
 ```bash
-docker exec gomsggw-backup lftp -u backup_user,password -p 21 ftp.example.com -e "ls; bye"
+lftp -u backup_user,password -p 21 ftp.example.com -e "ls; bye"
 ```
 
 ---
 
-## 6. Architecture
-
-```
-┌──────────────────────────────────┐
-│  gomsggw-backup container        │
-│                                  │
-│  dcron ──► backup.sh             │
-│              ├─► pg_dump → .gz   │──► ./backups/ (host volume)
-│              ├─► cp .env → .enc  │──► ./backups/ (host volume)
-│              └─► upload_to_ftp() │──► FTP server (optional)
-│                                  │
-│  cleanup: delete files > N days  │
-└──────────────────────────────────┘
-```
-
----
-
-## 7. Troubleshooting
+## 6. Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
 | `pg_dump: connection refused` | Set `POSTGRES_HOST=postgres` (not `localhost`) in Docker |
 | `POSTGRES_PASSWORD is not set` | Ensure `.env` is loaded or vars are exported |
-| Backup files not appearing | Check volume mount: `./backups:/var/backups/gomsggw` |
+| Backup files not appearing | Check that the backup directory exists and is writable |
 | FTP upload fails | Verify credentials and that remote directory exists |
-| Cron not running | Check `docker exec gomsggw-backup crontab -l` |
+| Cron not running | Check `sudo systemctl status cron` or `crontab -l` |
 | Old backups not cleaned up | Verify `BACKUP_RETENTION_DAYS` is set and > 0 |

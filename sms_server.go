@@ -878,8 +878,9 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 		"AttemptSend",
 		logrus.DebugLevel,
 		map[string]interface{}{
-			"to":   msg.To,
-			"from": msg.From,
+			"to":    msg.To,
+			"from":  msg.From,
+			"logID": msg.LogID,
 		},
 	))
 
@@ -890,7 +891,8 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 			"NilSessionError",
 			logrus.ErrorLevel,
 			map[string]interface{}{
-				"to": msg.To,
+				"to":    msg.To,
+				"logID": msg.LogID,
 			},
 		))
 		return fmt.Errorf("session is nil for destination: %s", msg.To)
@@ -900,6 +902,21 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 	clientName := ""
 	if client != nil {
 		clientName = client.Username
+	}
+
+	if msg.From == "" || msg.To == "" {
+		lm.SendLog(lm.BuildLog(
+			"Server.SMPP.sendSMPP",
+			"EmptyDestinationError",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"from":     msg.From,
+				"username": username,
+				"client":   clientName,
+				"logID":    msg.LogID,
+			},
+		))
+		return fmt.Errorf("destination cannot be empty")
 	}
 
 	nextSeq := session.NextSequence
@@ -925,6 +942,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 						"segment":  i,
 						"username": username,
 						"client":   clientName,
+						"logID":    msg.LogID,
 					}, err,
 				))
 				return fmt.Errorf("GSM7 encode error: %w", err)
@@ -942,6 +960,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 						"segment":  i,
 						"username": username,
 						"client":   clientName,
+						"logID":    msg.LogID,
 					}, err,
 				))
 				return fmt.Errorf("encoding error: %w", err)
@@ -973,6 +992,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 				"num_parts": len(segments),
 				"username":  username,
 				"client":    clientName,
+				"logID":     msg.LogID,
 			},
 		))
 
@@ -997,6 +1017,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"segment":         segment,
 					"segmentIndex":    i + 1,
 					"totalSegments":   len(segments),
+					"logID":           msg.LogID,
 				}, err,
 			))
 			return fmt.Errorf("error sending SubmitSM: %v", err)
@@ -1025,6 +1046,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 						"segment":           segment,
 						"segmentIndex":      i + 1,
 						"totalSegments":     len(segments),
+						"logID":             msg.LogID,
 					},
 				))
 				return fmt.Errorf("non-OK response for sequence %d: %s (%d)", seq, respPDU.Header.CommandStatus.String(), respPDU.Header.CommandStatus)
@@ -1040,6 +1062,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"from":     msg.From,
 					"username": username,
 					"client":   clientName,
+					"logID":    msg.LogID,
 				},
 			))
 		case <-time.After(5 * time.Second):
@@ -1062,6 +1085,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"segment":         segment,
 					"segmentIndex":    i + 1,
 					"totalSegments":   len(segments),
+					"logID":           msg.LogID,
 				},
 			))
 			return fmt.Errorf("timeout waiting for ack for sequence %d", seq)

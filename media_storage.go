@@ -26,6 +26,39 @@ type MediaFile struct {
 	ExpiresAt   time.Time `gorm:"index" json:"expires_at"`
 }
 
+var mimeToExt = map[string]string{
+	"image/jpeg":      ".jpg",
+	"image/png":       ".png",
+	"image/gif":       ".gif",
+	"image/bmp":       ".bmp",
+	"image/webp":      ".webp",
+	"video/3gpp":      ".3gp",
+	"video/3gpp2":     ".3g2",
+	"video/mp4":       ".mp4",
+	"video/quicktime": ".mov",
+	"audio/mpeg":      ".mp3",
+	"audio/wav":       ".wav",
+	"audio/ogg":       ".ogg",
+	"audio/amr":       ".amr",
+	"application/pdf": ".pdf",
+}
+
+func getExtensionForContentType(contentType string) string {
+	if ext, ok := mimeToExt[contentType]; ok {
+		return ext
+	}
+	parts := strings.Split(contentType, "/")
+	if len(parts) == 2 && parts[1] != "" {
+		return "." + parts[1]
+	}
+	return ""
+}
+
+func getMediaUrlWithExtension(serverAddress, accessToken, contentType string) string {
+	ext := getExtensionForContentType(contentType)
+	return serverAddress + "/media/" + accessToken + ext
+}
+
 func (gateway *Gateway) uploadMediaGetUrls(mms *MsgQueueItem) ([]string, error) {
 	var mediaUrls []string
 
@@ -40,7 +73,7 @@ func (gateway *Gateway) uploadMediaGetUrls(mms *MsgQueueItem) ([]string, error) 
 				return mediaUrls, err
 			}
 
-			mediaUrls = append(mediaUrls, os.Getenv("SERVER_ADDRESS")+"/media/"+accessToken)
+			mediaUrls = append(mediaUrls, getMediaUrlWithExtension(os.Getenv("SERVER_ADDRESS"), accessToken, i.ContentType))
 		}
 		return mediaUrls, nil
 	}

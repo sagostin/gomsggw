@@ -1276,10 +1276,28 @@ func (gateway *Gateway) webInboundCarrier(ctx iris.Context) {
 }
 
 func (gateway *Gateway) webMediaFile(ctx iris.Context) {
-	// Extract the access token from the URL
-	accessToken := ctx.Params().Get("token")
+	pathToken := ctx.Params().Get("token")
+	if pathToken == "" {
+		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+			"WebServer.Media.Access",
+			"Missing access token",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"client_ip":  ctx.RemoteAddr(),
+				"user_agent": ctx.GetHeader("User-Agent"),
+				"success":    false,
+			},
+		))
+		ctx.StatusCode(http.StatusBadRequest)
+		ctx.WriteString("access token is required")
+		return
+	}
 
-	// Get client info for logging
+	accessToken := pathToken
+	if idx := strings.Index(pathToken, "."); idx != -1 {
+		accessToken = pathToken[:idx]
+	}
+
 	clientIP := ctx.Values().GetString("client_ip")
 	if clientIP == "" {
 		clientIP = ctx.RemoteAddr()

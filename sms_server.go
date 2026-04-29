@@ -947,6 +947,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 				))
 				return fmt.Errorf("GSM7 encode error: %w", err)
 			}
+			encoded = packSeptets(encoded)
 		} else {
 			encoded, err = encoder.Bytes([]byte(segment))
 			if err != nil {
@@ -985,14 +986,27 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 			"SendingSegment",
 			logrus.DebugLevel,
 			map[string]interface{}{
-				"to":        msg.To,
-				"from":      msg.From,
-				"segment":   i,
-				"sequence":  seq,
-				"num_parts": len(segments),
-				"username":  username,
-				"client":    clientName,
-				"logID":     msg.LogID,
+				"to":                    msg.To,
+				"from":                  msg.From,
+				"segment":               i,
+				"sequence":              seq,
+				"num_parts":             len(segments),
+				"username":              username,
+				"client":                clientName,
+				"logID":                 msg.LogID,
+				"encoding":              dataCodingName(bestCoding),
+				"dataCoding":            bestCoding,
+				"segmentCharLen":        len(segment),
+				"segmentEncodedByteLen": len(encoded),
+				"segmentEncodedHex":     fmt.Sprintf("%x", encoded),
+				"totalSegments":         len(segments),
+				"udhPresent":            deliverSM.Message.UDHeader != nil,
+				"udhLen": func() int {
+					if deliverSM.Message.UDHeader != nil {
+						return deliverSM.Message.UDHeader.Len()
+					}
+					return 0
+				}(),
 			},
 		))
 
@@ -1018,6 +1032,14 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"segmentIndex":    i + 1,
 					"totalSegments":   len(segments),
 					"logID":           msg.LogID,
+					"segmentCharLen":  len(segment),
+					"udhPresent":      deliverSM.Message.UDHeader != nil,
+					"udhLen": func() int {
+						if deliverSM.Message.UDHeader != nil {
+							return deliverSM.Message.UDHeader.Len()
+						}
+						return 0
+					}(),
 				}, err,
 			))
 			return fmt.Errorf("error sending SubmitSM: %v", err)
@@ -1047,6 +1069,14 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 						"segmentIndex":      i + 1,
 						"totalSegments":     len(segments),
 						"logID":             msg.LogID,
+						"segmentCharLen":    len(segment),
+						"udhPresent":        deliverSM.Message.UDHeader != nil,
+						"udhLen": func() int {
+							if deliverSM.Message.UDHeader != nil {
+								return deliverSM.Message.UDHeader.Len()
+							}
+							return 0
+						}(),
 					},
 				))
 				return fmt.Errorf("non-OK response for sequence %d: %s (%d)", seq, respPDU.Header.CommandStatus.String(), respPDU.Header.CommandStatus)
@@ -1086,6 +1116,14 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 					"segmentIndex":    i + 1,
 					"totalSegments":   len(segments),
 					"logID":           msg.LogID,
+					"segmentCharLen":  len(segment),
+					"udhPresent":      deliverSM.Message.UDHeader != nil,
+					"udhLen": func() int {
+						if deliverSM.Message.UDHeader != nil {
+							return deliverSM.Message.UDHeader.Len()
+						}
+						return 0
+					}(),
 				},
 			))
 			return fmt.Errorf("timeout waiting for ack for sequence %d", seq)

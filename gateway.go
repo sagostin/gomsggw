@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"gorm.io/driver/postgres"
@@ -51,6 +54,10 @@ type Gateway struct {
 	EncryptionKey string // PSK for encryption/decryption
 	// AckTracker for carrier acknowledgments.
 	ConvoManager *ConvoManager
+	// CommandQueue buffers events when cloud is unreachable.
+	CommandQueue *CommandQueue
+	// CloudStatus tracks whether the cloud connection is available.
+	CloudStatus CloudStatus
 }
 
 type MsgRecord struct {
@@ -224,6 +231,11 @@ func NewGateway() (*Gateway, error) {
 		return nil, fmt.Errorf("failed to load API keys: %v", err)
 	}
 
+	// Initialize the command queue for offline buffering
+	if err := gateway.initCommandQueue(); err != nil {
+		return nil, fmt.Errorf("failed to initialize command queue: %v", err)
+	}
+
 	return gateway, nil
 }
 
@@ -346,3 +358,104 @@ func (gateway *Gateway) resolveFailoverSession(primaryClient *Client) (*Client, 
 
 	return nil, fmt.Errorf("all failover clients offline for %s", primaryClient.Username)
 }
+
+// initCommandQueue initializes the SQLite-backed command queue.
+func (gateway *Gateway) initCommandQueue() error {
+	dbPath := os.Getenv("COMMAND_QUEUE_DB")
+	if dbPath == "" {
+		dbPath = "/var/lib/gomsggw/command_queue.db"
+	}
+
+	q, err := NewCommandQueue(dbPath)
+	if err != nil {
+		return err
+	}
+
+	// Apply max size from env (default 100MB)
+	if maxSize := os.Getenv("COMMAND_QUEUE_MAX_SIZE_MB"); maxSize != "" {
+		if mb, err := strconv.ParseInt(maxSize, 10, 64); err == nil {
+			q.SetMaxSize(mb * 1024 * 1024)
+		}
+	}
+
+	gateway.CommandQueue = q
+	gateway.CloudStatus = CloudStatusOnline
+	return nil
+}
+
+// SetCloudStatus updates the cloud connection status and triggers a flush if coming back online.
+func (gateway *Gateway) SetCloudStatus(status CloudStatus) {
+	if gateway.CloudStatus == CloudStatusOffline && status == CloudStatusOnline {
+		// Cloud reconnected — trigger queue flush
+		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+			"CommandQueue", "CloudReconnected", logrus.InfoLevel,
+			map[string]interface{}{}, nil,
+		))
+		go gateway.flushCommandQueue()
+	}
+	gateway.CloudStatus = status
+}
+
+// IsCloudOnline returns true if the cloud connection is available.
+func (gateway *Gateway) IsCloudOnline() bool {
+	return gateway.CloudStatus == CloudStatusOnline
+}
+
+// flushCommandQueue drains the command queue by sending items to the router in order.
+func (gateway *Gateway) flushCommandQueue() {
+	ctx := context.Background()
+	items, err := gateway.CommandQueue.FlushAll(ctx)
+	if err != nil {
+		gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+			"CommandQueue", "FlushError", logrus.ErrorLevel,
+			map[string]interface{}{"error": err.Error()}, err,
+		))
+		return
+	}
+
+	gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+		"CommandQueue", "FlushStarted", logrus.InfoLevel,
+		map[string]interface{}{"item_count": len(items)}, nil,
+	))
+
+	for _, item := range items {
+		var msg MsgQueueItem
+		if err := json.Unmarshal([]byte(item.Payload), &msg); err != nil {
+			gateway.CommandQueue.MarkFailed(ctx, item.ID, item.RetryCount+1)
+			continue
+		}
+
+		// Route the message — use CarrierMsgChan for outbound carrier sends
+		gateway.Router.CarrierMsgChan <- msg
+
+		// Wait briefly between items to avoid overwhelming the router
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// EnqueueEvent persists a MsgQueueItem to the command queue when cloud is offline.
+// eventType is "sms" or "mms". Returns the queued event ID and any error.
+func (gateway *Gateway) EnqueueEvent(ctx context.Context, item *MsgQueueItem, eventType string) (string, error) {
+	if gateway.CommandQueue == nil {
+		return "", fmt.Errorf("command queue not initialized")
+	}
+	return gateway.CommandQueue.Enqueue(ctx, item, eventType)
+}
+
+// SendEventToCarrier attempts to send a message to a carrier. If the cloud is offline,
+// the message is persisted to the command queue and returns immediately.
+// This implements the offline-first strategy: queue locally, ACK to PMS, resume on reconnect.
+func (gateway *Gateway) SendEventToCarrier(ctx context.Context, item *MsgQueueItem, eventType string) error {
+	if gateway.CloudStatus != CloudStatusOnline {
+		// Cloud offline: persist to SQLite queue and return success
+		// PMS receives ACK immediately; message will be delivered on reconnect
+		_, err := gateway.EnqueueEvent(ctx, item, eventType)
+		return err
+	}
+
+	// Cloud online: process normally through the router
+	// Enqueue to carrier channel for processing
+	gateway.Router.CarrierMsgChan <- *item
+	return nil
+}
+

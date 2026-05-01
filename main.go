@@ -182,7 +182,6 @@ func main() {
 	SetupStatsRoutes(app, gateway)
 	SetupAPIKeyRoutes(app, gateway)
 	SetupBatchRoutes(app, gateway)
-	SetupCommandQueueRoutes(app, gateway)
 	app.Get("/health", func(ctx iris.Context) {
 		ctx.StatusCode(200)
 		return

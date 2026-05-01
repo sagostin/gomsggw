@@ -289,65 +289,6 @@ func SetupCarrierRoutes(app *iris.Application, gateway *Gateway) {
 	}
 }
 
-// SetupCommandQueueRoutes sets up HTTP routes for command queue management.
-func SetupCommandQueueRoutes(app *iris.Application, gateway *Gateway) {
-	queue := app.Party("/queue", gateway.basicAuthMiddleware)
-	{
-		// Get queue status and metrics
-		queue.Get("/", func(ctx iris.Context) {
-			if gateway.CommandQueue == nil {
-				ctx.StatusCode(iris.StatusServiceUnavailable)
-				ctx.JSON(iris.Map{"error": "command queue not initialized"})
-				return
-			}
-			m := gateway.CommandQueue.Metrics()
-			ctx.JSON(iris.Map{
-				"cloud_status": gateway.CloudStatus.String(),
-				"depth_bytes":  m.DepthBytes,
-				"depth_items":  m.DepthItems,
-				"flush_count":  m.FlushCount,
-				"max_size_mb":  m.MaxSizeMB,
-			})
-		})
-
-		// Set cloud status (online/offline) — used by external health checks
-		queue.Post("/status", func(ctx iris.Context) {
-			var req struct {
-				Status string `json:"status"` // "online" or "offline"
-			}
-			if err := ctx.ReadJSON(&req); err != nil {
-				ctx.StatusCode(iris.StatusBadRequest)
-				ctx.JSON(iris.Map{"error": "invalid request"})
-				return
-			}
-			var newStatus CloudStatus
-			switch strings.ToLower(req.Status) {
-			case "online":
-				newStatus = CloudStatusOnline
-			case "offline":
-				newStatus = CloudStatusOffline
-			default:
-				ctx.StatusCode(iris.StatusBadRequest)
-				ctx.JSON(iris.Map{"error": "status must be 'online' or 'offline'"})
-				return
-			}
-			gateway.SetCloudStatus(newStatus)
-			ctx.JSON(iris.Map{"status": gateway.CloudStatus.String()})
-		})
-
-		// Manually trigger a queue flush (admin use)
-		queue.Post("/flush", func(ctx iris.Context) {
-			if !gateway.IsCloudOnline() {
-				ctx.StatusCode(iris.StatusConflict)
-				ctx.JSON(iris.Map{"error": "cloud is offline, cannot flush"})
-				return
-			}
-			go gateway.flushCommandQueue()
-			ctx.JSON(iris.Map{"status": "flush started"})
-		})
-	}
-}
-
 // indexOf finds the index of the first occurrence of sep in s
 func indexOf(s string, sep byte) int {
 	for i := 0; i < len(s); i++ {

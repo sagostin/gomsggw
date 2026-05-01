@@ -30,12 +30,15 @@ type MetricExporter struct {
 // NewMetricExporter initializes the MetricExporter with descriptions for each required metric.
 func NewMetricExporter(id string, gateway *Gateway) *MetricExporter {
 	metricDesc := map[string]*prometheus.Desc{
-		"connected_clients": prometheus.NewDesc("connected_clients", "Number of connected clients", []string{"protocol"}, nil),
-		"total_clients":     prometheus.NewDesc("total_clients", "Total number of clients", []string{"protocol"}, nil),
-		"message_retries":   prometheus.NewDesc("message_retries", "Count of message retries", []string{"protocol"}, nil),
-		"messages_sent":     prometheus.NewDesc("messages_sent", "Messages sent in the last minute", []string{"protocol", "direction"}, nil),
-		"server_status":     prometheus.NewDesc("server_status", "General OK status of the server", []string{"service"}, nil),
-		"client_stats":      prometheus.NewDesc("client_stats", "Total clients and numbers", []string{"protocol", "stat"}, nil),
+		"connected_clients":   prometheus.NewDesc("connected_clients", "Number of connected clients", []string{"protocol"}, nil),
+		"total_clients":       prometheus.NewDesc("total_clients", "Total number of clients", []string{"protocol"}, nil),
+		"message_retries":     prometheus.NewDesc("message_retries", "Count of message retries", []string{"protocol"}, nil),
+		"messages_sent":       prometheus.NewDesc("messages_sent", "Messages sent in the last minute", []string{"protocol", "direction"}, nil),
+		"server_status":       prometheus.NewDesc("server_status", "General OK status of the server", []string{"service"}, nil),
+		"client_stats":        prometheus.NewDesc("client_stats", "Total clients and numbers", []string{"protocol", "stat"}, nil),
+		"queue_depth_bytes":   prometheus.NewDesc("command_queue_depth_bytes", "Command queue size in bytes", nil, nil),
+		"queue_depth_items":   prometheus.NewDesc("command_queue_depth_items", "Command queue item count", nil, nil),
+		"queue_flush_total":   prometheus.NewDesc("command_queue_flush_total", "Total items flushed from queue", nil, nil),
 	}
 
 	return &MetricExporter{
@@ -58,6 +61,18 @@ func (e *MetricExporter) Collect(ch chan<- prometheus.Metric) {
 	e.collectClientStats(ch)
 	e.collectMessageMetrics(ch)
 	e.collectServerStatus(ch)
+	e.collectCommandQueueMetrics(ch)
+}
+
+// collectCommandQueueMetrics collects the command queue depth and flush metrics.
+func (e *MetricExporter) collectCommandQueueMetrics(ch chan<- prometheus.Metric) {
+	if e.gateway.CommandQueue == nil {
+		return
+	}
+	m := e.gateway.CommandQueue.Metrics()
+	ch <- prometheus.MustNewConstMetric(e.desc["queue_depth_bytes"], prometheus.GaugeValue, float64(m.DepthBytes))
+	ch <- prometheus.MustNewConstMetric(e.desc["queue_depth_items"], prometheus.GaugeValue, float64(m.DepthItems))
+	ch <- prometheus.MustNewConstMetric(e.desc["queue_flush_total"], prometheus.CounterValue, float64(m.FlushCount))
 }
 
 // collectConnectedClients collects the count of connected clients for both SMPP and MM4.

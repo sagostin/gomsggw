@@ -21,6 +21,7 @@ require (
 	golang.org/x/text v0.19.0
 	gorm.io/driver/postgres v1.5.9
 	gorm.io/gorm v1.25.12
+	modernc.org/sqlite v1.35.2
 )
 
 require (

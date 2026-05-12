@@ -124,9 +124,10 @@ func (cm *ConvoManager) SetExpectedAck(convoID, ackID string, router *Router, ti
 	cq.ackTimer = time.NewTimer(timeout)
 	cq.mu.Unlock()
 
-	// Start a goroutine that waits on the timer.
+	// Capture timer reference before releasing lock to avoid race with HandleAck.
+	timer := cq.ackTimer
 	go func() {
-		<-cq.ackTimer.C
+		<-timer.C
 		router.gateway.LogManager.SendLog(
 			router.gateway.LogManager.BuildLog("ConvoManager", "Ack timeout", logrus.WarnLevel,
 				map[string]interface{}{"convo": convoID, "expectedAck": ackID}))

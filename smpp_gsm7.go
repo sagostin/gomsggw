@@ -32,7 +32,7 @@ func encodeUnpackedGSM7(input string) ([]byte, error) {
 	return result, nil
 }
 
-func packSeptets(septets []byte) []byte {
+/*func packSeptets(septets []byte) []byte {
 	var packed []byte
 	var carry uint8 = 0
 	var carryBits uint = 0
@@ -52,7 +52,7 @@ func packSeptets(septets []byte) []byte {
 		packed = append(packed, carry)
 	}
 	return packed
-}
+}*/
 
 // --- Reverse Mapping Tables ---
 // gsm7ReverseMap maps GSM‑7 default table codes (0x00–0x7F) to runes.
@@ -262,7 +262,7 @@ func unpackSeptets(packed []byte) ([]byte, error) {
 	return septets, nil
 }
 
-// decodePackedGSM7 decodes a GSM‑7 "packed" byte slice into a string.
+/*// decodePackedGSM7 decodes a GSM‑7 "packed" byte slice into a string.
 // It first unpacks the septets from the packed format, then decodes them.
 func decodePackedGSM7(input []byte) (string, error) {
 	septets, err := unpackSeptets(input)
@@ -271,3 +271,4 @@ func decodePackedGSM7(input []byte) (string, error) {
 	}
 	return decodeUnpackedGSM7(septets)
 }
+*/

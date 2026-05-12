@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/hex"
@@ -587,31 +588,76 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	var decodeErr error
 	encoding := coding.GSM7BitCoding
 
-	if submitSM.Message.DataCoding != 0 {
-		if submitSM.Message.DataCoding == 8 { // UTF-16
-			encoding = coding.UCS2Coding
-		} else if submitSM.Message.DataCoding == 1 { // ASCII
-			encoding = coding.ASCIICoding
-		}
+	switch submitSM.Message.DataCoding {
+	case 0:
+		decodedMsg, decodeErr = decodeUnpackedGSM7(submitSM.Message.Message)
+	case 1:
+		encoding = coding.ASCIICoding
 		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
-	} else {
+	case 8:
+		encoding = coding.UCS2Coding
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	case 3:
+		encoding = coding.Latin1Coding
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	case 5:
+		encoding = coding.ShiftJISCoding
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	case 6:
+		encoding = coding.CyrillicCoding
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	case 7:
+		encoding = coding.HebrewCoding
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	case 10:
+		encoding = coding.ISO2022JPCoding
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	case 13:
+		encoding = coding.EUCJPCoding
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	case 14:
+		encoding = coding.EUCKRCoding
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+	default:
 		decodedMsg, decodeErr = decodeUnpackedGSM7(submitSM.Message.Message)
 	}
 
 	lm.SendLog(lm.BuildLog(
 		"Server.SMPP.HandleSubmitSM",
-		"EncodingDebug",
+		"InboundEncodingDebug",
 		logrus.DebugLevel,
 		map[string]interface{}{
 			"logID":            transId,
 			"client":           client.Username,
+			"username":         username,
+			"ip":               session.Parent.RemoteAddr().String(),
+			"from":             submitSM.SourceAddr.String(),
+			"to":               submitSM.DestAddr.String(),
 			"rawMsgBytes":      hex.EncodeToString(submitSM.Message.Message),
 			"rawMsgLen":        len(submitSM.Message.Message),
 			"dataCoding":       submitSM.Message.DataCoding,
 			"dataCodingBinary": fmt.Sprintf("%08b", byte(submitSM.Message.DataCoding)),
-			"encoding":         encoding.GoString(),
+			"encoding":         dataCodingName(encoding),
 			"decodedMsgLen":    len(decodedMsg),
 			"decodeErr":        decodeErr,
+			"udhPresent":       submitSM.Message.UDHeader != nil,
+			"udhLen": func() int {
+				if submitSM.Message.UDHeader != nil {
+					return submitSM.Message.UDHeader.Len()
+				}
+				return 0
+			}(),
+			"udhHex": func() string {
+				if submitSM.Message.UDHeader == nil {
+					return ""
+				}
+				var buf bytes.Buffer
+				submitSM.Message.UDHeader.WriteTo(&buf)
+				return hex.EncodeToString(buf.Bytes())
+			}(),
+			"udhIndicator": submitSM.ESMClass.UDHIndicator,
+			"esmClass":     submitSM.ESMClass.String(),
+			"sequence":     submitSM.Header.Sequence,
 		},
 	))
 

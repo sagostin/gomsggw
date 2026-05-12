@@ -966,7 +966,7 @@ func (s *SMPPServer) sendSMPP(msg MsgQueueItem, session *smpp.Session) error {
 				))
 				return fmt.Errorf("GSM7 encode error: %w", err)
 			}
-			encoded = packSeptets(encoded)
+			//encoded = packSeptets(encoded)
 		} else {
 			encoded, err = encoder.Bytes([]byte(segment))
 			if err != nil {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -583,6 +584,7 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 	}
 
 	var decodedMsg string
+	var decodeErr error
 	encoding := coding.GSM7BitCoding
 
 	if submitSM.Message.DataCoding != 0 {
@@ -591,10 +593,27 @@ func (h *SimpleHandler) handleSubmitSM(session *smpp.Session, submitSM *pdu.Subm
 		} else if submitSM.Message.DataCoding == 1 { // ASCII
 			encoding = coding.ASCIICoding
 		}
-		decodedMsg, _ = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
+		decodedMsg, decodeErr = encoding.Encoding().NewDecoder().String(string(submitSM.Message.Message))
 	} else {
-		decodedMsg, _ = decodeUnpackedGSM7(submitSM.Message.Message)
+		decodedMsg, decodeErr = decodeUnpackedGSM7(submitSM.Message.Message)
 	}
+
+	lm.SendLog(lm.BuildLog(
+		"Server.SMPP.HandleSubmitSM",
+		"EncodingDebug",
+		logrus.DebugLevel,
+		map[string]interface{}{
+			"logID":            transId,
+			"client":           client.Username,
+			"rawMsgBytes":      hex.EncodeToString(submitSM.Message.Message),
+			"rawMsgLen":        len(submitSM.Message.Message),
+			"dataCoding":       submitSM.Message.DataCoding,
+			"dataCodingBinary": fmt.Sprintf("%08b", byte(submitSM.Message.DataCoding)),
+			"encoding":         encoding.GoString(),
+			"decodedMsgLen":    len(decodedMsg),
+			"decodeErr":        decodeErr,
+		},
+	))
 
 	if decodedMsg == "" {
 		lm.SendLog(lm.BuildLog(

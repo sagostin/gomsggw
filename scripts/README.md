@@ -6,8 +6,10 @@ Interactive CLI tool for managing carriers, clients, and phone numbers.
 
 ```bash
 cd scripts
-pip install requests
+pip install -r requirements.txt
 ```
+
+(The `requirements.txt` file contains only `requests`; you can also just run `pip install requests`.)
 
 ## Configuration
 
@@ -25,7 +27,7 @@ python main.py
 ## Menu
 
 ```
-� Carriers:
+📡 Carriers:
   1) List carriers
   2) Add carrier
 
@@ -34,14 +36,31 @@ python main.py
   4) Show client details
   5) Create client
   6) Update client settings
+  7) Change client password
 
 📞 Numbers:
-  7) List client numbers
-  8) Add numbers to client
+  8) List client numbers
+  9) Add numbers to client
+
+🔑 API Keys:
+  a) List API keys for client
+  b) Create API key for client
+  c) Revoke API key
+
+📦 Batch Jobs:
+  d) List batch jobs for client
+  e) Show batch job detail
+
+🔄 Failover:
+  f) List failovers for client
+  g) Add failover client
+  h) Remove failover
+  i) SMPP session status
 
 ⚙️ Admin:
-  9) Reload all
-  q) Quick flow
+  r) Reload all (clients + carriers)
+  q) Quick flow: create client → add numbers → reload
+  0) Exit
 ```
 
 ## Examples

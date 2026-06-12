@@ -314,10 +314,12 @@ curl http://gateway:3000/messages/usage \
 
 ### Limit Hierarchy
 
-1. **Number-level limit** - Checked first, if configured
-2. **Client-level limit** - Checked second, aggregates all numbers
-3. **Periods checked** - Burst (per-minute), Daily, Monthly
-4. **Direction** - Outbound by default; set `limit_both: true` to count both
+1. **Number-level limit** (`NumberSettings`) — checked first, if configured
+2. **Client-level limit** (`ClientSettings`) — checked second, aggregates all numbers
+3. **Periods checked** — Burst (per-minute), Daily, Monthly
+4. **Direction** — Outbound by default; set `limit_both: true` to count both
+
+See [Usage Limits](./usage_limits.md) for the full limit resolution flow, timezone handling, and per-period enforcement points.
 
 ---
 

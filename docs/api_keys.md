@@ -133,7 +133,19 @@ Scopes are comma-separated in the `scopes` field: `"send,batch,usage"`.
 | `active` | Set to `false` on revoke |
 | `expires_at` | Optional expiration timestamp |
 | `last_used_at` | Updated on each successful authentication |
-| `key_prefix` | First 16 chars for identification in logs |
+| `key_prefix` | First 16 chars of the raw key (`gw_live_` + 8 hex chars) — safe to log for identification without leaking the full secret |
+
+### `key_prefix` Example
+
+A raw key returned on creation looks like:
+
+```
+gw_live_a1b2c3d4e5f67890fedcba9876543210ffeeddccbbaa99887766554433221100
+└──┬──┘ └──────┬──────┘ └─────────────────────┬────────────────────┘
+  prefix      prefix (8)                    remaining 56 hex chars
+```
+
+The `key_prefix` field stores `gw_live_a1b2c3d4` (16 chars total: the literal `gw_live_` plus the first 8 hex chars of the random part). It's long enough to be unique for log correlation but short enough that it cannot be used to authenticate.
 
 ---
 

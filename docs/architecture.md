@@ -143,15 +143,15 @@ The brain of the system. Runs a continuous `UnifiedRouter` loop.
 - Apply routing rules (internal vs external)
 - Enforce usage limits
 - Dispatch to appropriate egress
+- Trigger SMPP failover when the primary client session is offline
 
 **Key Data Structures:**
 ```go
 type Router struct {
-    gateway          *Gateway
-    Routes           []*Route
-    ClientMsgChan    chan MsgQueueItem  // From clients
-    CarrierMsgChan   chan MsgQueueItem  // From carriers
-    MessageAckStatus chan MsgQueueItem  // Delivery confirmations
+    gateway        *Gateway
+    Routes         []*Route
+    ClientMsgChan  chan MsgQueueItem  // From clients
+    CarrierMsgChan chan MsgQueueItem  // From carriers
 }
 ```
 
@@ -276,14 +276,62 @@ For detailed transcoding documentation, see [Transcoding](./transcoding.md).
 
 ### ConvoManager (`convo.go`)
 
-Ensures message ordering for SMPP sessions.
+Coordinates SMPP message ordering and delivery-receipt correlation.
 
-**Purpose**: Manage in-flight windows to prevent message overtaking on the wire.
+**Purpose**: Prevent in-flight messages from overtaking each other on a single SMPP session, and track carrier acknowledgements.
 
 **Mechanism:**
-- Track pending `submit_sm` operations
-- Ensure responses correlate to correct requests
+- Track pending `submit_sm` operations by conversation ID
+- Ensure responses correlate to the correct request
 - Maintain sequence numbers
+- `HandleCarrierAck` is invoked from the Telnyx inbound webhook (`message.sent` events) to clear pending entries
+
+---
+
+### Failover Subsystem (`clients.go`, `gateway.go`)
+
+Allows an admin to declare that a legacy client's outbound traffic should be re-routed to a different client when the primary's SMPP session is offline. The router calls `resolveFailoverSession` whenever it needs an active session for a client.
+
+**Data model** (`ClientFailover`):
+- `primary_client_id`, `fallback_client_id`, `priority` (ascending), `enabled`
+
+**Resolution flow:**
+1. Router looks up the primary client's session
+2. If offline, walk the failover list in `priority` order
+3. Return the first fallback client with an active SMPP session
+4. Log the failover activation; if all failovers are offline, the message is queued for retry
+
+**Admin endpoints**: `/clients/{id}/failovers[/{failover_id}]` (CRUD) and `/clients/{id}/smpp-status` for live diagnostics.
+
+---
+
+### API Key Subsystem (`api_keys.go`)
+
+Tenant-scoped API keys for external applications. Keys are:
+- Generated as `gw_live_` + 64 hex chars (32 random bytes)
+- **SHA-256 hashed** before storage — the raw key is only returned on creation
+- Cached in an in-memory map for O(1) lookup on every request
+- Optionally scoped to specific client numbers and permission scopes (`send`, `batch`, `usage`)
+
+**Auth path**: A request with `Authorization: Bearer gw_live_...` is hashed, looked up in the in-memory map, then validated for scope and rate limit. Revoked and expired keys are rejected immediately.
+
+See [API Keys](./api_keys.md) for setup details.
+
+---
+
+### Batch Subsystem (`batch.go`, `batch_routes.go`)
+
+Asynchronous high-volume message delivery with queue-on-limit semantics.
+
+**Lifecycle** (`BatchJob` + `BatchMessageItem`):
+1. `POST /messages/batch` accepts a JSON array or CSV with template variables
+2. Job is persisted and queued; an initial pass sends messages in order, honouring `throttle_per_second`
+3. Messages that hit a rate limit are marked `queued`, not `failed`
+4. A retry loop re-checks queued messages every 30 seconds against current limits
+5. After `max_retry_mins` (default 60), remaining queued messages are marked `failed`
+6. Final `webhook_url` callback fires when the job completes; individual messages can be cancelled by UUID mid-flight
+
+See [Batch Sending](./batch_sending.md) for full details.
 
 ---
 

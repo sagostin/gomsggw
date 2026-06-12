@@ -132,31 +132,32 @@ ffmpeg -i input.mov \
 
 ---
 
-## Web Client Transcoding Control
+## Web Client Message Splitting
 
-Web clients can disable transcoding via `WebClientSettings`:
+Web clients can control whether long messages are split into multiple SMS segments via `ClientSettings`:
 
 ```json
 {
-  "disable_transcoding": true
+  "disable_message_splitting": true
 }
 ```
 
-### When Transcoding is Disabled
+### What `disable_message_splitting` Does
 
-- Media files are passed through without modification
-- Original quality is preserved
-- **No size validation is performed**
+By default, messages longer than 160 characters (GSM-7) or 70 characters (UCS-2) are split into multiple SMS segments with UDH headers so the receiving handset can reassemble them.
 
-> [!WARNING]
-> Disabling transcoding may cause delivery failures if media exceeds carrier limits. Use only when the recipient can handle arbitrary media sizes.
+When `disable_message_splitting: true`:
 
-### When Transcoding is Required
+- The full message body is delivered to the destination in a single payload (web→web only)
+- The original segment count is preserved in the message record
+- This only applies to **web-to-web** delivery; if the destination is a legacy (SMPP/MM4) client or a carrier, splitting still happens to comply with protocol limits
 
-Even if disabled for the web client, transcoding is **always applied** when:
-- The destination is a Legacy (SMPP/MM4) client
-- The carrier explicitly requires transcoding
-- The media type is not supported by the carrier
+> [!NOTE]
+> This setting affects message segmentation, not media transcoding. MMS media is always processed through the transcoding pipeline described above.
+
+### When to Disable Splitting
+
+Useful when the receiving web application prefers to handle a single long string rather than reassemble UDH-segmented parts. Most modern backends already reassemble automatically, so leaving splitting enabled (the default) is usually correct.
 
 ---
 

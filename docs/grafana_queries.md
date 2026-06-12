@@ -2,7 +2,7 @@
 
 This document provides a comprehensive set of SQL queries for building Grafana dashboards to monitor GOMSGGW messaging gateway usage and performance.
 
-> **Database**: These queries assume a PostgreSQL or MySQL backend (adjust syntax as needed for your database).
+> **Database**: PostgreSQL (the only backend supported by the gateway).
 > **Table**: `msg_record_db_items`
 
 ---

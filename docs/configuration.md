@@ -90,6 +90,16 @@ PostgreSQL SSL mode. Options: `disable`, `require`, `verify-ca`, `verify-full`.
 POSTGRES_SSLMODE=require
 ```
 
+### POSTGRES_TIMEZONE
+
+**Default**: `America/Vancouver`
+
+IANA timezone applied to the GORM DSN. Used so that `TIMESTAMPTZ` columns and the limit-period calculations line up with the gateway's intended local time. Set this to match `TZ` on the host if you change the OS timezone.
+
+```bash
+POSTGRES_TIMEZONE=America/Vancouver
+```
+
 ---
 
 ## Web Server
@@ -114,6 +124,40 @@ API key for admin endpoint authentication.
 API_KEY=your-admin-api-key
 ```
 
+### TRUSTED_PROXIES
+
+**Default**: `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7`
+
+Comma-separated list of CIDR ranges whose `X-Forwarded-For` headers are trusted for resolving the client IP of incoming requests. Override this if you front the gateway with a proxy on a non-private network.
+
+```bash
+TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```
+
+---
+
+## Server Identity
+
+### SERVER_ID
+
+**Default**: (empty)
+
+Identifier embedded in log lines and message records (`server_id` column) so multi-instance deployments can attribute traffic to a specific node. If left blank the field is recorded as an empty string.
+
+```bash
+SERVER_ID=gateway-east-1
+```
+
+### SERVER_ADDRESS
+
+**Default**: (empty)
+
+Public base URL of the gateway, used to build absolute `/media/{token}` URLs that get sent to carriers for outbound MMS. If unset, carriers receive relative URLs and media delivery will fail.
+
+```bash
+SERVER_ADDRESS=https://sms.example.com
+```
+
 ---
 
 ## SMPP Server
@@ -130,7 +174,8 @@ SMPP_LISTEN=0.0.0.0:9550
 
 ### SMPP_TLS_ENABLED
 
-**Default**: `false`
+**Default**: `false`  
+**Status**: ⚠️ Not yet implemented — the Go code does not currently read this variable. The SMPP server listens in plaintext on `SMPP_LISTEN` only. Documented here for forward compatibility.
 
 Enable TLS for SMPP connections.
 
@@ -140,7 +185,8 @@ SMPP_TLS_ENABLED=true
 
 ### SMPP_TLS_CERT
 
-**Required if TLS enabled**
+**Required if TLS enabled**  
+**Status**: ⚠️ Not yet implemented (see `SMPP_TLS_ENABLED`).
 
 Path to TLS certificate file.
 
@@ -150,7 +196,8 @@ SMPP_TLS_CERT=/etc/ssl/certs/smpp.crt
 
 ### SMPP_TLS_KEY
 
-**Required if TLS enabled**
+**Required if TLS enabled**  
+**Status**: ⚠️ Not yet implemented (see `SMPP_TLS_ENABLED`).
 
 Path to TLS private key file.
 
@@ -174,7 +221,8 @@ MM4_LISTEN=0.0.0.0:2566
 
 ### MM4_DOMAIN
 
-**Default**: System hostname
+**Default**: System hostname  
+**Status**: ⚠️ Not yet implemented — the Go code does not currently read this variable. The MM4 server uses `MM4_ORIGINATOR_SYSTEM` and `MM4_MSG_ID_HOST` (see [Deployment](deployment.md)) for its SMTP greetings and message IDs.
 
 Domain name for MM4 SMTP greetings.
 
@@ -222,7 +270,8 @@ LOG_LEVEL=debug
 
 ### LOG_FORMAT
 
-**Default**: `json`
+**Default**: `json`  
+**Status**: ⚠️ Not yet implemented — the Go code only reads `LOG_LEVEL` (debug/info/warn/error) and emits structured logrus output. Format switching is not wired up.
 
 Log output format. Options: `json`, `text`.
 
@@ -250,13 +299,69 @@ Loki push endpoint URL.
 LOKI_URL=http://loki:3100/loki/api/v1/push
 ```
 
+### LOKI_JOB
+
+**Default**: `gomsggw`
+
+Loki `job` label attached to every pushed log stream. Use a distinct value per gateway instance when shipping to a shared Loki to make multi-instance filtering easier.
+
+```bash
+LOKI_JOB=gomsggw
+```
+
+### LOKI_USERNAME / LOKI_PASSWORD
+
+**Default**: (empty)
+
+Optional Basic Auth credentials for Loki. Most local Loki installations leave these unset.
+
+```bash
+LOKI_USERNAME=
+LOKI_PASSWORD=
+```
+
+---
+
+## Proxy / Debug
+
+### HAPROXY_PROXY_PROTOCOL
+
+**Default**: `false`
+
+When `true`, the SMPP and MM4 servers honour the HAProxy PROXY protocol on their listening sockets. Enable this if you front the gateway with HAProxy and want the real client IP in ACL checks (SMPP bind) and MM4 session tracking.
+
+```bash
+HAPROXY_PROXY_PROTOCOL=true
+```
+
+### DEBUG
+
+**Default**: `false`
+
+When `true`, the gateway starts a Go `net/http/pprof` server on `PPROF_LISTEN` for runtime profiling. Should be left off in production unless you are actively capturing profiles.
+
+```bash
+DEBUG=false
+```
+
+### PPROF_LISTEN
+
+**Default**: `0.0.0.0:42666`
+
+Listen address for the pprof HTTP server (only used when `DEBUG=true`).
+
+```bash
+PPROF_LISTEN=0.0.0.0:42666
+```
+
 ---
 
 ## MMS Transcoding
 
 ### MMS_MAX_SIZE
 
-**Default**: `614400` (600 KB)
+**Default**: `614400` (600 KB)  
+**Status**: ⚠️ Not yet implemented — the transcoder currently uses hard-coded targets and the `u2takey/ffmpeg-go` Go bindings, which shell out via PATH. This variable is documented for forward compatibility and will become the configurable size cap once the transcoder is refactored to read it.
 
 Target maximum size for MMS content in bytes.
 
@@ -266,7 +371,8 @@ MMS_MAX_SIZE=614400
 
 ### MMS_IMAGE_QUALITY
 
-**Default**: `85`
+**Default**: `85`  
+**Status**: ⚠️ Not yet implemented (see `MMS_MAX_SIZE`).
 
 Initial JPEG quality for image transcoding (1-100).
 
@@ -276,7 +382,8 @@ MMS_IMAGE_QUALITY=85
 
 ### MMS_MIN_IMAGE_QUALITY
 
-**Default**: `50`
+**Default**: `50`  
+**Status**: ⚠️ Not yet implemented (see `MMS_MAX_SIZE`).
 
 Minimum JPEG quality before giving up on size reduction.
 
@@ -286,7 +393,8 @@ MMS_MIN_IMAGE_QUALITY=50
 
 ### FFMPEG_PATH
 
-**Default**: `/usr/bin/ffmpeg`
+**Default**: `/usr/bin/ffmpeg`  
+**Status**: ⚠️ Not yet implemented — the Go code uses the `u2takey/ffmpeg-go` library, which resolves `ffmpeg` from `$PATH`. The Dockerfile installs the Alpine `ffmpeg` package, so a custom path is not currently configurable.
 
 Path to FFmpeg binary for video/audio transcoding.
 
@@ -296,7 +404,8 @@ FFMPEG_PATH=/usr/local/bin/ffmpeg
 
 ### TRANSCODER_WORKERS
 
-**Default**: `4`
+**Default**: `4`  
+**Status**: ⚠️ Not yet implemented — the transcoder runs synchronously in the message-processing path today. Worker pooling is on the roadmap.
 
 Number of concurrent transcoding workers.
 
@@ -329,7 +438,8 @@ TRANSCODE_TEMP_PATH=/tmp/gomsggw/transcode
 
 ### DEFAULT_SMS_PERIOD
 
-**Default**: `daily`
+**Default**: `daily`  
+**Status**: ⚠️ Not yet implemented — period is currently set per-client via `ClientSettings`; there is no global default applied at startup.
 
 Default period for SMS limit counting. Options: `hourly`, `daily`, `monthly`.
 
@@ -429,7 +539,8 @@ NOTIFY_SENDER_ON_FAILURE=true
 
 ### TELNYX_API_BASE
 
-**Default**: `https://api.telnyx.com/v2`
+**Default**: `https://api.telnyx.com/v2`  
+**Status**: ⚠️ Not yet implemented — the base URL is hard-coded in `carrier_telnyx.go`. This variable is documented for forward compatibility.
 
 Base URL for Telnyx API.
 
@@ -439,7 +550,8 @@ TELNYX_API_BASE=https://api.telnyx.com/v2
 
 ### TWILIO_API_BASE
 
-**Default**: `https://api.twilio.com/2010-04-01`
+**Default**: `https://api.twilio.com/2010-04-01`  
+**Status**: ⚠️ Not yet implemented — the base URL is hard-coded in `carrier_twilio.go`. This variable is documented for forward compatibility.
 
 Base URL for Twilio API.
 
@@ -461,6 +573,7 @@ POSTGRES_USER=gomsggw
 POSTGRES_PASSWORD=super_secure_password_123
 POSTGRES_DB=gomsggw
 POSTGRES_SSLMODE=disable
+POSTGRES_TIMEZONE=America/Vancouver
 
 # Security
 ENCRYPTION_KEY=abcdefghijklmnopqrstuvwxyz123456
@@ -470,6 +583,14 @@ API_KEY=admin_api_key_here
 WEB_LISTEN=0.0.0.0:3000
 SMPP_LISTEN=0.0.0.0:9550
 MM4_LISTEN=0.0.0.0:2566
+SERVER_ID=gateway1
+SERVER_ADDRESS=http://your-gateway.example.com:3000
+
+# Proxy / pprof
+HAPROXY_PROXY_PROTOCOL=false
+# TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+DEBUG=false
+PPROF_LISTEN=0.0.0.0:42666
 
 # Prometheus
 PROMETHEUS_LISTEN=0.0.0.0:2550
@@ -477,14 +598,18 @@ PROMETHEUS_PATH=/metrics
 
 # Logging
 LOG_LEVEL=info
-LOG_FORMAT=json
+# LOG_FORMAT=json
 LOKI_ENABLED=false
+LOKI_URL=http://loki:3100/loki/api/v1/push
+LOKI_USERNAME=
+LOKI_PASSWORD=
+LOKI_JOB=gomsggw
 
-# Transcoding
-MMS_MAX_SIZE=614400
-MMS_IMAGE_QUALITY=85
-TRANSCODER_WORKERS=4
+# Transcoding (some not yet implemented — see notes above)
 TRANSCODE_TEMP_PATH=/tmp/gomsggw/transcode
+# MMS_MAX_SIZE=614400
+# MMS_IMAGE_QUALITY=85
+# TRANSCODER_WORKERS=4
 ```
 
 ---

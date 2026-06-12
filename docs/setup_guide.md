@@ -31,9 +31,12 @@ export ENCRYPTION_KEY=your-32-byte-encryption-key
 # Web Server
 export WEB_LISTEN=0.0.0.0:3000
 
-# Optional: Logging
+# Optional: Logging (Loki)
 export LOKI_ENABLED=true
-export LOKI_URL=http://loki:3100
+export LOKI_URL=http://loki:3100/loki/api/v1/push
+export LOKI_USERNAME=
+export LOKI_PASSWORD=
+export LOKI_JOB=gomsggw
 ```
 
 ### 2. Start the Gateway
@@ -239,10 +242,16 @@ curl -X DELETE http://gateway:3000/clients/{id}/api-keys/{key_id} \
                       6) Update settings
                       7) Change password
 
-🔑 API Keys:        📦 Batch Jobs:       ⚙️ Admin:
-  a) List keys        d) List jobs         r) Reload all
-  b) Create key       e) Job detail        q) Quick flow
-  c) Revoke key
+🔑 API Keys:        📦 Batch Jobs:       🔄 Failover:
+  a) List keys        d) List jobs         f) List failovers
+  b) Create key       e) Job detail        g) Add failover
+  c) Revoke key                              h) Remove failover
+                                             i) SMPP session status
+
+⚙️ Admin:
+  r) Reload all (clients + carriers)
+  q) Quick flow: create client → add numbers → reload
+  0) Exit
 ```
 
 ---

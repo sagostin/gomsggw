@@ -13,116 +13,83 @@ This requires a full database rebuild because:
 2. The decryption key is only available at runtime
 3. GORM auto-migration cannot handle this data transformation
 
+> [!TIP]
+> The repo ships with ready-to-run migration helpers in the `migration/` directory (`migrate_clients.go` and `migrate_carriers.go`). They handle decryption, re-encryption, and dry-run previews. **Use those instead of writing your own script.** The steps below are a high-level overview; the canonical instructions are in [`migration/README.md`](../migration/README.md).
+
 ---
 
 ## Migration Steps
 
-### 1. Export Current Data
+### 1. Backup First
 
 ```bash
-# Stop the gateway
+# Stop the gateway so the data is stable
 docker-compose down
 
-# Export clients with their credentials (will need manual decryption)
-docker-compose exec postgres pg_dump -U smsgw -t clients -t client_settings -t client_numbers -t number_settings smsgw > clients_backup.sql
-
-# Export carriers (still encrypted, no changes needed)
-docker-compose exec postgres pg_dump -U smsgw -t carriers smsgw > carriers_backup.sql
-
-# Export message records
-docker-compose exec postgres pg_dump -U smsgw -t msg_record_db_items smsgw > messages_backup.sql
-
-# Full backup (optional)
-docker-compose exec postgres pg_dump -U smsgw smsgw > full_backup.sql
+# Full backup (clients, carriers, message records)
+docker-compose exec postgres pg_dump -U smsgw -d smsgw > backup_before_migration.sql
 ```
 
-### 2. Create Decryption Script
+### 2. Run the Bundled Migration Helpers
 
-Create `scripts/migrate_usernames.go`:
-
-```go
-package main
-
-import (
-    "encoding/json"
-    "fmt"
-    "os"
-)
-
-// Copy the DecryptAES256 function from encryption.go
-
-type OldClient struct {
-    ID       uint   `json:"id"`
-    Username string `json:"username"` // Encrypted
-    Password string `json:"password"` // Encrypted
-    Name     string `json:"name"`
-    Address  string `json:"address"`
-    Type     string `json:"type"`
-    Timezone string `json:"timezone"`
-}
-
-type NewClient struct {
-    ID       uint   `json:"id"`
-    Username string `json:"username"` // Plaintext
-    Password string `json:"password"` // Still encrypted
-    Name     string `json:"name"`
-    Address  string `json:"address"`
-    Type     string `json:"type"`
-    Timezone string `json:"timezone"`
-}
-
-func main() {
-    key := os.Getenv("ENCRYPTION_KEY")
-    if key == "" {
-        fmt.Println("ENCRYPTION_KEY not set")
-        os.Exit(1)
-    }
-
-    // Read old clients JSON
-    // Decrypt usernames, keep passwords encrypted
-    // Output new clients JSON with INSERT statements
-}
-```
-
-### 3. Drop and Recreate Database
+Set both the old and new encryption keys in your shell or `.env`:
 
 ```bash
-# Connect to postgres and drop/recreate
-docker-compose exec postgres psql -U smsgw -c "DROP DATABASE smsgw;"
-docker-compose exec postgres psql -U smsgw -c "CREATE DATABASE smsgw;"
-
-# Start gateway to auto-create new schema
-docker-compose up -d gomsggw
-docker-compose logs -f gomsggw  # Wait for "Starting Web Server"
-docker-compose down
+export OLD_ENCRYPTION_KEY=""           # the original key (often blank — see migration/README.md)
+export ENCRYPTION_KEY="your-new-32-char-key"
+export POSTGRES_HOST=localhost
+export POSTGRES_USER=smsgw
+export POSTGRES_PASSWORD=...
+export POSTGRES_DB=smsgw
 ```
 
-### 4. Re-Add Data via API
+Then run from the `migration/` directory:
 
-**Recommended approach** - Use the CLI tool to re-add carriers and clients:
+```bash
+cd migration
+
+# Dry run first — shows what would change without modifying data
+go run migrate_clients.go -dry-run
+go run migrate_carriers.go -dry-run
+
+# Apply
+go run migrate_clients.go
+go run migrate_carriers.go
+```
+
+The scripts decrypt `username` columns with `OLD_ENCRYPTION_KEY`, re-encrypt the `password` column with `ENCRYPTION_KEY`, and persist usernames as plaintext.
+
+### 3. Apply the SQL Schema Migration
+
+```bash
+psql -U smsgw -d smsgw -f migration/migrate.sql
+```
+
+This adds new columns (`tag`, `group`, `direction`, etc.) and creates `client_settings` and `number_settings` tables.
+
+### 4. Restart the Gateway
+
+GORM's `AutoMigrate` will pick up any remaining schema differences on startup:
+
+```bash
+docker-compose up -d
+```
+
+### 5. Re-Add Clients and Carriers via the API
+
+> If you prefer to start fresh, drop the database, restart, and re-add everything through the CLI/API. Existing credentials are encrypted at rest, so once a backup is taken you can rebuild without data loss.
 
 ```bash
 cd scripts
 export MSGGW_BASE_URL=http://localhost:3000
 export MSGGW_API_KEY=your-admin-api-key
-
-# Start gateway
-docker-compose up -d
-
-# Add carriers
 python main.py
-# Choose: 2) Add carrier
-
-# Add clients  
-python main.py
-# Choose: 5) Create client
-
-# Add numbers
-python main.py
-# Choose: 8) Add numbers to client
+# 2) Add carrier
+# 5) Create client
+# 8) Add numbers to client
 ```
 
-### 5. Verify Migration
+### 6. Verify
 
 ```bash
 # Check clients are loaded
@@ -134,42 +101,25 @@ curl -u admin:API_KEY http://localhost:3000/stats
 
 ---
 
-## Alternative: Direct SQL Restore
-
-If you have many clients, create transformed INSERT statements:
-
-```sql
--- Example: Insert with plaintext username, encrypted password
-INSERT INTO clients (username, password, name, address, type, timezone)
-VALUES (
-    'zultys_mx',  -- Plaintext username
-    'encrypted_password_here',  -- Keep encrypted
-    'Zultys MX',
-    '192.168.1.100',
-    'legacy',
-    'UTC'
-);
-```
-
----
-
 ## Rollback
 
-If you need to rollback:
-1. Restore from `full_backup.sql`
-2. Revert `clients.go` to encrypt usernames again
-3. Rebuild and deploy old version
+If something goes wrong, restore from the backup:
+
+```bash
+docker-compose down
+dropdb -U smsgw smsgw
+createdb -U smsgw smsgw
+psql -U smsgw -d smsgw < backup_before_migration.sql
+```
 
 ---
 
 ## Checklist
 
-- [ ] Export all data (clients, carriers, numbers, messages)
-- [ ] Stop all gateway instances
-- [ ] Drop and recreate database
-- [ ] Deploy new code version
-- [ ] Re-add carriers via API
-- [ ] Re-add clients via API (usernames now plaintext)
-- [ ] Re-add phone numbers
-- [ ] Verify SMPP/REST authentication works
-- [ ] Optionally restore message history
+- [ ] Export a full backup
+- [ ] Run `migrate_clients.go` and `migrate_carriers.go` with `-dry-run` and review
+- [ ] Apply both migrations
+- [ ] Apply `migration/migrate.sql`
+- [ ] Restart the gateway
+- [ ] Verify `/stats` shows expected clients and carriers
+- [ ] Test a single SMPP bind and one REST send

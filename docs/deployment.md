@@ -68,14 +68,7 @@ PROMETHEUS_PATH=/metrics
 ### Carrier Configuration
 
 > [!NOTE]
-> Carriers are managed via the REST API, not environment variables.
-> Use the CLI tool or API to add carriers after initial startup.
-
-```bash
-# All carrier credentials are managed via the database.
-# Use POST /carriers to add carriers (twilio, telnyx, onevoiceplus).
-# See API Reference for details.
-```
+> Carriers are managed via the REST API, not environment variables. Use the CLI tool or `POST /carriers` to add carriers (twilio, telnyx, onevoiceplus) after initial startup. See [API Reference](api_reference.md) for the request shape.
 
 ### Global Retry Settings
 
@@ -100,11 +93,13 @@ NOTIFY_SENDER_ON_FAILURE=true
 ### MMS Configuration
 
 ```bash
+# Public base URL — REQUIRED for outbound MMS. The gateway embeds this
+# in absolute media URLs (e.g. https://sms.example.com/media/<token>) that
+# carriers fetch. Without it, outbound MMS delivery will fail.
+SERVER_ADDRESS=http://your-public-host:3000
+
 # Media transcoding temp directory
 TRANSCODE_TEMP_PATH=./transcode
-
-# Public URL for media files (used by carriers)
-SERVER_ADDRESS=http://your-public-ip:3000
 
 # MM4 settings
 MM4_ORIGINATOR_SYSTEM=system@your-domain.com
@@ -130,17 +125,33 @@ DEBUG=false
 
 ### docker-compose.yml
 
+This is the current `docker-compose.yml` in the repo root:
+
 ```yaml
-version: "3.8"
+version: '3.8'
+
 services:
   postgres:
-    image: postgres:17
+    image: postgres:17-alpine
     container_name: gomsggw-db
     env_file:
       - .env
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     restart: always
+    networks:
+      - gomsggw-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   gomsggw:
     image: gomsggw:latest
@@ -149,14 +160,31 @@ services:
       - .env
     restart: always
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
+    networks:
+      - gomsggw-network
     ports:
-      - "3000:3000"   # Web API
-      - "9550:9550"   # SMPP
-      - "2566:2566"   # MM4
+      - "3000:3000" # Web API
+      - "9550:9550" # SMPP
+      - "2566:2566" # MM4
     environment:
       - SERVER_ID=gomsggw1
+      - POSTGRES_HOST=postgres
+
+networks:
+  gomsggw-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
 ```
+
+> [!NOTE]
+> **Prometheus port (2550) is intentionally not exposed** in the default compose file — the gateway scrapes metrics on a private network. To scrape from your host or a Prometheus container on another network, add `- "2550:2550"` to the `gomsggw` service `ports:` list, or run Prometheus on the same `gomsggw-network` bridge.
+
+> [!WARNING]
+> The default compose file publishes the PostgreSQL port (`5432:5432`) on the host. For production, remove that line and let the gateway reach the database over the internal `gomsggw-network` only.
 
 ### Build & Run
 

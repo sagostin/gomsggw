@@ -74,7 +74,7 @@ Settings applicable to all client types.
 | `client_id` | uint | - | Foreign key to Client |
 | **Auth & Format** ||||
 | `auth_method` | string | basic | `basic` or `bearer` (how client authenticates) |
-| `api_format` | string | generic | `generic` or `bicom` (request/response structure) |
+| `api_format` | string | generic | `generic`, `bicom`, or `telnyx` (request/response structure) |
 | **Web-specific** ||||
 | `disable_message_splitting` | bool | false | Deliver long messages as single payload |
 | `webhook_retries` | int | 3 | Webhook retry attempts |
@@ -105,6 +105,7 @@ Settings applicable to all client types.
 |------------|-------------|
 | `generic` | Standard format with optional `client_id` field |
 | `bicom` | Bicom PBXware native format with `media_urls` |
+| `telnyx` | Telnyx-style nested `data.payload` format with media URLs |
 
 ### Example
 

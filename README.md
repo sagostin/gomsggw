@@ -15,6 +15,8 @@ cp sample.env .env
 docker-compose up -d
 ```
 
+> If you run the binary directly (e.g. `./gomsggw` outside Docker), the Go binary auto-loads `.env` from the working directory via `godotenv`. Set the variables however you like (systemd unit, k8s ConfigMap, etc.) and skip the `.env` file.
+
 ---
 
 ## Features
@@ -94,11 +96,13 @@ curl -X POST http://gateway:3000/messages/send \
 
 ## API Endpoints
 
+> The full request/response shapes live in [docs/api_reference.md](docs/api_reference.md). The tables below are an at-a-glance index of every route the gateway exposes.
+
 ### Admin Endpoints (API_KEY auth)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Health check |
+| GET | `/health` | Health check (no auth) |
 | GET | `/stats` | Connection stats |
 | GET | `/clients` | List all clients |
 | POST | `/clients` | Create client |
@@ -110,19 +114,43 @@ curl -X POST http://gateway:3000/messages/send \
 | DELETE | `/clients/{id}/numbers/{number_id}` | Remove number |
 | GET | `/clients/{id}/settings` | Get client settings |
 | PUT | `/clients/{id}/settings` | Update client settings |
+| GET | `/clients/{id}/failovers` | List client failovers |
+| POST | `/clients/{id}/failovers` | Add failover |
+| PUT | `/clients/{id}/failovers/{failover_id}` | Update failover |
+| DELETE | `/clients/{id}/failovers/{failover_id}` | Remove failover |
+| GET | `/clients/{id}/smpp-status` | SMPP session status + failovers |
+| POST | `/clients/{id}/api-keys` | Create tenant API key |
+| GET | `/clients/{id}/api-keys` | List tenant API keys |
+| DELETE | `/clients/{id}/api-keys/{key_id}` | Revoke tenant API key |
 | GET | `/numbers/{id}/settings` | Get number settings |
 | PUT | `/numbers/{id}/settings` | Update number settings |
 | GET | `/carriers` | List carriers |
 | POST | `/carriers` | Add carrier |
 | POST | `/clients/reload` | Reload clients from DB |
 | POST | `/carriers/reload` | Reload carriers |
+| POST | `/inbound/{carrier}` | Carrier inbound webhook (Telnyx/Twilio/OVP) |
 
-### Web Client Endpoints (client auth)
+### Web Client Endpoints (client auth or API key)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/messages/send` | Send SMS/MMS |
+| POST | `/messages` | Alias of `/messages/send` (Bicom compatibility) |
 | GET | `/messages/usage` | Check quota usage |
+| GET | `/messages/history` | Paginated message history |
+| POST | `/messages/batch` | Submit a batch job |
+| POST | `/messages/batch/check` | Pre-check batch against limits |
+| GET | `/messages/batch` | List recent batch jobs |
+| GET | `/messages/batch/{id}` | Get batch job status |
+| GET | `/messages/batch/{id}/messages` | List messages in a batch |
+| POST | `/messages/batch/{id}/cancel` | Cancel a batch job |
+| DELETE | `/messages/batch/{id}/messages/{msg_id}` | Cancel a single batch message |
+
+### Media (public)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/media/{token}` | Retrieve MMS media by UUID access token |
 
 ---
 
@@ -160,19 +188,6 @@ MM4_TIMEOUT_SECS=60
 NOTIFY_SENDER_ON_FAILURE=true
 ```
 
-### Carrier Credentials
-
-> **Note**: Carriers are managed via the REST API, not environment variables.
-
-```bash
-# Twilio (used during carrier initialization)
-TWILIO_ACCOUNT_SID=your-account-sid
-TWILIO_AUTH_TOKEN=your-auth-token
-
-# Optional: Telnyx messaging profile
-# TELNYX_MESSAGING_PROFILE_ID=your-profile-id
-```
-
 See [sample.env](sample.env) for all available options.
 
 ---
@@ -188,6 +203,19 @@ python main.py
 ```
 
 Interactive menu for managing carriers, clients, and numbers. See [scripts/README.md](scripts/README.md).
+
+---
+
+## Testing
+
+Unit tests cover the pure-function surface of the gateway (encryption, rate-limit resolution, SMPP conversation ordering, batch template rendering, CSV parsing, MMS URL helpers, GSM-7 validation, etc.). They run with no external dependencies — no PostgreSQL or network required.
+
+```bash
+make test            # quick run with -race
+make test-verbose    # see every subtest
+```
+
+The `Makefile` runs the root package only; `migration/` has a pre-existing duplicate-`main` build conflict and `scripts/` contains an unrelated main, so both are excluded.
 
 ---
 

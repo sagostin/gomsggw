@@ -275,8 +275,8 @@ Update client settings (admin auth). Partial updates supported.
 }
 ```
 
-**auth_method options**: `basic` (default), `bearer`
-**api_format options**: `generic` (default), `bicom`
+**auth_method options**: `basic` (default), `bearer`  
+**api_format options**: `generic` (default), `bicom`, `telnyx`
 
 **Response**:
 ```json
@@ -450,6 +450,96 @@ Retrieve message history for the authenticated client (client or API key auth wi
 ```
 
 **Response Headers**: `X-Total-Count`, `X-Page`, `X-Per-Page`
+
+---
+
+### GET /clients/{id}/failovers
+List failover entries for a client (admin auth).
+
+Each entry identifies a fallback client that the router will try when the primary client's SMPP session is offline. `priority` is ascending — lower numbers are tried first.
+
+**Response**:
+```json
+[
+  {
+    "id": 1,
+    "primary_client_id": 1,
+    "fallback_client_id": 2,
+    "priority": 0,
+    "enabled": true,
+    "fallback_client_name": "Zultys DR",
+    "fallback_client_username": "zultys_dr",
+    "fallback_online": true
+  }
+]
+```
+
+---
+
+### POST /clients/{id}/failovers
+Add a failover entry (admin auth).
+
+**Request**:
+```json
+{
+  "fallback_client_id": 2,
+  "priority": 0
+}
+```
+
+**Response** (201): Returns the created `ClientFailover`. The gateway reloads clients automatically to pick up the new entry.
+
+---
+
+### PUT /clients/{id}/failovers/{failover_id}
+Update a failover entry (admin auth). Both fields are optional.
+
+**Request**:
+```json
+{
+  "priority": 5,
+  "enabled": false
+}
+```
+
+---
+
+### DELETE /clients/{id}/failovers/{failover_id}
+Remove a failover entry (admin auth). The gateway reloads clients after deletion.
+
+---
+
+### GET /clients/{id}/smpp-status
+Get the SMPP session status for a client and the live status of each configured failover (admin auth).
+
+**Response**:
+```json
+{
+  "client_id": 1,
+  "username": "zultys_mx",
+  "online": true,
+  "ip": "192.168.1.100",
+  "failovers": [
+    {
+      "client_id": 2,
+      "username": "zultys_dr",
+      "name": "Zultys DR",
+      "priority": 0,
+      "online": true
+    }
+  ]
+}
+```
+
+---
+
+### GET /numbers/{id}/settings
+Get the per-number settings (admin auth). Response mirrors `NumberSettings` — `sms_burst_limit`, `sms_daily_limit`, `sms_monthly_limit`, `mms_burst_limit`, `mms_daily_limit`, `mms_monthly_limit`, `limit_both`. A value of `0` means "inherit from the client".
+
+---
+
+### PUT /numbers/{id}/settings
+Update per-number settings (admin auth). Partial updates are supported. Same fields as `GET`.
 
 ---
 

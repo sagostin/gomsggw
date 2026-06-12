@@ -17,10 +17,13 @@ Complete documentation for the GOMSGGW messaging gateway.
 | [Data Models](data_models.md) | Database entities and schemas |
 | [Usage Limits](usage_limits.md) | Quota management |
 | [Number Management](number_management.md) | Phone number configuration |
+| [Transcoding](transcoding.md) | MMS media processing |
+| [Backup & Restore](backup.md) | Backups, automation, restore |
+| [Migration](migration.md) | Database migration from encrypted usernames |
 | [Configuration](configuration.md) | Environment variables |
 | [Deployment](deployment.md) | Docker and production setup |
 | [Architecture](architecture.md) | System design |
-| [Transcoding](transcoding.md) | MMS media processing |
+| [Grafana Queries](grafana_queries.md) | Analytics SQL for dashboards |
 
 ---
 

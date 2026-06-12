@@ -118,10 +118,10 @@ Same configuration as Zultys - create a legacy client and configure PBXware's SM
 
 ### Option 2: REST API Integration (Web Client)
 
-For modern deployments, use the REST API:
+For modern deployments, use the REST API. Note that the client creation endpoint does not accept limits inline — you must call `PUT /clients/{id}/settings` afterwards with the desired `sms_daily_limit` (or other limit fields).
 
 ```bash
-# Create web client
+# Create web client (capture the id from the response)
 curl -X POST http://gateway:3000/clients \
   -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
   -H "Content-Type: application/json" \
@@ -129,15 +129,16 @@ curl -X POST http://gateway:3000/clients \
     "username": "bicom_pbx",
     "password": "secure_api_key",
     "name": "Bicom PBXware",
-    "type": "web",
-    "sms_limit": 50000
+    "type": "web"
   }'
+# Response: {"id": 5, "username": "bicom_pbx", ...}
 
-# Configure webhook for inbound messages
-curl -X PUT http://gateway:3000/clients/bicom_pbx/settings \
+# Configure limits and webhook (use the numeric id from the response)
+curl -X PUT http://gateway:3000/clients/5/settings \
   -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
   -H "Content-Type: application/json" \
   -d '{
+    "sms_daily_limit": 50000,
     "default_webhook": "https://bicom-pbx.local/api/sms/inbound",
     "webhook_retries": 3
   }'

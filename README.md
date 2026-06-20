@@ -44,6 +44,7 @@ docker-compose up -d
 
 - **Usage Limits** - Burst/daily/monthly quotas (SMS & MMS) with timezone support
 - **Number Organization** - Tags and groups for multi-tenant deployments
+- **Per-Number Auto-Reply** - Configurable auto-response on inbound (SMS + MMS) with STOP respect and per-texter cooldown
 - **MMS Transcoding** - Automatic media optimization for carrier limits
 - **Enhanced Logging** - Client types, delivery methods, segment tracking
 - **Global Retry Config** - Configurable retries for webhooks, SMPP, MM4
@@ -124,6 +125,8 @@ curl -X POST http://gateway:3000/messages/send \
 | DELETE | `/clients/{id}/api-keys/{key_id}` | Revoke tenant API key |
 | GET | `/numbers/{id}/settings` | Get number settings |
 | PUT | `/numbers/{id}/settings` | Update number settings |
+| GET | `/numbers/{id}/auto-reply` | Get resolved auto-reply config |
+| PUT | `/numbers/{id}/auto-reply` | Update auto-reply config (creates settings lazily) |
 | GET | `/carriers` | List carriers |
 | POST | `/carriers` | Add carrier |
 | POST | `/clients/reload` | Reload clients from DB |

@@ -51,6 +51,10 @@ type Gateway struct {
 	EncryptionKey string // PSK for encryption/decryption
 	// AckTracker for carrier acknowledgments.
 	ConvoManager *ConvoManager
+
+	// Auto-reply master controls (env-driven)
+	AutoReplyEnabled    bool   // AUTO_REPLY_ENABLED — global kill switch
+	AutoReplyDefaultMsg string // AUTO_REPLY_DEFAULT_MESSAGE — fallback body
 }
 
 type MsgRecord struct {
@@ -191,6 +195,10 @@ func NewGateway() (*Gateway, error) {
 		ServerID:      os.Getenv("SERVER_ID"),
 		EncryptionKey: os.Getenv("ENCRYPTION_KEY"),
 		DB:            db,
+
+		// Auto-reply master controls (env-driven)
+		AutoReplyEnabled:    strings.ToLower(os.Getenv("AUTO_REPLY_ENABLED")) == "true" || os.Getenv("AUTO_REPLY_ENABLED") == "1",
+		AutoReplyDefaultMsg: os.Getenv("AUTO_REPLY_DEFAULT_MESSAGE"),
 	}
 
 	gateway.ConvoManager = NewConvoManager()

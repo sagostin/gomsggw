@@ -686,6 +686,9 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 				Group                *string `json:"group,omitempty"`
 				Webhook              *string `json:"webhook,omitempty"`
 				IgnoreStopCmdSending *bool   `json:"ignore_stop_cmd_sending,omitempty"`
+				AutoReplyEnabled     *bool   `json:"auto_reply_enabled,omitempty"`
+				AutoReplyMessage     *string `json:"auto_reply_message,omitempty"`
+				AutoReplyCooldownSec *int    `json:"auto_reply_cooldown_secs,omitempty"`
 			}
 
 			if err := ctx.ReadJSON(&updateReq); err != nil {
@@ -709,6 +712,25 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			}
 			if updateReq.IgnoreStopCmdSending != nil {
 				targetNumber.IgnoreStopCmdSending = *updateReq.IgnoreStopCmdSending
+			}
+			if updateReq.AutoReplyEnabled != nil || updateReq.AutoReplyMessage != nil || updateReq.AutoReplyCooldownSec != nil {
+				if targetNumber.Settings == nil {
+					targetNumber.Settings = &NumberSettings{NumberID: targetNumber.ID}
+				}
+				if updateReq.AutoReplyEnabled != nil {
+					targetNumber.Settings.AutoReplyEnabled = *updateReq.AutoReplyEnabled
+				}
+				if updateReq.AutoReplyMessage != nil {
+					targetNumber.Settings.AutoReplyMessage = *updateReq.AutoReplyMessage
+				}
+				if updateReq.AutoReplyCooldownSec != nil {
+					targetNumber.Settings.AutoReplyCooldownSec = *updateReq.AutoReplyCooldownSec
+				}
+				if err := gateway.DB.Save(targetNumber.Settings).Error; err != nil {
+					ctx.StatusCode(iris.StatusInternalServerError)
+					ctx.JSON(iris.Map{"error": "Failed to save auto-reply settings"})
+					return
+				}
 			}
 
 			// Save to database
@@ -1135,6 +1157,10 @@ func SetupNumberRoutes(app *iris.Application, gateway *Gateway) {
 				MMSMonthlyLimit *int64 `json:"mms_monthly_limit,omitempty"`
 				// Limit Behavior
 				LimitBoth *bool `json:"limit_both,omitempty"`
+				// Auto-Reply
+				AutoReplyEnabled     *bool   `json:"auto_reply_enabled,omitempty"`
+				AutoReplyMessage     *string `json:"auto_reply_message,omitempty"`
+				AutoReplyCooldownSec *int    `json:"auto_reply_cooldown_secs,omitempty"`
 			}
 
 			if err := ctx.ReadJSON(&updateReq); err != nil {
@@ -1169,6 +1195,15 @@ func SetupNumberRoutes(app *iris.Application, gateway *Gateway) {
 			}
 			if updateReq.LimitBoth != nil {
 				targetNumber.Settings.LimitBoth = *updateReq.LimitBoth
+			}
+			if updateReq.AutoReplyEnabled != nil {
+				targetNumber.Settings.AutoReplyEnabled = *updateReq.AutoReplyEnabled
+			}
+			if updateReq.AutoReplyMessage != nil {
+				targetNumber.Settings.AutoReplyMessage = *updateReq.AutoReplyMessage
+			}
+			if updateReq.AutoReplyCooldownSec != nil {
+				targetNumber.Settings.AutoReplyCooldownSec = *updateReq.AutoReplyCooldownSec
 			}
 
 			// Save to database
@@ -1228,6 +1263,145 @@ func SetupNumberRoutes(app *iris.Application, gateway *Gateway) {
 			}
 
 			ctx.JSON(targetNumber.Settings)
+		})
+
+		// Get auto-reply config for a number (resolved against master switch)
+		numbers.Get("/{id}/auto-reply", func(ctx iris.Context) {
+			numberID, err := strconv.ParseUint(ctx.Params().Get("id"), 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number ID"})
+				return
+			}
+
+			var targetNumber *ClientNumber
+			gateway.mu.RLock()
+			for _, num := range gateway.Numbers {
+				if num.ID == uint(numberID) {
+					targetNumber = num
+					break
+				}
+			}
+			gateway.mu.RUnlock()
+
+			if targetNumber == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Number not found"})
+				return
+			}
+
+			ns := targetNumber.Settings
+			effective, message := gateway.ResolveAutoReply(ns)
+
+			destNum := gateway.getNumber(targetNumber.Number)
+			suppressedByStop := destNum != nil && destNum.IgnoreStopCmdSending
+
+			cooldown := 60
+			if ns != nil && ns.AutoReplyCooldownSec > 0 {
+				cooldown = ns.AutoReplyCooldownSec
+			}
+
+			ctx.JSON(iris.Map{
+				"number_id":            targetNumber.ID,
+				"number":               targetNumber.Number,
+				"master_enabled":       gateway.AutoReplyEnabled,
+				"enabled":              ns != nil && ns.AutoReplyEnabled,
+				"effective_enabled":    effective && !suppressedByStop,
+				"message":              nsOrEmpty(ns, func(s *NumberSettings) string { return s.AutoReplyMessage }),
+				"effective_message":    message,
+				"cooldown_secs":        cooldown,
+				"suppressed_by_stop":   suppressedByStop,
+				"env_default_fallback": gateway.AutoReplyDefaultMsg,
+			})
+		})
+
+		// Update auto-reply config for a number (creates NumberSettings lazily)
+		numbers.Put("/{id}/auto-reply", func(ctx iris.Context) {
+			numberID, err := strconv.ParseUint(ctx.Params().Get("id"), 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number ID"})
+				return
+			}
+
+			var targetNumber *ClientNumber
+			gateway.mu.RLock()
+			for _, num := range gateway.Numbers {
+				if num.ID == uint(numberID) {
+					targetNumber = num
+					break
+				}
+			}
+			gateway.mu.RUnlock()
+
+			if targetNumber == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Number not found"})
+				return
+			}
+
+			var updateReq struct {
+				Enabled     *bool   `json:"enabled,omitempty"`
+				Message     *string `json:"message,omitempty"`
+				CooldownSec *int    `json:"cooldown_secs,omitempty"`
+			}
+
+			if err := ctx.ReadJSON(&updateReq); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request body"})
+				return
+			}
+
+			if targetNumber.Settings == nil {
+				targetNumber.Settings = &NumberSettings{NumberID: targetNumber.ID}
+			}
+
+			if updateReq.Enabled != nil {
+				targetNumber.Settings.AutoReplyEnabled = *updateReq.Enabled
+			}
+			if updateReq.Message != nil {
+				targetNumber.Settings.AutoReplyMessage = *updateReq.Message
+			}
+			if updateReq.CooldownSec != nil {
+				targetNumber.Settings.AutoReplyCooldownSec = *updateReq.CooldownSec
+			}
+
+			if err := gateway.DB.Save(targetNumber.Settings).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to save auto-reply settings"})
+				return
+			}
+
+			// Sync into the owning client's in-memory Numbers slice.
+			if client := gateway.getClientByID(targetNumber.ClientID); client != nil {
+				for i := range client.Numbers {
+					if client.Numbers[i].ID == targetNumber.ID {
+						client.Numbers[i].Settings = targetNumber.Settings
+						break
+					}
+				}
+			}
+
+			gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+				"WebServer.AutoReply",
+				"Updated",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"number_id":   targetNumber.ID,
+					"number":      targetNumber.Number,
+					"enabled":     targetNumber.Settings.AutoReplyEnabled,
+					"cooldownSec": targetNumber.Settings.AutoReplyCooldownSec,
+				},
+			))
+
+			ctx.JSON(iris.Map{
+				"message": "Auto-reply settings updated",
+				"settings": iris.Map{
+					"enabled":       targetNumber.Settings.AutoReplyEnabled,
+					"message":       targetNumber.Settings.AutoReplyMessage,
+					"cooldown_secs": targetNumber.Settings.AutoReplyCooldownSec,
+				},
+			})
 		})
 	}
 }

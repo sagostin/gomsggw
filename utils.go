@@ -22,6 +22,15 @@ func safeClientUsername(c *Client) string {
 	return c.Username
 }
 
+// nsOrEmpty safely dereferences an optional NumberSettings pointer and returns
+// a value via the accessor; returns "" when ns is nil.
+func nsOrEmpty(ns *NumberSettings, accessor func(*NumberSettings) string) string {
+	if ns == nil {
+		return ""
+	}
+	return accessor(ns)
+}
+
 // GetSMSEncoding determines the encoding type for an SMS message
 // Returns "gsm7", "ucs2", or "ascii" based on the message content
 func GetSMSEncoding(message string) string {

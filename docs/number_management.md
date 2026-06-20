@@ -244,6 +244,94 @@ See [Usage Limits](./usage_limits.md) for detailed limit enforcement logic.
 
 ---
 
+## Per-Number Auto-Reply
+
+Lets a single destination number auto-respond to inbound messages with a
+configurable body. Classic use case: a law firm whose public number "does not
+accept text messages — please call us instead."
+
+### Behavior
+
+- Fires on **carrier→client** inbound AND **client→client** inbound whose
+  destination number is configured.
+- The auto-reply is sent via the **destination number's configured carrier**
+  (the same carrier that would normally send outbound from that number).
+- The original inbound is **suppressed from normal delivery** to the client
+  (i.e. webhook / SMPP / MM4 delivery is skipped — the number "didn't accept"
+  the message).
+- For MMS inbound, the auto-reply is sent as an **SMS** (auto-MMS is unreliable
+  across carriers; an SMS rejection note is the practical fallback).
+- Both events are logged under the `Router.AutoReply` log category:
+  - `InboundAttempt` — captures the original message we did not deliver.
+  - `WouldAutoReply` / `SendingAutoReply` / `AutoReplySent` — captures the reply.
+
+### Required Setup
+
+1. Set `AUTO_REPLY_ENABLED=true` in the environment (master switch — feature
+   is fully off if this is missing or false).
+2. Optionally set `AUTO_REPLY_DEFAULT_MESSAGE` to a global fallback body.
+3. Per-number: enable auto-reply and (optionally) provide a custom message
+   via `PUT /numbers/{id}/auto-reply`.
+
+### Example: Law Firm "We Don't Accept Texts"
+
+```bash
+# 1. Enable the feature globally
+AUTO_REPLY_ENABLED=true
+
+# 2. Configure the destination number (id=42) with a custom reply
+curl -X PUT http://gateway:3000/numbers/42/auto-reply \
+  -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "message": "This number does not accept text messages. Please call us at 250-555-0100. — Smith & Co Law",
+    "cooldown_secs": 60
+  }'
+```
+
+After this, anyone texting +12505550100 (the firm's number) gets the rejection
+SMS back, and the inbound is NOT delivered to the firm's webhook / PBX.
+
+### Same config via `PUT /clients/{id}/numbers/{number_id}`
+
+```bash
+curl -X PUT http://gateway:3000/clients/7/numbers/42 \
+  -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "auto_reply_enabled": true,
+    "auto_reply_message": "This number does not accept text messages. Please call us instead.",
+    "auto_reply_cooldown_secs": 60
+  }'
+```
+
+### Inspect Effective Config
+
+```bash
+curl http://gateway:3000/numbers/42/auto-reply \
+  -H "Authorization: Basic $(echo -n 'admin:API_KEY' | base64)"
+```
+
+Returns `effective_enabled` and `effective_message` after merging the per-number
+settings with the env vars — useful for verifying the gate without sending a
+test SMS.
+
+### STOP Semantics
+
+If the destination number has `ignore_stop_cmd_sending=true`, auto-reply is
+**logged but never sent**. STOP is normally handled upstream by carriers, but
+this provides a belt-and-braces gate so we never auto-respond to a STOP'd
+texter.
+
+### Cooldown
+
+`auto_reply_cooldown_secs` (default 60s) is a per `(from, to)` throttle so a
+spammy texter can't trigger a flood of auto-replies and matching log lines.
+Set to `0` to disable cooldown.
+
+---
+
 ## Best Practices
 
 ### Tagging Strategy

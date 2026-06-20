@@ -535,6 +535,44 @@ NOTIFY_SENDER_ON_FAILURE=true
 
 ---
 
+## Auto-Reply
+
+Per-number automatic reply for inbound messages. When enabled on a number, an
+inbound to that number (from a carrier OR from another client) gets an automatic
+reply back to the original sender and the inbound itself is suppressed from
+normal client delivery.
+
+### AUTO_REPLY_ENABLED
+
+**Default**: `false`  
+**Values**: `true` | `false`
+
+Global master switch for the auto-reply feature. When `false`, the feature is
+fully off regardless of per-number settings. When `true`, individual numbers
+opt in via `NumberSettings.auto_reply_enabled` (see [Data Models](data_models.md)
+or `PUT /numbers/{id}/auto-reply`).
+
+```bash
+AUTO_REPLY_ENABLED=true
+```
+
+### AUTO_REPLY_DEFAULT_MESSAGE
+
+**Default**: `""` (empty — feature is effectively disabled per-number if no
+per-number message is set)
+
+Fallback reply body used when a number has `auto_reply_enabled=true` but no
+`auto_reply_message` of its own.
+
+```bash
+AUTO_REPLY_DEFAULT_MESSAGE=This number does not accept text messages. Please call us instead.
+```
+
+See [Number Management](number_management.md) for the end-to-end "we don't
+accept texts" setup walkthrough.
+
+---
+
 ## Carrier Settings
 
 ### TELNYX_API_BASE

@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sirupsen/logrus"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type Route struct {
@@ -137,6 +139,70 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		}
 	}
 	// --- END LIMIT CHECK ---
+
+	// --- AUTO-REPLY HOOK ---
+	// Fires for both carrier→client (origin=="carrier", toClient!=nil) and
+	// client→client (origin=="client", toClient!=nil, fromClient!=nil).
+	// When auto-reply is enabled on the destination number the inbound is
+	// suppressed (not delivered to the client) and an auto-reply is dispatched
+	// back to the original sender via the destination number's carrier.
+	if toClient != nil && (origin == "carrier" || (origin == "client" && fromClient != nil)) {
+		// Loop guard
+		if strings.TrimPrefix(m.From, "+") == strings.TrimPrefix(m.To, "+") {
+			lm.SendLog(lm.BuildLog(
+				"Router.AutoReply",
+				"SkippedLoopGuard",
+				logrus.DebugLevel,
+				map[string]interface{}{
+					"logID": m.LogID,
+					"from":  m.From,
+					"to":    m.To,
+				},
+			))
+		} else {
+			ns := findNumberSettingsForClient(toClient, m.To)
+
+			// Respect STOP on the destination number
+			destNum := router.gateway.getNumber(m.To)
+			stopSet := destNum != nil && destNum.IgnoreStopCmdSending
+
+			enabled, reply := router.gateway.ResolveAutoReply(ns)
+			switch {
+			case stopSet:
+				logAutoReplyAttempt(lm, m, toClient, reply, "suppressed-by-stop")
+			case !enabled:
+				// No-op: feature not configured for this number.
+			default:
+				cooldown := 60
+				if ns != nil && ns.AutoReplyCooldownSec > 0 {
+					cooldown = ns.AutoReplyCooldownSec
+				}
+				if !globalAutoReplyCooldown.allow(m.From, m.To, cooldown) {
+					lm.SendLog(lm.BuildLog(
+						"Router.AutoReply",
+						"SuppressedByCooldown",
+						logrus.DebugLevel,
+						map[string]interface{}{
+							"logID":       m.LogID,
+							"from":        m.From,
+							"to":          m.To,
+							"cooldownSec": cooldown,
+						},
+					))
+				} else {
+					logAutoReplyAttempt(lm, m, toClient, reply, "auto-replying")
+					router.sendAutoReply(reply, m)
+					// Mark processing successful so ConvoManager doesn't release
+					// the inbound queue (we handled it).
+					processingSuccessful = true
+				}
+				// In all cases, suppress normal delivery to the client.
+				processingSuccessful = true
+				return
+			}
+		}
+	}
+	// --- END AUTO-REPLY HOOK ---
 
 	// Retry on the channel where the message came from
 	retryChan := router.ClientMsgChan
@@ -1107,4 +1173,212 @@ func (router *Router) DispatchWebhook(webhookURL string, item *MsgQueueItem, toC
 	))
 
 	return nil
+}
+
+// --- Auto-reply support ---
+
+// autoReplyCooldown throttles auto-replies per (from, to) pair so a texter
+// who spams the destination number doesn't cause a flood of auto-replies (and
+// matching log lines). State is in-memory only; resets on restart.
+type autoReplyCooldown struct {
+	mu       sync.Mutex
+	lastSent map[string]time.Time
+}
+
+var globalAutoReplyCooldown = &autoReplyCooldown{
+	lastSent: make(map[string]time.Time),
+}
+
+// allow returns true if the auto-reply should fire (cooldown elapsed or unset).
+// Updates the last-sent timestamp on a positive result.
+func (c *autoReplyCooldown) allow(from, to string, cooldownSec int) bool {
+	if cooldownSec <= 0 {
+		return true
+	}
+	key := from + "|" + to
+	now := time.Now()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if last, ok := c.lastSent[key]; ok {
+		if now.Sub(last) < time.Duration(cooldownSec)*time.Second {
+			return false
+		}
+	}
+	c.lastSent[key] = now
+	return true
+}
+
+// findNumberSettingsForClient returns the NumberSettings of the client's
+// number that matches the destination. Returns nil if no match or no settings.
+func findNumberSettingsForClient(c *Client, toNumber string) *NumberSettings {
+	if c == nil {
+		return nil
+	}
+	search := strings.TrimPrefix(toNumber, "+")
+	for i := range c.Numbers {
+		if strings.Contains(search, c.Numbers[i].Number) {
+			return c.Numbers[i].Settings
+		}
+	}
+	return nil
+}
+
+// logAutoReplyAttempt emits the "inbound attempted" + "would-reply" log pair.
+func logAutoReplyAttempt(lm *LogManager, m *MsgQueueItem, toClient *Client, reply string, reason string) {
+	fromClientName := ""
+	if m.SourceCarrier != "" {
+		fromClientName = "carrier:" + m.SourceCarrier
+	}
+	lm.SendLog(lm.BuildLog(
+		"Router.AutoReply",
+		"InboundAttempt",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"logID":             m.LogID,
+			"reason":            reason,
+			"origin":            "suppressed-by-auto-reply",
+			"msgType":           string(m.Type),
+			"inboundFrom":       m.From,
+			"inboundTo":         m.To,
+			"inboundMessage":    m.message,
+			"inboundMediaCount": len(m.files),
+			"destinationClient": toClientUsername(toClient),
+			"from":              fromClientName,
+		},
+	))
+	lm.SendLog(lm.BuildLog(
+		"Router.AutoReply",
+		"WouldAutoReply",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"logID":             m.LogID,
+			"destinationClient": toClientUsername(toClient),
+			"inboundFrom":       m.From,
+			"inboundTo":         m.To,
+			"replyMessage":      reply,
+			"msgType":           string(m.Type),
+		},
+	))
+}
+
+// sendAutoReply dispatches the auto-reply via the destination number's
+// configured carrier and records the outbound in MsgRecord. Returns true if
+// a send was attempted (regardless of success — failures are logged).
+func (router *Router) sendAutoReply(text string, original *MsgQueueItem) bool {
+	lm := router.gateway.LogManager
+
+	carrier, _ := router.gateway.getClientCarrier(original.To)
+	if carrier == "" {
+		lm.SendLog(lm.BuildLog(
+			"Router.AutoReply",
+			"NoCarrierForDestination",
+			logrus.WarnLevel,
+			map[string]interface{}{
+				"logID":             original.LogID,
+				"destinationNumber": original.To,
+			},
+		))
+		return false
+	}
+
+	route := router.gateway.Router.findRouteByName("carrier", carrier)
+	if route == nil {
+		lm.SendLog(lm.BuildLog(
+			"Router.AutoReply",
+			"NoCarrierRoute",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID":   original.LogID,
+				"carrier": carrier,
+			},
+		))
+		return false
+	}
+
+	reply := &MsgQueueItem{
+		To:                original.From, // back to the texter
+		From:              original.To,   // from the destination number
+		ReceivedTimestamp: time.Now(),
+		Type:              MsgQueueItemType.SMS,
+		message:           text,
+		SkipNumberCheck:   true,
+		LogID:             primitive.NewObjectID().Hex(),
+		SourceCarrier:     carrier,
+		Delivery: &MsgQueueDelivery{
+			Error:      "auto-reply — no retry",
+			RetryTime:  time.Now(),
+			RetryCount: 666, // mirrors STOP_MESSAGE pattern: no retry
+		},
+	}
+
+	lm.SendLog(lm.BuildLog(
+		"Router.AutoReply",
+		"SendingAutoReply",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"logID":             original.LogID,
+			"replyLogID":        reply.LogID,
+			"replyFrom":         reply.From,
+			"replyTo":           reply.To,
+			"replyMessage":      text,
+			"replyMessageBytes": len([]byte(text)),
+			"carrier":           carrier,
+		},
+	))
+
+	ackID, err := route.Handler.SendSMS(reply)
+	if err != nil {
+		lm.SendLog(lm.BuildLog(
+			"Router.AutoReply",
+			"AutoReplySendFailed",
+			logrus.ErrorLevel,
+			map[string]interface{}{
+				"logID":      original.LogID,
+				"replyLogID": reply.LogID,
+				"carrier":    carrier,
+			},
+			err,
+		))
+		return false
+	}
+
+	lm.SendLog(lm.BuildLog(
+		"Router.AutoReply",
+		"AutoReplySent",
+		logrus.InfoLevel,
+		map[string]interface{}{
+			"logID":      original.LogID,
+			"replyLogID": reply.LogID,
+			"carrierID":  ackID,
+			"carrier":    carrier,
+		},
+	))
+
+	// Record the outbound reply against the destination client.
+	if toClient := router.gateway.getClient(original.To); toClient != nil {
+		encoding := GetSMSEncoding(text)
+		segments := GetSMSSegmentCount(text)
+		router.gateway.MsgRecordChan <- MsgRecord{
+			MsgQueueItem:        *reply,
+			Carrier:             carrier,
+			ClientID:            toClient.ID,
+			Internal:            false,
+			Direction:           "outbound",
+			FromClientType:      toClient.Type,
+			ToClientType:        "carrier",
+			DeliveryMethod:      "carrier_api",
+			Encoding:            encoding,
+			TotalSegments:       segments,
+			OriginalBytesLength: len([]byte(text)),
+		}
+	}
+	return true
+}
+
+// toClientUsername safely extracts a username from a possibly-nil client.
+func toClientUsername(c *Client) string {
+	if c == nil {
+		return ""
+	}
+	return c.Username
 }

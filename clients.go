@@ -93,6 +93,33 @@ type NumberSettings struct {
 
 	// === Limit Behavior ===
 	LimitBoth bool `json:"limit_both" gorm:"default:false"` // Override: apply to inbound too
+
+	// === Auto-Reply (carrier-to-client AND client-to-client) ===
+	// When enabled, inbound messages to this number receive an automatic reply
+	// and the inbound is suppressed from normal client delivery.
+	AutoReplyEnabled     bool   `json:"auto_reply_enabled" gorm:"default:false"`
+	AutoReplyMessage     string `json:"auto_reply_message"`                         // custom reply body (optional)
+	AutoReplyCooldownSec int    `json:"auto_reply_cooldown_secs" gorm:"default:60"` // per (from,to) cooldown
+}
+
+// ResolveAutoReply returns the effective enabled flag and reply text for a
+// destination number. Honours the gateway-level master switch, per-number
+// settings, and the env-var default message as a fallback body.
+func (gateway *Gateway) ResolveAutoReply(numberSettings *NumberSettings) (enabled bool, message string) {
+	if !gateway.AutoReplyEnabled {
+		return false, ""
+	}
+	if numberSettings == nil || !numberSettings.AutoReplyEnabled {
+		return false, ""
+	}
+	message = numberSettings.AutoReplyMessage
+	if message == "" {
+		message = gateway.AutoReplyDefaultMsg
+	}
+	if message == "" {
+		return false, ""
+	}
+	return true, message
 }
 
 // getClientByID finds a client by its numeric ID (thread-safe)

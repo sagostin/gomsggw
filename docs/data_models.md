@@ -166,6 +166,27 @@ Per-number configuration that overrides ClientSettings.
 | `mms_monthly_limit` | int64 | 0 | Per month |
 | **Limit Behavior** ||||
 | `limit_both` | bool | false | Override: apply to inbound too |
+| **Auto-Reply** ||||
+| `auto_reply_enabled` | bool | false | Master per-number auto-reply flag (honours global `AUTO_REPLY_ENABLED` env) |
+| `auto_reply_message` | string | "" | Custom reply body. Empty falls back to `AUTO_REPLY_DEFAULT_MESSAGE` env. |
+| `auto_reply_cooldown_secs` | int | 60 | Per `(from, to)` cooldown to prevent flood-replies |
+
+### Auto-Reply Resolution
+
+For each inbound (carrier→client or client→client) whose destination number is
+configured:
+
+1. If `AUTO_REPLY_ENABLED=false` (env), auto-reply is fully off.
+2. If `auto_reply_enabled=false` on the number's settings, skip.
+3. Use `auto_reply_message` if set; otherwise `AUTO_REPLY_DEFAULT_MESSAGE`.
+4. If neither yields a body, skip (logged at warn).
+5. If `IgnoreStopCmdSending=true` on the destination number, log the inbound
+   attempt but do NOT auto-reply (mirrors carrier-level STOP semantics).
+6. Otherwise: send the auto-reply via the destination number's configured
+   carrier, log both events (`Router.AutoReply.InboundAttempt`,
+   `Router.AutoReply.AutoReplySent`), and suppress normal delivery to the client.
+
+Cooldown is per `(from, to)` pair; defaults to 60s.
 
 ### Limit Resolution Priority
 

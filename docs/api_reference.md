@@ -539,7 +539,64 @@ Get the per-number settings (admin auth). Response mirrors `NumberSettings` — 
 ---
 
 ### PUT /numbers/{id}/settings
-Update per-number settings (admin auth). Partial updates are supported. Same fields as `GET`.
+Update per-number settings (admin auth). Partial updates are supported. Same fields as `GET`, plus the auto-reply fields described in `/numbers/{id}/auto-reply`.
+
+---
+
+### GET /numbers/{id}/auto-reply
+Get the resolved auto-reply configuration for a number (admin auth). The response merges per-number settings with the gateway-level `AUTO_REPLY_ENABLED` env var.
+
+**Response**:
+```json
+{
+  "number_id": 42,
+  "number": "12505551234",
+  "master_enabled": true,
+  "enabled": true,
+  "effective_enabled": true,
+  "message": "This number does not accept text messages. Please call 250-555-0100.",
+  "effective_message": "This number does not accept text messages. Please call 250-555-0100.",
+  "cooldown_secs": 60,
+  "suppressed_by_stop": false,
+  "env_default_fallback": "This number does not accept text messages. Please call us instead."
+}
+```
+
+- `master_enabled` — `AUTO_REPLY_ENABLED` env var. When `false`, `effective_enabled` is `false` regardless of `enabled`.
+- `enabled` — per-number flag as stored.
+- `effective_enabled` — final verdict after merging `master_enabled` × `enabled` × `suppressed_by_stop`.
+- `effective_message` — the body the gateway would actually send (per-number message, or env default if the per-number message is empty).
+- `suppressed_by_stop` — `true` if the destination number has `ignore_stop_cmd_sending=true`; auto-reply is logged but never sent in this case.
+
+---
+
+### PUT /numbers/{id}/auto-reply
+Update auto-reply config for a number (admin auth). Creates `NumberSettings` lazily if missing.
+
+**Request**:
+```json
+{
+  "enabled": true,
+  "message": "This number does not accept text messages. Please call 250-555-0100. — Smith & Co Law",
+  "cooldown_secs": 60
+}
+```
+
+All fields are optional (partial update).
+
+**Response**:
+```json
+{
+  "message": "Auto-reply settings updated",
+  "settings": {
+    "enabled": true,
+    "message": "This number does not accept text messages. Please call 250-555-0100. — Smith & Co Law",
+    "cooldown_secs": 60
+  }
+}
+```
+
+The same fields can also be set via `PUT /clients/{id}/numbers/{number_id}` (`auto_reply_enabled`, `auto_reply_message`, `auto_reply_cooldown_secs`) — both endpoints stay in sync.
 
 ---
 

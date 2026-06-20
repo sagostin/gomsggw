@@ -91,10 +91,20 @@ CREATE TABLE IF NOT EXISTS public.number_settings (
     mms_daily_limit int8 DEFAULT 0,
     mms_monthly_limit int8 DEFAULT 0,
     limit_both bool DEFAULT false,
+    auto_reply_enabled bool DEFAULT false,
+    auto_reply_message text,
+    auto_reply_cooldown_secs int DEFAULT 60,
     CONSTRAINT number_settings_pkey PRIMARY KEY (id),
     CONSTRAINT fk_number_settings_number FOREIGN KEY (number_id) 
         REFERENCES public.client_numbers(id) ON DELETE CASCADE
 );
+
+-- Defensive: in case number_settings already existed from an older migration
+-- without the auto-reply columns, add them now.
+ALTER TABLE public.number_settings
+    ADD COLUMN IF NOT EXISTS auto_reply_enabled bool DEFAULT false,
+    ADD COLUMN IF NOT EXISTS auto_reply_message text,
+    ADD COLUMN IF NOT EXISTS auto_reply_cooldown_secs int DEFAULT 60;
 
 -- ============================================
 -- Step 8: Set defaults for existing data

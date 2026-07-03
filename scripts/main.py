@@ -552,16 +552,19 @@ def list_client_numbers(username: str) -> None:
         print("No numbers configured.")
         return
 
-    print(f"\n{'Number':<15} {'Carrier':<12} {'Tag':<15} {'Group':<15} {'Limit':<8}")
-    print("-" * 70)
+    print(f"\n{'ID':<6} {'Number':<15} {'Carrier':<12} {'AR':<4} {'Tag':<15} {'Group':<15} {'Limit':<8}")
+    print("-" * 80)
     for n in numbers:
+        nid = str(n.get("id", ""))
         num = n.get("number", "")
         carrier = n.get("carrier", "")
         tag = n.get("tag", "") or "-"
         group = n.get("group", "") or "-"
         limit = n.get("sms_limit", 0)
         limit_str = str(limit) if limit > 0 else "-"
-        print(f"{num:<15} {carrier:<12} {tag:<15} {group:<15} {limit_str:<8}")
+        settings = n.get("settings") or {}
+        ar = "✅" if settings.get("auto_reply_enabled") else "–"
+        print(f"{nid:<6} {num:<15} {carrier:<12} {ar:<4} {tag:<15} {group:<15} {limit_str:<8}")
 
 
 # =============================================================================
@@ -1166,6 +1169,183 @@ def show_smpp_status(identifier: str) -> None:
 
 
 # =============================================================================
+# Auto-Reply Operations (per-number bounce)
+# =============================================================================
+
+def _prompt_pick_number(client: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """List numbers for a client and let the user pick one by row # or ID.
+
+    Returns the chosen ClientNumber dict, or None on cancel/no-numbers.
+    """
+    numbers = client.get("numbers") or []
+    if not numbers:
+        print("No numbers configured for this client.")
+        return None
+
+    print(f"\n{'#':<4} {'ID':<6} {'Number':<15} {'Carrier':<12} {'AR':<4}")
+    print("-" * 50)
+    for i, n in enumerate(numbers, 1):
+        nid = str(n.get("id", ""))
+        num = n.get("number", "")
+        carrier = n.get("carrier", "")
+        settings = n.get("settings") or {}
+        ar = "✅" if settings.get("auto_reply_enabled") else "–"
+        print(f"{i:<4} {nid:<6} {num:<15} {carrier:<12} {ar:<4}")
+
+    choice = input("\nSelect # (or enter number ID, blank to cancel): ").strip()
+    if not choice:
+        return None
+
+    if choice.isdigit():
+        idx = int(choice)
+        if 1 <= idx <= len(numbers):
+            return numbers[idx - 1]
+        for n in numbers:
+            if n.get("id") == idx:
+                return n
+
+    print("Invalid selection.")
+    return None
+
+
+def show_number_auto_reply(identifier: str) -> None:
+    """GET /numbers/{id}/auto-reply and pretty-print the resolved config."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return
+
+    target = _prompt_pick_number(client)
+    if not target:
+        return
+
+    number_id = target.get("id")
+    try:
+        resp = get_json(f"/numbers/{number_id}/auto-reply")
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if resp.status_code == 404:
+        print("Number not found.")
+        return
+    if resp.status_code != 200:
+        print(f"❌ Failed ({resp.status_code}): {resp.text}")
+        return
+
+    cfg = resp.json()
+    print(f"\n=== Auto-Reply for {cfg.get('number', target.get('number', ''))} (ID: {cfg.get('number_id', number_id)}) ===")
+    print(f"  Master switch (env AUTO_REPLY_ENABLED): {'✅ on' if cfg.get('master_enabled') else '❌ off'}")
+    print(f"  Per-number enabled:                    {'✅' if cfg.get('enabled') else '–'}")
+    print(f"  Effective enabled:                     {'✅' if cfg.get('effective_enabled') else '❌'}")
+    print(f"  Suppressed by STOP:                    {'yes' if cfg.get('suppressed_by_stop') else 'no'}")
+    print(f"  Per-number message:                    {cfg.get('message') or '(empty — uses env fallback)'}")
+    print(f"  Effective message:                     {cfg.get('effective_message') or '(none)'}")
+    print(f"  Cooldown secs:                         {cfg.get('cooldown_secs')}")
+    if cfg.get("env_default_fallback"):
+        print(f"  Env default fallback:                  {cfg.get('env_default_fallback')}")
+
+
+def configure_number_auto_reply(identifier: str) -> None:
+    """Interactively PUT /numbers/{id}/auto-reply to set enabled/message/cooldown."""
+    client = get_client_by_identifier(identifier)
+    if not client:
+        print(f"Client '{identifier}' not found.")
+        return
+
+    target = _prompt_pick_number(client)
+    if not target:
+        return
+
+    number_id = target.get("id")
+    settings = target.get("settings") or {}
+    cur_enabled = bool(settings.get("auto_reply_enabled"))
+    cur_message = settings.get("auto_reply_message") or ""
+    cur_cooldown = int(settings.get("auto_reply_cooldown_secs") or 60)
+
+    print(f"\n=== Configure Auto-Reply for {target.get('number', '')} (ID: {number_id}) ===")
+    print(f"  Current: enabled={cur_enabled}, cooldown={cur_cooldown}s")
+    if cur_message:
+        print(f"  Current message: {cur_message}")
+    print()
+
+    enable_raw = input(f"Enable auto-reply? (y/N, current={'y' if cur_enabled else 'N'}): ").strip().lower()
+    if enable_raw in ("y", "yes"):
+        enabled = True
+    elif enable_raw in ("n", "no"):
+        enabled = False
+    else:
+        enabled = cur_enabled
+
+    if enabled:
+        msg = input("Reply message (blank = use AUTO_REPLY_DEFAULT_MESSAGE env): ").strip()
+        cd_raw = input(f"Cooldown seconds (0 = none, current={cur_cooldown}): ").strip()
+        cooldown = int(cd_raw) if cd_raw.isdigit() else cur_cooldown
+    else:
+        msg = cur_message
+        cooldown = cur_cooldown
+
+    payload = {"enabled": enabled}
+    if enabled:
+        payload["message"] = msg
+        payload["cooldown_secs"] = cooldown
+    elif msg != cur_message:
+        payload["message"] = msg
+    if cooldown != cur_cooldown:
+        payload["cooldown_secs"] = cooldown
+
+    if input("Apply changes? [y/N]: ").strip().lower() != "y":
+        print("Cancelled.")
+        return
+
+    try:
+        resp = put_json(f"/numbers/{number_id}/auto-reply", payload)
+    except requests.RequestException as e:
+        print(f"Network error: {e}")
+        return
+
+    if 200 <= resp.status_code < 300:
+        print("✅ Auto-reply settings updated.")
+        show_number_auto_reply(identifier)
+    else:
+        print(f"❌ Failed ({resp.status_code}): {resp.text}")
+
+
+def configure_auto_reply_for_numbers(
+    client_identifier: str,
+    numbers: List[str],
+    enabled: bool,
+    message: str,
+    cooldown_secs: int,
+) -> None:
+    """Apply a shared auto-reply config to a batch of numbers (used by quick-flow)."""
+    client = get_client_by_identifier(client_identifier)
+    if not client:
+        print(f"Client '{client_identifier}' not found.")
+        return
+
+    by_num = {n.get("number"): n for n in (client.get("numbers") or [])}
+    for num_str in numbers:
+        target = by_num.get(num_str)
+        if not target:
+            print(f"  ⚠️  {num_str}: not found on client, skipping")
+            continue
+        payload = {"enabled": enabled}
+        if enabled:
+            payload["message"] = message
+        payload["cooldown_secs"] = cooldown_secs
+        try:
+            resp = put_json(f"/numbers/{target.get('id')}/auto-reply", payload)
+        except requests.RequestException as e:
+            print(f"  ❌ {num_str}: network error {e}")
+            continue
+        if 200 <= resp.status_code < 300:
+            print(f"  ✅ {num_str}: auto-reply {'enabled' if enabled else 'disabled'}")
+        else:
+            print(f"  ❌ {num_str}: failed ({resp.status_code}): {resp.text}")
+
+
+# =============================================================================
 # Menu
 # =============================================================================
 
@@ -1194,6 +1374,8 @@ def menu() -> None:
         print("\n📞 Numbers:")
         print("  8) List client numbers")
         print("  9) Add numbers to client")
+        print("  j) Show auto-reply for a number")
+        print("  k) Configure auto-reply for a number")
 
         print("\n🔑 API Keys:")
         print("  a) List API keys for client")
@@ -1366,6 +1548,22 @@ def menu() -> None:
             else:
                 print("Client ID or username required.")
 
+        elif choice == "j":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                show_number_auto_reply(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
+        elif choice == "k":
+            identifier = input("Client ID or username: ").strip() or last_client
+            if identifier:
+                configure_number_auto_reply(identifier)
+                last_client = identifier
+            else:
+                print("Client ID or username required.")
+
         elif choice == "r":
             reload_all()
 
@@ -1398,6 +1596,14 @@ def menu() -> None:
                 add_numbers_to_client(username, nums, carrier=carrier)
             else:
                 print("No numbers provided; skipping.")
+
+            if nums and input("Configure auto-reply on these numbers? [y/N]: ").strip().lower() == "y":
+                msg = input("Reply message (blank = use AUTO_REPLY_DEFAULT_MESSAGE env): ").strip()
+                cd_raw = input("Cooldown seconds (0 = none, default 60): ").strip()
+                cooldown = int(cd_raw) if cd_raw.isdigit() else 60
+                configure_auto_reply_for_numbers(
+                    username, nums, enabled=True, message=msg, cooldown_secs=cooldown,
+                )
 
             if input("Reload all? [Y/n]: ").strip().lower() != "n":
                 reload_all()

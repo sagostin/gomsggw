@@ -93,6 +93,36 @@ curl -X POST http://gateway:3000/messages/send \
   -d '{"from":"+12505551234","to":"+14155559876","text":"Hello!"}'
 ```
 
+### Per-Number Auto-Reply (Bounce)
+
+Configure a specific number to auto-respond on inbound — and suppress the
+inbound from normal client delivery. Classic use case: a number that "doesn't
+accept text messages, please call us instead."
+
+```bash
+# 1. Master switch in .env
+AUTO_REPLY_ENABLED=true
+AUTO_REPLY_DEFAULT_MESSAGE="This number does not accept text messages. Please call us instead."
+
+# 2. Find the number's DB id (note "id" in each entry's "numbers")
+curl -u admin:$API_KEY http://gateway:3000/clients/7 | jq '.numbers[] | {id, number, settings}'
+
+# 3. Enable + customize on the specific number
+curl -X PUT http://gateway:3000/numbers/42/auto-reply \
+  -u admin:$API_KEY -H "Content-Type: application/json" \
+  -d '{"enabled":true,"message":"Please call 250-555-0100 — we do not accept texts.","cooldown_secs":60}'
+
+# 4. Verify (effective_* reflects master × per-number × STOP merge)
+curl -u admin:$API_KEY http://gateway:3000/numbers/42/auto-reply
+```
+
+Or use the interactive Python manager (`scripts/main.py`) — menu items `j` to
+show and `k` to configure. The `q` quick-flow also prompts to set auto-reply
+on every newly added number.
+
+See [docs/number_management.md](docs/number_management.md#per-number-auto-reply)
+for full behavior, STOP semantics, and cooldown details.
+
 ---
 
 ## API Endpoints

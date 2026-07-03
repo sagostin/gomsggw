@@ -250,6 +250,10 @@ Lets a single destination number auto-respond to inbound messages with a
 configurable body. Classic use case: a law firm whose public number "does not
 accept text messages — please call us instead."
 
+> **Operator tooling**: the Python manager (`scripts/main.py`) exposes this as
+> menu items `j` (show) and `k` (configure). The `q` quick-flow also prompts
+> to configure auto-reply on every freshly added number.
+
 ### Behavior
 
 - Fires on **carrier→client** inbound AND **client→client** inbound whose
@@ -292,6 +296,25 @@ curl -X PUT http://gateway:3000/numbers/42/auto-reply \
 
 After this, anyone texting +12505550100 (the firm's number) gets the rejection
 SMS back, and the inbound is NOT delivered to the firm's webhook / PBX.
+
+### Full Curl Sequence (find → configure → verify)
+
+```bash
+# 0. Master switch in .env (already set in step 1 above)
+AUTO_REPLY_ENABLED=true
+AUTO_REPLY_DEFAULT_MESSAGE="This number does not accept text messages. Please call us instead."
+
+# 1. Find the number's DB id (note the "id" field of each entry in "numbers")
+curl -u admin:$API_KEY http://gateway:3000/clients/7 | jq '.numbers[] | {id, number, settings}'
+
+# 2. Enable + customize on the specific number (id=42)
+curl -X PUT http://gateway:3000/numbers/42/auto-reply \
+  -u admin:$API_KEY -H "Content-Type: application/json" \
+  -d '{"enabled":true,"message":"Custom reply for this number","cooldown_secs":60}'
+
+# 3. Verify (returns effective_enabled / effective_message after merging env)
+curl -u admin:$API_KEY http://gateway:3000/numbers/42/auto-reply
+```
 
 ### Same config via `PUT /clients/{id}/numbers/{number_id}`
 

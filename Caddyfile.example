@@ -1,0 +1,44 @@
+# Example Caddyfile for hosting the GOMSGGW admin control panel with TLS.
+#
+# ----------------------------------------------------------------------
+# Option A (recommended): Caddy fronts the admin-ui container.
+# The nginx inside admin-ui already serves the SPA and proxies the admin
+# API to the gateway, so Caddy just adds TLS + a hostname.
+# ----------------------------------------------------------------------
+#
+# admin.example.com {
+#     # If Caddy runs on the same docker network (gomsggw-network):
+#     reverse_proxy admin-ui:80
+#
+#     # If Caddy runs on the host instead:
+#     # reverse_proxy localhost:8080
+# }
+
+# ----------------------------------------------------------------------
+# Option B: Caddy serves everything directly — no admin-ui container.
+# Build the SPA on the host (cd admin-ui && npm ci && npm run build) and
+# copy admin-ui/dist to /srv/gomsggw-admin-ui.
+# ----------------------------------------------------------------------
+
+admin.example.com {
+    root * /srv/gomsggw-admin-ui
+
+    # Admin API → gateway. SPA routes never collide with these because the
+    # panel is served under /ui/.
+    @api path /clients* /carriers* /numbers* /stats*
+    handle @api {
+        reverse_proxy gomsggw:3000
+    }
+
+    # SPA under /ui/ (the Vite base path). Strip the prefix so built assets
+    # resolve from the root, fall back to index.html for history routing.
+    handle /ui/* {
+        uri strip_prefix /ui
+        try_files {path} /index.html
+        file_server
+    }
+
+    handle {
+        redir / /ui/
+    }
+}

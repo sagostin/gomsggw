@@ -174,6 +174,9 @@ func main() {
 	}
 
 	app.Use(ProxyIPMiddleware)
+	// UseRouter (not Use) so CORS preflight OPTIONS requests are answered even
+	// for routes that don't register an OPTIONS handler.
+	app.UseRouter(CORSMiddleware)
 
 	SetupCarrierRoutes(app, gateway)
 	SetupClientRoutes(app, gateway)

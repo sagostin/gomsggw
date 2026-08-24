@@ -2,6 +2,9 @@
 
 Interactive CLI tool for managing carriers, clients, and phone numbers.
 
+> [!TIP]
+> There is also a browser-based admin panel in [`admin-ui/`](../admin-ui/README.md) that covers the same operations — friendlier for colleagues who don't want to run Python.
+
 ## Setup
 
 ```bash

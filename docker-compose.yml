@@ -42,8 +42,26 @@ services:
       - SERVER_ID=gomsggw1
       - POSTGRES_HOST=postgres
 
+  admin-ui:
+    build:
+      context: ./admin-ui
+    container_name: gomsggw-admin-ui
+    restart: always
+    depends_on:
+      - gomsggw
+    networks:
+      - gomsggw-network
+    ports:
+      - "8080:80" # Admin control panel → http://<host>:8080/ui/
+    environment:
+      # In-stack: nginx inside this container proxies the admin API to the gateway
+      - GATEWAY_URL=http://gomsggw:3000
+
 networks:
   gomsggw-network:
+    # Explicit name so admin-ui/docker-compose.yml (standalone mode) can
+    # attach to the same network externally.
+    name: gomsggw-network
     driver: bridge
 
 volumes:

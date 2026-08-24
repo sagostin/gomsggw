@@ -172,13 +172,33 @@ services:
       - SERVER_ID=gomsggw1
       - POSTGRES_HOST=postgres
 
+  admin-ui:
+    build:
+      context: ./admin-ui
+    container_name: gomsggw-admin-ui
+    restart: always
+    depends_on:
+      - gomsggw
+    networks:
+      - gomsggw-network
+    ports:
+      - "8080:80" # Admin control panel → http://<host>:8080/ui/
+    environment:
+      # In-stack: nginx inside this container proxies the admin API to the gateway
+      - GATEWAY_URL=http://gomsggw:3000
+
 networks:
   gomsggw-network:
+    # Explicit name so admin-ui/docker-compose.yml (standalone mode) can
+    # attach to the same network externally.
+    name: gomsggw-network
     driver: bridge
 
 volumes:
   postgres_data:
 ```
+
+The `admin-ui` service builds the Vue 3 admin control panel from `admin-ui/` and serves it on port 8080 (path `/ui/`), with the admin API proxied in-stack to the gateway — no CORS configuration required. See [admin-ui/README.md](../admin-ui/README.md) and [Caddyfile.example](../Caddyfile.example) for TLS fronting options.
 
 > [!NOTE]
 > **Prometheus port (2550) is intentionally not exposed** in the default compose file — the gateway scrapes metrics on a private network. To scrape from your host or a Prometheus container on another network, add `- "2550:2550"` to the `gomsggw` service `ports:` list, or run Prometheus on the same `gomsggw-network` bridge.

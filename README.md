@@ -239,6 +239,20 @@ Interactive menu for managing carriers, clients, and numbers. See [scripts/READM
 
 ---
 
+## Admin Control Panel (Web UI)
+
+A Vue 3 + Vite admin portal lives in [admin-ui/](admin-ui/) and covers the same operations as the Python CLI — carriers, clients, numbers (bulk add, auto-reply), API keys, failovers, and SMPP session status. You only need the gateway URL and the `API_KEY` master key.
+
+**Alongside the gateway (same compose stack):** the root `docker-compose.yml` includes the `admin-ui` service — `docker compose up -d --build` brings it up at `http://<host>:8080/ui/` with the API proxied in-stack.
+
+**Standalone:** `docker compose -f admin-ui/docker-compose.yml up -d --build` (attaches to the shared `gomsggw-network`).
+
+**Behind Caddy with TLS:** see [Caddyfile.example](Caddyfile.example) for either fronting the container or serving the static build directly.
+
+If you host the panel on a different origin entirely, the gateway allows cross-origin browser calls by default (`CORS_ALLOWED_ORIGINS=*`, see [configuration](docs/configuration.md)). See [admin-ui/README.md](admin-ui/README.md).
+
+---
+
 ## Testing
 
 Unit tests cover the pure-function surface of the gateway (encryption, rate-limit resolution, SMPP conversation ordering, batch template rendering, CSV parsing, MMS URL helpers, GSM-7 validation, etc.). They run with no external dependencies — no PostgreSQL or network required.
@@ -276,6 +290,7 @@ The `Makefile` runs the root package only; `migration/` has a pre-existing dupli
 - **Admin endpoints** protected by `API_KEY`
 - **Client endpoints** use Basic/Bearer auth
 - **SMPP ACL** validates source IP for legacy clients
+- **CORS** for browser callers defaults to any origin (`CORS_ALLOWED_ORIGINS=*`) — the `API_KEY` still gates access; restrict it when exposing the admin API to the internet
 - Usernames stored in plaintext (used as lookup key)
 
 ---

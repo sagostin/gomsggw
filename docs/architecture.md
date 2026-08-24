@@ -252,7 +252,8 @@ sequenceDiagram
 HTTP API server for management, carrier webhooks, and web clients.
 
 **Framework**: Iris (high-performance Go web framework)  
-**Authentication**: Basic Auth / API Keys
+**Authentication**: Basic Auth / API Keys  
+**CORS**: `cors.go` middleware answers browser preflight (OPTIONS) and sets `Access-Control-Allow-*` per `CORS_ALLOWED_ORIGINS` (default `*`) — enables the `admin-ui` SPA to call the API from another origin
 
 **Endpoint Categories:**
 1. **Health & Monitoring**: `/health`, `/stats`

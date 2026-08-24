@@ -1,0 +1,32 @@
+# Admin control panel for GOMSGGW.
+#
+# Serves the Vue SPA and reverse-proxies the gateway admin API
+# (/clients, /carriers, /numbers, /stats) same-origin, so no CORS
+# changes are needed on the gateway.
+#
+# Usage:
+#   docker compose -f admin-ui/docker-compose.yml up -d --build
+#
+# Set GATEWAY_URL to reach the gateway container (default assumes it
+# is attached to the shared "gomsggw-network" from the root compose).
+services:
+  admin-ui:
+    build:
+      context: .
+    container_name: gomsggw-admin-ui
+    environment:
+      # Inside docker-compose: http://gomsggw:3000
+      # From the host: http://localhost:3000 or http://<gateway-host>:3000
+      GATEWAY_URL: ${GATEWAY_URL:-http://gomsggw:3000}
+    ports:
+      - "8080:80"
+    restart: always
+    networks:
+      - gomsggw-network
+
+networks:
+  gomsggw-network:
+    name: gomsggw-network
+    # Created by the root docker-compose.yml; set external: false if
+    # you want this compose file to create it standalone instead.
+    external: true

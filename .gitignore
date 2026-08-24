@@ -1,0 +1,18 @@
+# Build artifacts
+zultys-smpp-mm4
+
+# Local environment / secrets (sample.env stays tracked)
+.env
+*.env
+!sample.env
+
+# Runtime data
+postgres_data/
+transcode/
+
+# Python cache (scripts/)
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

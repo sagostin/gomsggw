@@ -13,6 +13,9 @@ Use Basic Auth with `admin:<API_KEY>` (env var `API_KEY`).
 curl -H "Authorization: Basic $(echo -n 'admin:YOUR_API_KEY' | base64)" ...
 ```
 
+> [!NOTE]
+> **Browser clients / CORS:** cross-origin browser calls (e.g. the `admin-ui` control panel) are allowed by default via `CORS_ALLOWED_ORIGINS=*`. Preflight `OPTIONS` requests are answered without auth. Restrict to specific origins or disable with `off` — see [configuration.md](configuration.md#cors_allowed_origins).
+
 ### Web Client Endpoints
 
 Authentication method depends on the client's `auth_method` setting:

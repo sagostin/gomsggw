@@ -124,6 +124,16 @@ API key for admin endpoint authentication.
 API_KEY=your-admin-api-key
 ```
 
+### CORS_ALLOWED_ORIGINS
+
+**Default**: `*`
+
+Origins allowed to call the API from a browser (e.g. the `admin-ui` control panel). The default `*` lets any browser origin attempt requests — access is still gated by `API_KEY`. Set a comma-separated allowlist to restrict, or `off` to disable CORS headers entirely (breaks browser clients on other origins).
+
+```bash
+CORS_ALLOWED_ORIGINS=https://admin.example.com
+```
+
 ### TRUSTED_PROXIES
 
 **Default**: `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fc00::/7`
@@ -616,6 +626,7 @@ POSTGRES_TIMEZONE=America/Vancouver
 # Security
 ENCRYPTION_KEY=abcdefghijklmnopqrstuvwxyz123456
 API_KEY=admin_api_key_here
+CORS_ALLOWED_ORIGINS=*
 
 # Services
 WEB_LISTEN=0.0.0.0:3000

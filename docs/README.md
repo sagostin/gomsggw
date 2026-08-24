@@ -36,6 +36,7 @@ Complete documentation for the GOMSGGW messaging gateway.
 → [Legacy Clients Guide](legacy_clients.md)
 
 ### For Administrators
+→ [Admin Control Panel](../admin-ui/README.md) — web UI for carriers, clients, numbers, API keys, failovers
 → [API Reference](api_reference.md)
 → [Configuration](configuration.md)
 → [Deployment](deployment.md)

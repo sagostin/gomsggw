@@ -129,6 +129,9 @@ Number restriction: (blank for all)
 | API Key | `Authorization: Bearer gw_live_...` | External app integration |
 | Admin Key | `Authorization: Basic base64(apikey:KEY)` | CLI/admin operations |
 
+> [!TIP]
+> For day-to-day admin work, use the web-based **admin control panel** in [`admin-ui/`](../admin-ui/README.md) instead of curl or the Python CLI — it takes the gateway URL and the `API_KEY` and covers carriers, clients, numbers, API keys, failovers, and SMPP status.
+
 ### Send a Single Message
 
 ```bash

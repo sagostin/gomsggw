@@ -372,13 +372,39 @@ func (s *MM4Server) handleConnection(conn net.Conn) {
 }
 
 // getClientByIP returns the client associated with the given IP address.
+// Client addresses may be literal IPs or hostnames — hostnames are resolved
+// via DNS when no direct IP match is found.
 func (s *MM4Server) getClientByIP(ip string) *Client {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	clients := make([]*Client, 0, len(s.gateway.Clients))
 	for _, client := range s.gateway.Clients {
 		if client.Address == ip {
+			s.mu.RUnlock()
 			return client
+		}
+		clients = append(clients, client)
+	}
+	s.mu.RUnlock()
+
+	// No literal match — try resolving hostname addresses. Done outside the
+	// lock since DNS lookups can block.
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return nil
+	}
+	for _, client := range clients {
+		addr := strings.TrimSpace(client.Address)
+		if addr == "" || net.ParseIP(addr) != nil {
+			continue // empty, or a literal IP that already failed the direct match
+		}
+		ips, err := net.LookupIP(addr)
+		if err != nil {
+			continue
+		}
+		for _, resolved := range ips {
+			if resolved.Equal(parsed) {
+				return client
+			}
 		}
 	}
 	return nil

@@ -83,6 +83,12 @@ export interface ClientCreateRequest {
   address?: string
 }
 
+export interface ClientUpdateRequest {
+  name?: string
+  type?: string
+  address?: string
+}
+
 export interface ClientSettingsUpdate {
   auth_method?: string
   api_format?: string

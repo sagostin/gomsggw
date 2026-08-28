@@ -27,6 +27,8 @@ const carriers = ref<Carrier[]>([])
 const showAdd = ref(false)
 const addCarrier = ref('telnyx')
 const addRaw = ref('')
+const addTag = ref('')
+const addGroup = ref('')
 const adding = ref(false)
 const addResults = ref<{ num: string; status: 'pending' | 'added' | 'skipped' | 'failed'; detail?: string }[]>([])
 
@@ -116,6 +118,8 @@ onMounted(async () => {
 
 function openAdd() {
   addRaw.value = ''
+  addTag.value = ''
+  addGroup.value = ''
   addResults.value = []
   showAdd.value = true
 }
@@ -134,7 +138,7 @@ async function submitAdd() {
   for (const r of addResults.value) {
     if (r.status !== 'pending') continue
     try {
-      await addNumber(props.client.id, r.num, addCarrier.value)
+      await addNumber(props.client.id, r.num, addCarrier.value, addTag.value || undefined, addGroup.value || undefined)
       r.status = 'added'
       existing.add(r.num)
     } catch (e) {
@@ -332,6 +336,28 @@ async function submitAutoReply() {
             <option v-for="c in carriers" :key="c.id" :value="c.name">{{ c.name }}</option>
             <option v-if="!carriers.length" value="telnyx">telnyx</option>
           </select>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-400">
+              Tag <span class="text-slate-600">(optional, applies to all)</span>
+            </label>
+            <input
+              v-model="addTag"
+              :disabled="adding"
+              class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none disabled:opacity-50"
+            />
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-400">
+              Group <span class="text-slate-600">(optional, applies to all)</span>
+            </label>
+            <input
+              v-model="addGroup"
+              :disabled="adding"
+              class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none disabled:opacity-50"
+            />
+          </div>
         </div>
         <div>
           <label class="mb-1 block text-xs font-medium text-slate-400">

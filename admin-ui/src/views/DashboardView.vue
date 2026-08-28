@@ -19,19 +19,28 @@ const carrierCount = ref<number | null>(null)
 const loading = ref(true)
 const reloading = ref(false)
 
+const isLegacy = (c: Client) => !c.type || c.type === 'legacy'
+
+const legacyClients = computed(() => clients.value.filter(isLegacy))
+const webClients = computed(() => clients.value.filter((c) => !isLegacy(c)))
+
 const connectedClients = computed<ConnectedClient[]>(() => {
   const byUsername = new Map(clients.value.map((c) => [c.username, c]))
   const map = new Map<string, ConnectedClient>()
   for (const s of stats.value?.smpp_clients ?? []) {
+    const client = byUsername.get(s.username)
+    if (client && !isLegacy(client)) continue // web clients can't hold SMPP/MM4 sessions
     const entry = map.get(s.username) ?? { username: s.username }
     entry.smpp = { ip_address: s.ip_address, last_seen: s.last_seen }
-    entry.client = byUsername.get(s.username)
+    entry.client = client
     map.set(s.username, entry)
   }
   for (const m of stats.value?.mm4_clients ?? []) {
+    const client = byUsername.get(m.username)
+    if (client && !isLegacy(client)) continue
     const entry = map.get(m.username) ?? { username: m.username }
     entry.mm4 = { active_sessions: m.active_sessions, last_activity_at: m.last_activity_at }
-    entry.client = byUsername.get(m.username)
+    entry.client = client
     map.set(m.username, entry)
   }
   return [...map.values()].sort((a, b) => a.username.localeCompare(b.username))
@@ -39,7 +48,7 @@ const connectedClients = computed<ConnectedClient[]>(() => {
 
 const disconnectedClients = computed(() => {
   const online = new Set(connectedClients.value.map((c) => c.username))
-  return clients.value.filter((c) => !online.has(c.username))
+  return legacyClients.value.filter((c) => !online.has(c.username))
 })
 
 async function load() {
@@ -177,7 +186,7 @@ onMounted(load)
           Not connected ({{ disconnectedClients.length }})
         </h2>
         <div v-if="!disconnectedClients.length" class="px-4 py-6 text-sm text-slate-500">
-          All clients are connected.
+          All legacy clients are connected.
         </div>
         <div v-else class="divide-y divide-slate-800/50">
           <div
@@ -209,6 +218,37 @@ onMounted(load)
               >
                 MM4
               </span>
+            </span>
+          </div>
+        </div>
+      </div>
+      <!-- Web clients: REST API only, no SMPP/MM4 sessions to track -->
+      <div v-if="webClients.length" class="mt-4 rounded-lg border border-slate-800 bg-slate-900">
+        <h2 class="border-b border-slate-800 px-4 py-3 text-sm font-semibold text-slate-100">
+          Web clients ({{ webClients.length }})
+        </h2>
+        <div class="divide-y divide-slate-800/50">
+          <div
+            v-for="c in webClients"
+            :key="c.id"
+            class="flex items-center justify-between gap-4 px-4 py-2.5"
+          >
+            <div class="flex min-w-0 items-center gap-3">
+              <RouterLink
+                :to="{ name: 'client-detail', params: { id: c.id } }"
+                class="truncate text-sm font-medium text-slate-200 hover:text-indigo-300"
+              >
+                {{ c.name || c.username }}
+              </RouterLink>
+              <span v-if="c.name && c.name !== c.username" class="truncate text-xs text-slate-500">
+                {{ c.username }}
+              </span>
+            </div>
+            <span
+              class="shrink-0 rounded-full bg-sky-900/60 px-2 py-0.5 text-xs font-medium text-sky-300"
+              title="Web client — REST API/Webhooks, no SMPP/MM4 connectivity"
+            >
+              web
             </span>
           </div>
         </div>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { changeClientPassword, listClients } from '../api'
+import { changeClientPassword, listClients, updateClient } from '../api'
 import type { Client } from '../api/types'
 import AppModal from '../components/AppModal.vue'
 import NumbersTab from '../components/client/NumbersTab.vue'
@@ -25,6 +25,10 @@ const showPassword = ref(false)
 const newPassword = ref('')
 const changingPassword = ref(false)
 const justGenerated = ref('')
+
+const showEdit = ref(false)
+const editForm = ref({ name: '', type: 'legacy', address: '' })
+const savingEdit = ref(false)
 
 const tabs = [
   { key: 'numbers', label: 'Numbers' },
@@ -75,6 +79,31 @@ async function copyGenerated() {
   toasts.success('Password copied to clipboard.')
 }
 
+function openEdit() {
+  if (!client.value) return
+  editForm.value = {
+    name: client.value.name || '',
+    type: client.value.type || 'legacy',
+    address: client.value.address || '',
+  }
+  showEdit.value = true
+}
+
+async function submitEdit() {
+  if (!client.value) return
+  savingEdit.value = true
+  try {
+    await updateClient(clientId.value, { ...editForm.value })
+    toasts.success('Client updated.')
+    showEdit.value = false
+    await load()
+  } catch (e) {
+    toasts.error(errorMessage(e))
+  } finally {
+    savingEdit.value = false
+  }
+}
+
 onMounted(load)
 </script>
 
@@ -103,12 +132,20 @@ onMounted(load)
             <span v-if="client.address"> · {{ client.address }}</span>
           </p>
         </div>
-        <button
-          class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
-          @click="openPasswordModal"
-        >
-          Change password
-        </button>
+        <div class="flex gap-2">
+          <button
+            class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+            @click="openEdit"
+          >
+            Edit client
+          </button>
+          <button
+            class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+            @click="openPasswordModal"
+          >
+            Change password
+          </button>
+        </div>
       </div>
 
       <div class="mb-4 flex gap-1 border-b border-slate-800">
@@ -133,6 +170,63 @@ onMounted(load)
       <FailoversTab v-else-if="activeTab === 'failover'" :client="client" :all-clients="allClients" @changed="load" />
       <StatusTab v-else :client="client" />
     </template>
+
+    <AppModal v-if="showEdit" :title="`Edit ${client?.username ?? 'client'}`" @close="showEdit = false">
+      <form class="space-y-4" @submit.prevent="submitEdit">
+        <div>
+          <label class="mb-1 block text-xs font-medium text-slate-400">Display name</label>
+          <input
+            v-model="editForm.name"
+            placeholder="Company name"
+            class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          />
+        </div>
+        <div>
+          <label class="mb-1 block text-xs font-medium text-slate-400">Type</label>
+          <select
+            v-model="editForm.type"
+            class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          >
+            <option value="legacy">legacy (SMPP/MM4)</option>
+            <option value="web">web (REST API/Webhooks)</option>
+          </select>
+          <p class="mt-1 text-xs text-slate-600">
+            Web clients connect via the REST API only — they can't bind SMPP or MM4 sessions.
+          </p>
+        </div>
+        <div>
+          <label class="mb-1 block text-xs font-medium text-slate-400">
+            Address (IP or hostname)
+            <span v-if="editForm.type === 'legacy'" class="text-red-400">*</span>
+            <span v-else class="text-slate-600">(optional)</span>
+          </label>
+          <input
+            v-model="editForm.address"
+            :required="editForm.type === 'legacy'"
+            placeholder="e.g. 203.0.113.10 or mm4.example.com"
+            class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          />
+          <p v-if="editForm.type === 'legacy'" class="mt-1 text-xs text-slate-600">
+            Required for legacy clients — used for the MM4 auth/validation and delivery. Hostnames are resolved via DNS.
+          </p>
+        </div>
+      </form>
+      <template #footer>
+        <button
+          class="rounded-md border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+          @click="showEdit = false"
+        >
+          Cancel
+        </button>
+        <button
+          class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          :disabled="savingEdit"
+          @click="submitEdit"
+        >
+          {{ savingEdit ? 'Saving…' : 'Save' }}
+        </button>
+      </template>
+    </AppModal>
 
     <AppModal v-if="showPassword" title="Change password" @close="showPassword = false">
       <div v-if="justGenerated" class="mb-4 rounded-md border border-amber-700 bg-amber-950 p-3">

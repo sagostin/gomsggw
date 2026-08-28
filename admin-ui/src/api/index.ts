@@ -10,6 +10,7 @@ import type {
   ClientCreateRequest,
   ClientSettings,
   ClientSettingsUpdate,
+  ClientUpdateRequest,
   Failover,
   NumberUpdateRequest,
   SmppStatus,
@@ -28,6 +29,8 @@ export const reloadCarriers = () => http.post<{ status?: string }>('/carriers/re
 // --- Clients ---
 export const listClients = () => http.get<Client[]>('/clients')
 export const createClient = (payload: ClientCreateRequest) => http.post<Client>('/clients', payload)
+export const updateClient = (id: number, payload: ClientUpdateRequest) =>
+  http.patch<{ message: string; client: Client }>(`/clients/${id}`, payload)
 export const deleteClient = (id: number) => http.delete<{ status?: string }>(`/clients/${id}`)
 export const reloadClients = () => http.post<{ status?: string }>('/clients/reload')
 export const changeClientPassword = (id: number, newPassword: string) =>
@@ -38,8 +41,8 @@ export const updateClientSettings = (id: number, payload: ClientSettingsUpdate) 
   http.put<{ message: string; settings: ClientSettings }>(`/clients/${id}/settings`, payload)
 
 // --- Numbers ---
-export const addNumber = (clientId: number, number: string, carrier: string) =>
-  http.post(`/clients/${clientId}/numbers`, { number, carrier })
+export const addNumber = (clientId: number, number: string, carrier: string, tag?: string, group?: string) =>
+  http.post(`/clients/${clientId}/numbers`, { number, carrier, tag, group })
 export const updateNumber = (clientId: number, numberId: number, payload: NumberUpdateRequest) =>
   http.put(`/clients/${clientId}/numbers/${numberId}`, payload)
 export const deleteNumber = (clientId: number, numberId: number) =>

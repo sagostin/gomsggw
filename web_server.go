@@ -417,6 +417,102 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			ctx.JSON(iris.Map{"status": "Password updated successfully"})
 		})
 
+		// Update client core fields (name, type, address)
+		clients.Patch("/{id}", func(ctx iris.Context) {
+			clientID, err := strconv.ParseUint(ctx.Params().Get("id"), 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid client ID format"})
+				return
+			}
+
+			var updateReq struct {
+				Name    *string `json:"name,omitempty"`
+				Type    *string `json:"type,omitempty"`
+				Address *string `json:"address,omitempty"`
+			}
+			if err := ctx.ReadJSON(&updateReq); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request data"})
+				return
+			}
+
+			client := gateway.getClientByID(uint(clientID))
+			if client == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Client not found"})
+				return
+			}
+
+			newName := client.Name
+			if updateReq.Name != nil {
+				newName = strings.TrimSpace(*updateReq.Name)
+			}
+			newType := client.Type
+			if updateReq.Type != nil {
+				t := strings.ToLower(strings.TrimSpace(*updateReq.Type))
+				if t != "legacy" && t != "web" {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"error": "Type must be 'legacy' or 'web'"})
+					return
+				}
+				newType = t
+			}
+			if newType == "" {
+				newType = "legacy"
+			}
+			newAddress := client.Address
+			if updateReq.Address != nil {
+				newAddress = strings.TrimSpace(*updateReq.Address)
+			}
+
+			// Legacy clients require an address (IP or hostname) for SMPP ACL and MM4 delivery
+			if newType == "legacy" && newAddress == "" {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Address (IP or hostname) is required for legacy clients"})
+				return
+			}
+
+			if err := gateway.DB.Model(&Client{}).Where("id = ?", client.ID).Updates(map[string]interface{}{
+				"name":    newName,
+				"type":    newType,
+				"address": newAddress,
+			}).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to update client"})
+				return
+			}
+
+			gateway.mu.Lock()
+			client.Name = newName
+			client.Type = newType
+			client.Address = newAddress
+			gateway.mu.Unlock()
+
+			gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+				"WebServer.Client",
+				"Updated",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"client_id": client.ID,
+					"username":  client.Username,
+					"type":      newType,
+					"address":   newAddress,
+				},
+			))
+
+			ctx.JSON(iris.Map{
+				"message": "Client updated",
+				"client": iris.Map{
+					"id":       client.ID,
+					"username": client.Username,
+					"name":     newName,
+					"type":     newType,
+					"address":  newAddress,
+				},
+			})
+		})
+
 		// Add a new number to a client
 		clients.Post("/{id}/numbers", func(ctx iris.Context) {
 			clientIDStr := ctx.Params().Get("id")

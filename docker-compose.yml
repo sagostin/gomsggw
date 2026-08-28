@@ -35,8 +35,8 @@ services:
     networks:
       - gomsggw-network
     ports:
-      - "3000:3000" # Web API
-      - "9550:9550" # SMPP
+      - "80:3000" # Web API
+      - "2775:2775" # SMPP
       - "2566:2566" # MM4
     environment:
       - SERVER_ID=gomsggw1

@@ -512,8 +512,8 @@ Remove a failover entry (admin auth). The gateway reloads clients after deletion
 
 ---
 
-### GET /clients/{id}/smpp-status
-Get the SMPP session status for a client and the live status of each configured failover (admin auth).
+### GET /clients/{id}/legacy-status
+Get the legacy session status for a client — SMPP bind state, MM4 session state — and the live status of each configured failover (admin auth). MM4 state is aggregated across all source IPs the client has connected from.
 
 **Response**:
 ```json
@@ -530,9 +530,17 @@ Get the SMPP session status for a client and the live status of each configured 
       "priority": 0,
       "online": true
     }
-  ]
+  ],
+  "mm4": {
+    "online": true,
+    "active_sessions": 2,
+    "first_connect_at": "2026-08-28T10:00:00Z",
+    "last_activity_at": "2026-08-28T12:30:00Z"
+  }
 }
 ```
+
+The top-level `online`/`ip` fields describe the SMPP bind; the `mm4` object describes MM4 connectivity.
 
 ---
 

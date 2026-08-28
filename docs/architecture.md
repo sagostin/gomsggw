@@ -302,7 +302,7 @@ Allows an admin to declare that a legacy client's outbound traffic should be re-
 3. Return the first fallback client with an active SMPP session
 4. Log the failover activation; if all failovers are offline, the message is queued for retry
 
-**Admin endpoints**: `/clients/{id}/failovers[/{failover_id}]` (CRUD) and `/clients/{id}/smpp-status` for live diagnostics.
+**Admin endpoints**: `/clients/{id}/failovers[/{failover_id}]` (CRUD) and `/clients/{id}/legacy-status` for live SMPP/MM4 diagnostics.
 
 ---
 

@@ -149,7 +149,7 @@ for full behavior, STOP semantics, and cooldown details.
 | POST | `/clients/{id}/failovers` | Add failover |
 | PUT | `/clients/{id}/failovers/{failover_id}` | Update failover |
 | DELETE | `/clients/{id}/failovers/{failover_id}` | Remove failover |
-| GET | `/clients/{id}/smpp-status` | SMPP session status + failovers |
+| GET | `/clients/{id}/legacy-status` | Legacy (SMPP + MM4) session status + failovers |
 | POST | `/clients/{id}/api-keys` | Create tenant API key |
 | GET | `/clients/{id}/api-keys` | List tenant API keys |
 | DELETE | `/clients/{id}/api-keys/{key_id}` | Revoke tenant API key |

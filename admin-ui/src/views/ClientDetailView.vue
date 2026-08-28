@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { changeClientPassword, listClients, updateClient } from '../api'
 import type { Client } from '../api/types'
 import AppModal from '../components/AppModal.vue'
@@ -30,13 +30,24 @@ const showEdit = ref(false)
 const editForm = ref({ name: '', type: 'legacy', address: '' })
 const savingEdit = ref(false)
 
-const tabs = [
-  { key: 'numbers', label: 'Numbers' },
-  { key: 'settings', label: 'Settings' },
-  { key: 'apikeys', label: 'API Keys' },
-  { key: 'failover', label: 'Failover' },
-  { key: 'status', label: 'SMPP Status' },
-] as const
+const isLegacy = computed(() => !client.value?.type || client.value.type === 'legacy')
+
+const tabs = computed(() => {
+  const list = [
+    { key: 'numbers', label: 'Numbers' },
+    { key: 'settings', label: 'Settings' },
+    { key: 'apikeys', label: 'API Keys' },
+    { key: 'failover', label: 'Failover' },
+  ] as { key: typeof activeTab.value; label: string }[]
+  // Web clients can't hold SMPP/MM4 sessions, so the status tab is irrelevant.
+  if (isLegacy.value) list.push({ key: 'status', label: 'Legacy Status' })
+  return list
+})
+
+// If the type is switched to web while the status tab is open, bounce back to numbers.
+watch(isLegacy, (legacy) => {
+  if (!legacy && activeTab.value === 'status') activeTab.value = 'numbers'
+})
 
 async function load() {
   loading.value = true

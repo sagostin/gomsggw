@@ -180,10 +180,16 @@ export interface Failover {
   fallback_online?: boolean
 }
 
-export interface SmppStatus {
+export interface LegacyStatus {
   online: boolean
   ip?: string
   failovers?: { username: string; name: string; priority: number; online: boolean }[]
+  mm4?: {
+    online: boolean
+    active_sessions: number
+    first_connect_at: string
+    last_activity_at: string
+  }
 }
 
 export interface StatsResponse {

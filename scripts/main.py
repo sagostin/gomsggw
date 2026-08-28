@@ -1130,17 +1130,17 @@ def remove_failover(identifier: str) -> None:
 
 
 def show_smpp_status(identifier: str) -> None:
-    """Show SMPP session and failover status for a client."""
+    """Show legacy (SMPP + MM4) session and failover status for a client."""
     client = get_client_by_identifier(identifier)
     if not client:
         print(f"Client '{identifier}' not found.")
         return
 
     client_id = client.get("id")
-    print(f"\n=== SMPP Status for '{client.get('username')}' (ID: {client_id}) ===")
+    print(f"\n=== Legacy Status for '{client.get('username')}' (ID: {client_id}) ===")
 
     try:
-        resp = get_json(f"/clients/{client_id}/smpp-status")
+        resp = get_json(f"/clients/{client_id}/legacy-status")
     except requests.RequestException as e:
         print(f"Network error: {e}")
         return
@@ -1154,9 +1154,16 @@ def show_smpp_status(identifier: str) -> None:
     ip = data.get("ip", "")
 
     status_icon = "🟢 ONLINE" if online else "🔴 OFFLINE"
-    print(f"\n  Primary: {status_icon}")
+    print(f"\n  SMPP: {status_icon}")
     if ip:
         print(f"  IP: {ip}")
+
+    mm4 = data.get("mm4") or {}
+    mm4_online = mm4.get("online", False)
+    mm4_icon = "🟢 ONLINE" if mm4_online else "🔴 OFFLINE"
+    print(f"  MM4: {mm4_icon}")
+    if mm4_online:
+        print(f"  MM4 sessions: {mm4.get('active_sessions', 0)} (last activity {mm4.get('last_activity_at', '')})")
 
     failovers = data.get("failovers") or []
     if failovers:

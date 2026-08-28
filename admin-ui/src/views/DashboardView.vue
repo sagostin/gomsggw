@@ -46,6 +46,10 @@ const connectedClients = computed<ConnectedClient[]>(() => {
   return [...map.values()].sort((a, b) => a.username.localeCompare(b.username))
 })
 
+// Split by protocol coverage so each legacy client appears in exactly one list.
+const fullyConnectedClients = computed(() => connectedClients.value.filter((c) => c.smpp && c.mm4))
+const partiallyConnectedClients = computed(() => connectedClients.value.filter((c) => !c.smpp || !c.mm4))
+
 const disconnectedClients = computed(() => {
   const online = new Set(connectedClients.value.map((c) => c.username))
   return legacyClients.value.filter((c) => !online.has(c.username))
@@ -129,15 +133,70 @@ onMounted(load)
         </div>
       </div>
 
-      <!-- Connected clients: single merged list with per-feature badges -->
+      <!-- Connected clients: both SMPP and MM4 sessions up, with per-protocol badges -->
       <div class="mt-6 rounded-lg border border-slate-800 bg-slate-900">
         <h2 class="border-b border-slate-800 px-4 py-3 text-sm font-semibold text-slate-100">
-          Connected clients ({{ connectedClients.length }})
+          Connected clients ({{ fullyConnectedClients.length }})
         </h2>
-        <div v-if="!connectedClients.length" class="px-4 py-6 text-sm text-slate-500">No clients connected.</div>
+        <div v-if="!fullyConnectedClients.length" class="px-4 py-6 text-sm text-slate-500">
+          No clients fully connected.
+        </div>
         <div v-else class="divide-y divide-slate-800/50">
           <div
-            v-for="c in connectedClients"
+            v-for="c in fullyConnectedClients"
+            :key="c.username"
+            class="flex items-center justify-between gap-4 px-4 py-2.5"
+          >
+            <div class="flex min-w-0 items-center gap-3">
+              <RouterLink
+                v-if="c.client"
+                :to="{ name: 'client-detail', params: { id: c.client.id } }"
+                class="truncate text-sm font-medium text-slate-200 hover:text-indigo-300"
+              >
+                {{ c.client.name || c.username }}
+              </RouterLink>
+              <span v-else class="truncate text-sm font-medium text-slate-200">{{ c.username }}</span>
+              <span v-if="c.client?.name && c.client.name !== c.username" class="truncate text-xs text-slate-500">
+                {{ c.username }}
+              </span>
+              <span class="flex shrink-0 gap-1.5">
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="c.smpp ? 'bg-emerald-900/60 text-emerald-300' : 'bg-slate-800 text-slate-600'"
+                  :title="c.smpp ? 'SMPP connected' : 'SMPP not connected'"
+                >
+                  SMPP
+                </span>
+                <span
+                  class="rounded-full px-2 py-0.5 text-xs font-medium"
+                  :class="c.mm4 ? 'bg-sky-900/60 text-sky-300' : 'bg-slate-800 text-slate-600'"
+                  :title="c.mm4 ? 'MM4 connected' : 'MM4 not connected'"
+                >
+                  MM4
+                </span>
+              </span>
+            </div>
+            <div class="flex shrink-0 items-center gap-4 text-xs text-slate-500">
+              <span v-if="c.smpp">{{ c.smpp.ip_address }} · {{ formatDate(c.smpp.last_seen) }}</span>
+              <span v-if="c.mm4">
+                {{ c.mm4.active_sessions }} session(s) · {{ formatDate(c.mm4.last_activity_at) }}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Partially connected: exactly one of SMPP/MM4 is up — dimmed pill flags the missing side -->
+      <div class="mt-4 rounded-lg border border-amber-900/50 bg-slate-900">
+        <h2 class="border-b border-amber-900/50 px-4 py-3 text-sm font-semibold text-amber-200">
+          Partially connected ({{ partiallyConnectedClients.length }})
+        </h2>
+        <div v-if="!partiallyConnectedClients.length" class="px-4 py-6 text-sm text-slate-500">
+          No partially connected clients.
+        </div>
+        <div v-else class="divide-y divide-slate-800/50">
+          <div
+            v-for="c in partiallyConnectedClients"
             :key="c.username"
             class="flex items-center justify-between gap-4 px-4 py-2.5"
           >

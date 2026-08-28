@@ -1,20 +1,20 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { getSmppStatus } from '../../api'
-import type { Client, SmppStatus } from '../../api/types'
+import { getLegacyStatus } from '../../api'
+import type { Client, LegacyStatus } from '../../api/types'
 import { useToastStore } from '../../stores/toast'
-import { errorMessage } from '../../utils/format'
+import { errorMessage, formatDate } from '../../utils/format'
 
 const props = defineProps<{ client: Client }>()
 
 const toasts = useToastStore()
-const status = ref<SmppStatus | null>(null)
+const status = ref<LegacyStatus | null>(null)
 const loading = ref(true)
 
 async function load() {
   loading.value = true
   try {
-    status.value = await getSmppStatus(props.client.id)
+    status.value = await getLegacyStatus(props.client.id)
   } catch (e) {
     toasts.error(errorMessage(e))
   } finally {
@@ -28,7 +28,7 @@ onMounted(load)
 <template>
   <div class="max-w-2xl">
     <div class="mb-4 flex items-center justify-between">
-      <h2 class="text-sm font-semibold text-slate-100">SMPP session status</h2>
+      <h2 class="text-sm font-semibold text-slate-100">Legacy status (SMPP / MM4)</h2>
       <button
         class="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
         @click="load"
@@ -39,15 +39,33 @@ onMounted(load)
 
     <div v-if="loading" class="text-sm text-slate-500">Loading…</div>
     <div v-else-if="status" class="space-y-4">
-      <div class="rounded-lg border border-slate-800 bg-slate-900 p-4">
-        <div class="flex items-center gap-3">
-          <span class="text-lg" :class="status.online ? 'text-emerald-400' : 'text-red-400'">●</span>
-          <div>
-            <div class="text-sm font-medium" :class="status.online ? 'text-emerald-300' : 'text-red-300'">
-              Primary {{ status.online ? 'ONLINE' : 'OFFLINE' }}
-            </div>
-            <div v-if="status.ip" class="text-xs text-slate-500">{{ status.ip }}</div>
+      <div class="grid gap-4 sm:grid-cols-2">
+        <!-- SMPP -->
+        <div class="rounded-lg border border-slate-800 bg-slate-900 p-4">
+          <div class="mb-2 flex items-center justify-between">
+            <span class="rounded-full bg-emerald-900/40 px-2 py-0.5 text-xs font-medium text-emerald-300">SMPP</span>
+            <span class="text-lg leading-none" :class="status.online ? 'text-emerald-400' : 'text-red-400'">●</span>
           </div>
+          <div class="text-sm font-medium" :class="status.online ? 'text-emerald-300' : 'text-red-300'">
+            {{ status.online ? 'ONLINE' : 'OFFLINE' }}
+          </div>
+          <div v-if="status.ip" class="mt-1 text-xs text-slate-500">{{ status.ip }}</div>
+          <div v-else-if="!status.online" class="mt-1 text-xs text-slate-600">No active bind</div>
+        </div>
+
+        <!-- MM4 -->
+        <div class="rounded-lg border border-slate-800 bg-slate-900 p-4">
+          <div class="mb-2 flex items-center justify-between">
+            <span class="rounded-full bg-sky-900/40 px-2 py-0.5 text-xs font-medium text-sky-300">MM4</span>
+            <span class="text-lg leading-none" :class="status.mm4?.online ? 'text-emerald-400' : 'text-red-400'">●</span>
+          </div>
+          <div class="text-sm font-medium" :class="status.mm4?.online ? 'text-emerald-300' : 'text-red-300'">
+            {{ status.mm4?.online ? 'ONLINE' : 'OFFLINE' }}
+          </div>
+          <div v-if="status.mm4?.online" class="mt-1 text-xs text-slate-500">
+            {{ status.mm4.active_sessions }} session(s) · active {{ formatDate(status.mm4.last_activity_at) }}
+          </div>
+          <div v-else class="mt-1 text-xs text-slate-600">No active sessions</div>
         </div>
       </div>
 

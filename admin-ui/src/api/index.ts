@@ -12,8 +12,8 @@ import type {
   ClientSettingsUpdate,
   ClientUpdateRequest,
   Failover,
+  LegacyStatus,
   NumberUpdateRequest,
-  SmppStatus,
   StatsResponse,
   TenantApiKey,
 } from './types'
@@ -69,5 +69,5 @@ export const updateFailover = (clientId: number, failoverId: number, payload: { 
 export const removeFailover = (clientId: number, failoverId: number) =>
   http.delete(`/clients/${clientId}/failovers/${failoverId}`)
 
-// --- SMPP status ---
-export const getSmppStatus = (clientId: number) => http.get<SmppStatus>(`/clients/${clientId}/smpp-status`)
+// --- Legacy (SMPP + MM4) status ---
+export const getLegacyStatus = (clientId: number) => http.get<LegacyStatus>(`/clients/${clientId}/legacy-status`)

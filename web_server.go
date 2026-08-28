@@ -1141,8 +1141,8 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			ctx.JSON(iris.Map{"message": "Failover deleted", "failover_id": failoverID})
 		})
 
-		// SMPP session status for a client
-		clients.Get("/{id}/smpp-status", func(ctx iris.Context) {
+		// Legacy (SMPP + MM4) session status for a client
+		clients.Get("/{id}/legacy-status", func(ctx iris.Context) {
 			clientIDStr := ctx.Params().Get("id")
 			clientID, err := strconv.ParseUint(clientIDStr, 10, 32)
 			if err != nil {
@@ -1171,6 +1171,32 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 						}
 					}
 				}
+			}
+
+			// MM4 session status — clientStates are keyed by hashed source IP,
+			// so a client may have more than one entry; aggregate by username.
+			mm4Online := false
+			mm4Sessions := 0
+			var mm4FirstConnect, mm4LastActivity time.Time
+			if gateway.MM4Server != nil {
+				gateway.MM4Server.mu.RLock()
+				for _, state := range gateway.MM4Server.clientStates {
+					if state.Username != client.Username {
+						continue
+					}
+					n := state.SessionCount()
+					mm4Sessions += n
+					if n > 0 {
+						mm4Online = true
+					}
+					if state.LastActivityAt.After(mm4LastActivity) {
+						mm4LastActivity = state.LastActivityAt
+					}
+					if mm4FirstConnect.IsZero() || state.FirstConnectAt.Before(mm4FirstConnect) {
+						mm4FirstConnect = state.FirstConnectAt
+					}
+				}
+				gateway.MM4Server.mu.RUnlock()
 			}
 
 			// Also check failover status
@@ -1206,6 +1232,12 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 				"online":    online,
 				"ip":        ip,
 				"failovers": failoverStatuses,
+				"mm4": iris.Map{
+					"online":           mm4Online,
+					"active_sessions":  mm4Sessions,
+					"first_connect_at": mm4FirstConnect,
+					"last_activity_at": mm4LastActivity,
+				},
 			})
 		})
 	}

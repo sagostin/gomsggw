@@ -362,7 +362,9 @@ func (gateway *Gateway) loadClients() error {
 
 func (gateway *Gateway) loadNumbers() error {
 	var numbers []ClientNumber
-	if err := gateway.DB.Find(&numbers).Error; err != nil {
+	// Preload per-number Settings so admin endpoints (and anything else
+	// reading gateway.Numbers) see persisted auto-reply config after boot.
+	if err := gateway.DB.Preload("Settings").Find(&numbers).Error; err != nil {
 		return err
 	}
 

@@ -49,8 +49,8 @@ watch(isLegacy, (legacy) => {
   if (!legacy && activeTab.value === 'status') activeTab.value = 'numbers'
 })
 
-async function load() {
-  loading.value = true
+async function load(background = false) {
+  if (!background) loading.value = true
   try {
     allClients.value = (await listClients()) ?? []
     client.value = allClients.value.find((c) => c.id === clientId.value) ?? null
@@ -175,10 +175,10 @@ onMounted(load)
         </button>
       </div>
 
-      <NumbersTab v-if="activeTab === 'numbers'" :client="client" @changed="load" />
-      <SettingsTab v-else-if="activeTab === 'settings'" :client="client" @changed="load" />
+      <NumbersTab v-if="activeTab === 'numbers'" :client="client" @changed="load(true)" />
+      <SettingsTab v-else-if="activeTab === 'settings'" :client="client" @changed="load(true)" />
       <ApiKeysTab v-else-if="activeTab === 'apikeys'" :client="client" />
-      <FailoversTab v-else-if="activeTab === 'failover'" :client="client" :all-clients="allClients" @changed="load" />
+      <FailoversTab v-else-if="activeTab === 'failover'" :client="client" :all-clients="allClients" @changed="load(true)" />
       <StatusTab v-else :client="client" />
     </template>
 

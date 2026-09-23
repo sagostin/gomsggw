@@ -482,6 +482,9 @@ func (gateway *Gateway) addNumber(clientID uint, number *ClientNumber) error {
 	// Add the number to the in-memory map
 	gateway.mu.Lock()
 	gateway.Numbers[number.Number] = number
+	// Keep the client's in-memory slice in sync so GET /clients reflects the
+	// new number immediately (no manual reload required).
+	client.Numbers = append(client.Numbers, *number)
 	gateway.mu.Unlock()
 
 	// Log the addition

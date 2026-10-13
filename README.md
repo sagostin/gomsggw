@@ -45,6 +45,7 @@ docker-compose up -d
 - **Usage Limits** - Burst/daily/monthly quotas (SMS & MMS) with timezone support
 - **Number Organization** - Tags and groups for multi-tenant deployments
 - **Per-Number Auto-Reply** - Configurable auto-response on inbound (SMS + MMS) with STOP respect and per-texter cooldown
+- **Per-Number Email Delivery** - Deliver inbound SMS/MMS to email recipients asynchronously, alongside or instead of the normal endpoint
 - **MMS Transcoding** - Automatic media optimization for carrier limits
 - **Enhanced Logging** - Client types, delivery methods, segment tracking
 - **Global Retry Config** - Configurable retries for webhooks, SMPP, MM4
@@ -123,6 +124,36 @@ on every newly added number.
 See [docs/number_management.md](docs/number_management.md#per-number-auto-reply)
 for full behavior, STOP semantics, and cooldown details.
 
+### Per-Number Email Delivery
+
+Deliver inbound SMS/MMS to one or more email addresses, either **in addition
+to** the normal endpoint (`both`) or **instead of** it (`email_only`). Email
+sends run in a fire-and-forget goroutine — delivery to the normal endpoint is
+never blocked, and failures are logged, not retried. MMS media is attached to
+the email; URL-only media is included as a link.
+
+```bash
+# 1. Master switch + SMTP server in .env
+EMAIL_DELIVERY_ENABLED=true
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=        # optional
+SMTP_PASSWORD=        # optional
+SMTP_FROM=gateway@example.com
+SMTP_STARTTLS=true    # false = implicit TLS (e.g. port 465)
+
+# 2. Enable + customize on the specific number
+curl -X PUT http://gateway:3000/numbers/42/email-delivery \
+  -u admin:$API_KEY -H "Content-Type: application/json" \
+  -d '{"enabled":true,"addresses":"ops@example.com, alerts@example.com","mode":"both"}'
+
+# 3. Verify (effective_* reflects master × SMTP config × per-number merge)
+curl -u admin:$API_KEY http://gateway:3000/numbers/42/email-delivery
+```
+
+Also configurable in the admin portal: client → Numbers tab → **Email** button
+per row.
+
 ---
 
 ## API Endpoints
@@ -157,6 +188,8 @@ for full behavior, STOP semantics, and cooldown details.
 | PUT | `/numbers/{id}/settings` | Update number settings |
 | GET | `/numbers/{id}/auto-reply` | Get resolved auto-reply config |
 | PUT | `/numbers/{id}/auto-reply` | Update auto-reply config (creates settings lazily) |
+| GET | `/numbers/{id}/email-delivery` | Get resolved email-delivery config |
+| PUT | `/numbers/{id}/email-delivery` | Update email-delivery config (creates settings lazily) |
 | GET | `/carriers` | List carriers |
 | POST | `/carriers` | Add carrier |
 | POST | `/clients/reload` | Reload clients from DB |

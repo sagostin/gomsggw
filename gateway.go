@@ -55,6 +55,22 @@ type Gateway struct {
 	// Auto-reply master controls (env-driven)
 	AutoReplyEnabled    bool   // AUTO_REPLY_ENABLED — global kill switch
 	AutoReplyDefaultMsg string // AUTO_REPLY_DEFAULT_MESSAGE — fallback body
+
+	// Email delivery master controls (env-driven)
+	EmailDeliveryEnabled bool   // EMAIL_DELIVERY_ENABLED — global kill switch
+	SMTPHost             string // SMTP_HOST
+	SMTPPort             int    // SMTP_PORT (default 587)
+	SMTPUsername         string // SMTP_USERNAME (optional)
+	SMTPPassword         string // SMTP_PASSWORD (optional)
+	SMTPFrom             string // SMTP_FROM — sender address
+	SMTPStartTLS         bool   // SMTP_STARTTLS — true (default) = STARTTLS, false = implicit TLS
+	SMTPInsecureSkipTLS  bool   // SMTP_TLS_INSECURE — skip server certificate verification (testing / internal relays)
+}
+
+// SMTPConfigured returns true when the minimum SMTP settings (host + from)
+// are present for email delivery to function.
+func (gateway *Gateway) SMTPConfigured() bool {
+	return gateway.SMTPHost != "" && gateway.SMTPFrom != ""
 }
 
 type MsgRecord struct {
@@ -199,6 +215,16 @@ func NewGateway() (*Gateway, error) {
 		// Auto-reply master controls (env-driven)
 		AutoReplyEnabled:    strings.ToLower(os.Getenv("AUTO_REPLY_ENABLED")) == "true" || os.Getenv("AUTO_REPLY_ENABLED") == "1",
 		AutoReplyDefaultMsg: os.Getenv("AUTO_REPLY_DEFAULT_MESSAGE"),
+
+		// Email delivery master controls (env-driven)
+		EmailDeliveryEnabled: strings.ToLower(os.Getenv("EMAIL_DELIVERY_ENABLED")) == "true" || os.Getenv("EMAIL_DELIVERY_ENABLED") == "1",
+		SMTPHost:             os.Getenv("SMTP_HOST"),
+		SMTPPort:             envIntOrDefault("SMTP_PORT", 587),
+		SMTPUsername:         os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:             os.Getenv("SMTP_FROM"),
+		SMTPStartTLS:         strings.ToLower(os.Getenv("SMTP_STARTTLS")) != "false" && os.Getenv("SMTP_STARTTLS") != "0",
+		SMTPInsecureSkipTLS:  strings.ToLower(os.Getenv("SMTP_TLS_INSECURE")) == "true" || os.Getenv("SMTP_TLS_INSECURE") == "1",
 	}
 
 	gateway.ConvoManager = NewConvoManager()

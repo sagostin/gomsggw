@@ -355,6 +355,68 @@ Set to `0` to disable cooldown.
 
 ---
 
+## Per-Number Email Delivery
+
+Delivers inbound SMS/MMS to one or more email addresses, in addition to — or
+instead of — the normal client endpoint. Classic use case: an ops inbox that
+mirrors (or replaces) webhook delivery for a specific number.
+
+> **Admin portal**: client → Numbers tab → **Email** button per row. The Email
+> column pill shows `off` / `on` / `only` at a glance.
+
+### Behavior
+
+- Fires on **carrier→client** inbound AND **client→client** inbound whose
+  destination number is configured.
+- The email is sent from a **fire-and-forget goroutine** — normal delivery is
+  never blocked, and send failures are **logged, not retried**.
+- Delivery mode controls interaction with the normal endpoint:
+  - `both` (default) — email AND webhook / SMPP / MM4 delivery.
+  - `email_only` — email only; normal endpoint delivery is suppressed.
+- MMS media is attached to the email (MIME multipart). Media that exists only
+  as a remote URL is included as a link in the body instead.
+- Interaction with auto-reply on the same number: the email hook runs first,
+  so the email is always sent; auto-reply then governs reply/suppression as
+  usual.
+- All events are logged under the `Router.EmailDelivery` log category:
+  `Sent`, `SendFailed`, `BuildFailed`, `SuppressedEndpointDelivery`.
+
+### Required Setup
+
+1. Set `EMAIL_DELIVERY_ENABLED=true` in the environment (master switch —
+   feature is fully off if this is missing or false).
+2. Configure the SMTP server: `SMTP_HOST` and `SMTP_FROM` are required;
+   `SMTP_PORT` (default 587), `SMTP_USERNAME` / `SMTP_PASSWORD` (optional
+   auth), `SMTP_STARTTLS` (default true; false = implicit TLS, e.g. port 465),
+   and `SMTP_TLS_INSECURE` (skip certificate verification — testing only).
+3. Per-number: enable email delivery, set recipients, and choose a mode via
+   `PUT /numbers/{id}/email-delivery`.
+
+### Example
+
+```bash
+# 1. Enable the feature globally + SMTP server
+EMAIL_DELIVERY_ENABLED=true
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_FROM=gateway@example.com
+
+# 2. Configure the destination number (id=42)
+curl -X PUT http://gateway:3000/numbers/42/email-delivery \
+  -u admin:$API_KEY -H "Content-Type: application/json" \
+  -d '{"enabled":true,"addresses":"ops@example.com, alerts@example.com","mode":"both"}'
+
+# 3. Verify (returns effective_enabled after merging master switch × SMTP
+#    config × per-number settings)
+curl -u admin:$API_KEY http://gateway:3000/numbers/42/email-delivery
+```
+
+The same fields (`email_delivery_enabled`, `email_delivery_addresses`,
+`email_delivery_mode`) are also accepted by `PUT /numbers/{id}/settings` and
+`PUT /clients/{id}/numbers/{number_id}`.
+
+---
+
 ## Best Practices
 
 ### Tagging Strategy

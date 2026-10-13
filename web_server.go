@@ -819,14 +819,17 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			}
 
 			var updateReq struct {
-				Carrier              *string `json:"carrier,omitempty"`
-				Tag                  *string `json:"tag,omitempty"`
-				Group                *string `json:"group,omitempty"`
-				Webhook              *string `json:"webhook,omitempty"`
-				IgnoreStopCmdSending *bool   `json:"ignore_stop_cmd_sending,omitempty"`
-				AutoReplyEnabled     *bool   `json:"auto_reply_enabled,omitempty"`
-				AutoReplyMessage     *string `json:"auto_reply_message,omitempty"`
-				AutoReplyCooldownSec *int    `json:"auto_reply_cooldown_secs,omitempty"`
+				Carrier                *string `json:"carrier,omitempty"`
+				Tag                    *string `json:"tag,omitempty"`
+				Group                  *string `json:"group,omitempty"`
+				Webhook                *string `json:"webhook,omitempty"`
+				IgnoreStopCmdSending   *bool   `json:"ignore_stop_cmd_sending,omitempty"`
+				AutoReplyEnabled       *bool   `json:"auto_reply_enabled,omitempty"`
+				AutoReplyMessage       *string `json:"auto_reply_message,omitempty"`
+				AutoReplyCooldownSec   *int    `json:"auto_reply_cooldown_secs,omitempty"`
+				EmailDeliveryEnabled   *bool   `json:"email_delivery_enabled,omitempty"`
+				EmailDeliveryAddresses *string `json:"email_delivery_addresses,omitempty"`
+				EmailDeliveryMode      *string `json:"email_delivery_mode,omitempty"`
 			}
 
 			if err := ctx.ReadJSON(&updateReq); err != nil {
@@ -851,7 +854,8 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 			if updateReq.IgnoreStopCmdSending != nil {
 				targetNumber.IgnoreStopCmdSending = *updateReq.IgnoreStopCmdSending
 			}
-			if updateReq.AutoReplyEnabled != nil || updateReq.AutoReplyMessage != nil || updateReq.AutoReplyCooldownSec != nil {
+			if updateReq.AutoReplyEnabled != nil || updateReq.AutoReplyMessage != nil || updateReq.AutoReplyCooldownSec != nil ||
+				updateReq.EmailDeliveryEnabled != nil || updateReq.EmailDeliveryAddresses != nil || updateReq.EmailDeliveryMode != nil {
 				if targetNumber.Settings == nil {
 					targetNumber.Settings = &NumberSettings{NumberID: targetNumber.ID}
 				}
@@ -864,9 +868,23 @@ func SetupClientRoutes(app *iris.Application, gateway *Gateway) {
 				if updateReq.AutoReplyCooldownSec != nil {
 					targetNumber.Settings.AutoReplyCooldownSec = *updateReq.AutoReplyCooldownSec
 				}
+				if updateReq.EmailDeliveryEnabled != nil {
+					targetNumber.Settings.EmailDeliveryEnabled = *updateReq.EmailDeliveryEnabled
+				}
+				if updateReq.EmailDeliveryAddresses != nil {
+					targetNumber.Settings.EmailDeliveryAddresses = strings.TrimSpace(*updateReq.EmailDeliveryAddresses)
+				}
+				if updateReq.EmailDeliveryMode != nil {
+					if *updateReq.EmailDeliveryMode != EmailDeliveryModeBoth && *updateReq.EmailDeliveryMode != EmailDeliveryModeEmailOnly {
+						ctx.StatusCode(iris.StatusBadRequest)
+						ctx.JSON(iris.Map{"error": "Invalid email_delivery_mode — must be 'both' or 'email_only'"})
+						return
+					}
+					targetNumber.Settings.EmailDeliveryMode = *updateReq.EmailDeliveryMode
+				}
 				if err := gateway.DB.Save(targetNumber.Settings).Error; err != nil {
 					ctx.StatusCode(iris.StatusInternalServerError)
-					ctx.JSON(iris.Map{"error": "Failed to save auto-reply settings"})
+					ctx.JSON(iris.Map{"error": "Failed to save number settings"})
 					return
 				}
 			}
@@ -1331,6 +1349,10 @@ func SetupNumberRoutes(app *iris.Application, gateway *Gateway) {
 				AutoReplyEnabled     *bool   `json:"auto_reply_enabled,omitempty"`
 				AutoReplyMessage     *string `json:"auto_reply_message,omitempty"`
 				AutoReplyCooldownSec *int    `json:"auto_reply_cooldown_secs,omitempty"`
+				// Email Delivery
+				EmailDeliveryEnabled   *bool   `json:"email_delivery_enabled,omitempty"`
+				EmailDeliveryAddresses *string `json:"email_delivery_addresses,omitempty"`
+				EmailDeliveryMode      *string `json:"email_delivery_mode,omitempty"`
 			}
 
 			if err := ctx.ReadJSON(&updateReq); err != nil {
@@ -1374,6 +1396,20 @@ func SetupNumberRoutes(app *iris.Application, gateway *Gateway) {
 			}
 			if updateReq.AutoReplyCooldownSec != nil {
 				targetNumber.Settings.AutoReplyCooldownSec = *updateReq.AutoReplyCooldownSec
+			}
+			if updateReq.EmailDeliveryEnabled != nil {
+				targetNumber.Settings.EmailDeliveryEnabled = *updateReq.EmailDeliveryEnabled
+			}
+			if updateReq.EmailDeliveryAddresses != nil {
+				targetNumber.Settings.EmailDeliveryAddresses = strings.TrimSpace(*updateReq.EmailDeliveryAddresses)
+			}
+			if updateReq.EmailDeliveryMode != nil {
+				if *updateReq.EmailDeliveryMode != EmailDeliveryModeBoth && *updateReq.EmailDeliveryMode != EmailDeliveryModeEmailOnly {
+					ctx.StatusCode(iris.StatusBadRequest)
+					ctx.JSON(iris.Map{"error": "Invalid email_delivery_mode — must be 'both' or 'email_only'"})
+					return
+				}
+				targetNumber.Settings.EmailDeliveryMode = *updateReq.EmailDeliveryMode
 			}
 
 			// Save to database
@@ -1570,6 +1606,148 @@ func SetupNumberRoutes(app *iris.Application, gateway *Gateway) {
 					"enabled":       targetNumber.Settings.AutoReplyEnabled,
 					"message":       targetNumber.Settings.AutoReplyMessage,
 					"cooldown_secs": targetNumber.Settings.AutoReplyCooldownSec,
+				},
+			})
+		})
+
+		// Get email-delivery config for a number (resolved against master switch)
+		numbers.Get("/{id}/email-delivery", func(ctx iris.Context) {
+			numberID, err := strconv.ParseUint(ctx.Params().Get("id"), 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number ID"})
+				return
+			}
+
+			var targetNumber *ClientNumber
+			gateway.mu.RLock()
+			for _, num := range gateway.Numbers {
+				if num.ID == uint(numberID) {
+					targetNumber = num
+					break
+				}
+			}
+			gateway.mu.RUnlock()
+
+			if targetNumber == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Number not found"})
+				return
+			}
+
+			ns := targetNumber.Settings
+			effective, addrs, _ := gateway.ResolveEmailDelivery(ns)
+
+			ctx.JSON(iris.Map{
+				"number_id":           targetNumber.ID,
+				"number":              targetNumber.Number,
+				"master_enabled":      gateway.EmailDeliveryEnabled,
+				"smtp_configured":     gateway.SMTPConfigured(),
+				"enabled":             ns != nil && ns.EmailDeliveryEnabled,
+				"effective_enabled":   effective,
+				"addresses":           nsOrEmpty(ns, func(s *NumberSettings) string { return s.EmailDeliveryAddresses }),
+				"effective_addresses": addrs,
+				"mode":                effectiveEmailMode(ns),
+			})
+		})
+
+		// Update email-delivery config for a number (creates NumberSettings lazily)
+		numbers.Put("/{id}/email-delivery", func(ctx iris.Context) {
+			numberID, err := strconv.ParseUint(ctx.Params().Get("id"), 10, 32)
+			if err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid number ID"})
+				return
+			}
+
+			var targetNumber *ClientNumber
+			gateway.mu.RLock()
+			for _, num := range gateway.Numbers {
+				if num.ID == uint(numberID) {
+					targetNumber = num
+					break
+				}
+			}
+			gateway.mu.RUnlock()
+
+			if targetNumber == nil {
+				ctx.StatusCode(iris.StatusNotFound)
+				ctx.JSON(iris.Map{"error": "Number not found"})
+				return
+			}
+
+			var updateReq struct {
+				Enabled   *bool   `json:"enabled,omitempty"`
+				Addresses *string `json:"addresses,omitempty"`
+				Mode      *string `json:"mode,omitempty"`
+			}
+
+			if err := ctx.ReadJSON(&updateReq); err != nil {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid request body"})
+				return
+			}
+
+			if updateReq.Mode != nil && *updateReq.Mode != EmailDeliveryModeBoth && *updateReq.Mode != EmailDeliveryModeEmailOnly {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "Invalid mode — must be 'both' or 'email_only'"})
+				return
+			}
+
+			if updateReq.Addresses != nil && len(ParseEmailAddresses(*updateReq.Addresses)) == 0 && strings.TrimSpace(*updateReq.Addresses) != "" {
+				ctx.StatusCode(iris.StatusBadRequest)
+				ctx.JSON(iris.Map{"error": "No valid email addresses found"})
+				return
+			}
+
+			if targetNumber.Settings == nil {
+				targetNumber.Settings = &NumberSettings{NumberID: targetNumber.ID}
+			}
+
+			if updateReq.Enabled != nil {
+				targetNumber.Settings.EmailDeliveryEnabled = *updateReq.Enabled
+			}
+			if updateReq.Addresses != nil {
+				targetNumber.Settings.EmailDeliveryAddresses = strings.TrimSpace(*updateReq.Addresses)
+			}
+			if updateReq.Mode != nil {
+				targetNumber.Settings.EmailDeliveryMode = *updateReq.Mode
+			}
+
+			if err := gateway.DB.Save(targetNumber.Settings).Error; err != nil {
+				ctx.StatusCode(iris.StatusInternalServerError)
+				ctx.JSON(iris.Map{"error": "Failed to save email-delivery settings"})
+				return
+			}
+
+			// Sync into the owning client's in-memory Numbers slice.
+			if client := gateway.getClientByID(targetNumber.ClientID); client != nil {
+				for i := range client.Numbers {
+					if client.Numbers[i].ID == targetNumber.ID {
+						client.Numbers[i].Settings = targetNumber.Settings
+						break
+					}
+				}
+			}
+
+			gateway.LogManager.SendLog(gateway.LogManager.BuildLog(
+				"WebServer.EmailDelivery",
+				"Updated",
+				logrus.InfoLevel,
+				map[string]interface{}{
+					"number_id": targetNumber.ID,
+					"number":    targetNumber.Number,
+					"enabled":   targetNumber.Settings.EmailDeliveryEnabled,
+					"mode":      targetNumber.Settings.EmailDeliveryMode,
+				},
+			))
+
+			ctx.JSON(iris.Map{
+				"message": "Email-delivery settings updated",
+				"settings": iris.Map{
+					"enabled":   targetNumber.Settings.EmailDeliveryEnabled,
+					"addresses": targetNumber.Settings.EmailDeliveryAddresses,
+					"mode":      targetNumber.Settings.EmailDeliveryMode,
 				},
 			})
 		})

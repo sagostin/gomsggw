@@ -11,6 +11,8 @@ import type {
   ClientSettings,
   ClientSettingsUpdate,
   ClientUpdateRequest,
+  EmailDeliveryConfig,
+  EmailDeliveryUpdate,
   Failover,
   LegacyStatus,
   NumberUpdateRequest,
@@ -52,6 +54,12 @@ export const deleteNumber = (clientId: number, numberId: number) =>
 export const getAutoReply = (numberId: number) => http.get<AutoReplyConfig>(`/numbers/${numberId}/auto-reply`)
 export const updateAutoReply = (numberId: number, payload: AutoReplyUpdate) =>
   http.put(`/numbers/${numberId}/auto-reply`, payload)
+
+// --- Email delivery ---
+export const getEmailDelivery = (numberId: number) =>
+  http.get<EmailDeliveryConfig>(`/numbers/${numberId}/email-delivery`)
+export const updateEmailDelivery = (numberId: number, payload: EmailDeliveryUpdate) =>
+  http.put(`/numbers/${numberId}/email-delivery`, payload)
 
 // --- API Keys ---
 export const listApiKeys = (clientId: number) => http.get<TenantApiKey[]>(`/clients/${clientId}/api-keys`)

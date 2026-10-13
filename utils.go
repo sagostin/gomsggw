@@ -1,8 +1,22 @@
 package main
 
 import (
+	"os"
+	"strconv"
+
 	"zultys-smpp-mm4/smpp/coding"
 )
+
+// envIntOrDefault reads an int from the environment, falling back to def when
+// unset or unparsable.
+func envIntOrDefault(key string, def int) int {
+	if val := os.Getenv(key); val != "" {
+		if v, err := strconv.Atoi(val); err == nil {
+			return v
+		}
+	}
+	return def
+}
 
 // StringInArray checks if a string exists in an array of strings
 func StringInArray(target string, list []string) bool {
@@ -29,6 +43,15 @@ func nsOrEmpty(ns *NumberSettings, accessor func(*NumberSettings) string) string
 		return ""
 	}
 	return accessor(ns)
+}
+
+// effectiveEmailMode returns the stored email-delivery mode, defaulting to
+// "both" when unset or invalid.
+func effectiveEmailMode(ns *NumberSettings) string {
+	if ns == nil || ns.EmailDeliveryMode == "" {
+		return EmailDeliveryModeBoth
+	}
+	return ns.EmailDeliveryMode
 }
 
 // GetSMSEncoding determines the encoding type for an SMS message

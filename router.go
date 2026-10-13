@@ -140,6 +140,24 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 	}
 	// --- END LIMIT CHECK ---
 
+	// --- EMAIL-DELIVERY HOOK ---
+	// Fires for the same inbound cases as auto-reply (carrier→client and
+	// client→client). Dispatches the message to the number's configured email
+	// recipients in a separate goroutine (fire-and-forget; failures are only
+	// logged). Mode "email_only" additionally suppresses normal endpoint
+	// delivery — applied after the auto-reply hook so an auto-reply still
+	// fires when both features are enabled on the same number.
+	emailOnlyDelivery := false
+	if toClient != nil && (origin == "carrier" || (origin == "client" && fromClient != nil)) {
+		ns := findNumberSettingsForClient(toClient, m.To)
+		if enabled, addrs, mode := router.gateway.ResolveEmailDelivery(ns); enabled {
+			msgCopy := *m
+			go router.DispatchEmail(&msgCopy, addrs)
+			emailOnlyDelivery = mode == EmailDeliveryModeEmailOnly
+		}
+	}
+	// --- END EMAIL-DELIVERY HOOK ---
+
 	// --- AUTO-REPLY HOOK ---
 	// Fires for both carrier→client (origin=="carrier", toClient!=nil) and
 	// client→client (origin=="client", toClient!=nil, fromClient!=nil).
@@ -203,6 +221,25 @@ func (router *Router) processMessage(m *MsgQueueItem, origin string) {
 		}
 	}
 	// --- END AUTO-REPLY HOOK ---
+
+	// Email-only mode: normal endpoint delivery is suppressed; the email was
+	// already dispatched asynchronously above.
+	if emailOnlyDelivery {
+		lm.SendLog(lm.BuildLog(
+			"Router.EmailDelivery",
+			"SuppressedEndpointDelivery",
+			logrus.InfoLevel,
+			map[string]interface{}{
+				"logID":             m.LogID,
+				"from":              m.From,
+				"to":                m.To,
+				"msgType":           string(m.Type),
+				"destinationClient": safeClientUsername(toClient),
+			},
+		))
+		processingSuccessful = true
+		return
+	}
 
 	// Retry on the channel where the message came from
 	retryChan := router.ClientMsgChan

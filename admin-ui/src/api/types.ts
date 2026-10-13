@@ -30,6 +30,9 @@ export interface NumberSettings {
   auto_reply_enabled: boolean
   auto_reply_message: string
   auto_reply_cooldown_secs: number
+  email_delivery_enabled: boolean
+  email_delivery_addresses: string
+  email_delivery_mode: string
 }
 
 export interface ClientNumber {
@@ -115,6 +118,9 @@ export interface NumberUpdateRequest {
   auto_reply_enabled?: boolean
   auto_reply_message?: string
   auto_reply_cooldown_secs?: number
+  email_delivery_enabled?: boolean
+  email_delivery_addresses?: string
+  email_delivery_mode?: string
 }
 
 export interface AutoReplyConfig {
@@ -134,6 +140,24 @@ export interface AutoReplyUpdate {
   enabled?: boolean
   message?: string
   cooldown_secs?: number
+}
+
+export interface EmailDeliveryConfig {
+  number: string
+  number_id: number
+  master_enabled: boolean
+  smtp_configured: boolean
+  enabled: boolean
+  effective_enabled: boolean
+  addresses: string
+  effective_addresses: string[]
+  mode: string
+}
+
+export interface EmailDeliveryUpdate {
+  enabled?: boolean
+  addresses?: string
+  mode?: string
 }
 
 export interface ApiKeyNumber {

@@ -4,11 +4,13 @@ import {
   addNumber,
   deleteNumber,
   getAutoReply,
+  getEmailDelivery,
   listCarriers,
   updateAutoReply,
+  updateEmailDelivery,
   updateNumber,
 } from '../../api'
-import type { AutoReplyConfig, Carrier, Client, ClientNumber } from '../../api/types'
+import type { AutoReplyConfig, Carrier, Client, ClientNumber, EmailDeliveryConfig } from '../../api/types'
 import AppModal from '../AppModal.vue'
 import { useConfirmStore } from '../../stores/confirm'
 import { useToastStore } from '../../stores/toast'
@@ -52,6 +54,22 @@ const showBulkAr = ref(false)
 const bulkArForm = ref({ enabled: true, message: '', cooldown_secs: 60 })
 const bulkArRunning = ref(false)
 const bulkArResults = ref<{ num: string; ok: boolean; detail?: string }[]>([])
+
+// --- Email delivery ---
+const edNumber = ref<ClientNumber | null>(null)
+const edConfig = ref<EmailDeliveryConfig | null>(null)
+const edForm = ref({ enabled: false, addresses: '', mode: 'both' })
+const edLoading = ref(false)
+const edSaving = ref(false)
+
+const emailValid = computed(() => {
+  const raw = edForm.value.addresses.trim()
+  if (!raw) return false
+  return raw
+    .split(',')
+    .map((a) => a.trim())
+    .every((a) => /^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(a))
+})
 
 const allSelected = computed(() => numbers.value.length > 0 && selected.value.size === numbers.value.length)
 
@@ -236,6 +254,50 @@ async function submitAutoReply() {
     arSaving.value = false
   }
 }
+
+async function openEmailDelivery(n: ClientNumber) {
+  edNumber.value = n
+  edConfig.value = null
+  edLoading.value = true
+  try {
+    const cfg = await getEmailDelivery(n.id)
+    edConfig.value = cfg
+    edForm.value = {
+      enabled: cfg.enabled,
+      addresses: cfg.addresses || '',
+      mode: cfg.mode || 'both',
+    }
+  } catch (e) {
+    toasts.error(errorMessage(e))
+    edNumber.value = null
+  } finally {
+    edLoading.value = false
+  }
+}
+
+async function submitEmailDelivery() {
+  if (!edNumber.value) return
+  if (edForm.value.enabled && !emailValid.value) {
+    toasts.error('Enter at least one valid email address (comma-separated).')
+    return
+  }
+  edSaving.value = true
+  try {
+    await updateEmailDelivery(edNumber.value.id, {
+      enabled: edForm.value.enabled,
+      addresses: edForm.value.addresses,
+      mode: edForm.value.mode,
+    })
+    toasts.success('Email-delivery settings updated.')
+    const cfg = await getEmailDelivery(edNumber.value.id)
+    edConfig.value = cfg
+    emit('changed')
+  } catch (e) {
+    toasts.error(errorMessage(e))
+  } finally {
+    edSaving.value = false
+  }
+}
 </script>
 
 <template>
@@ -272,6 +334,7 @@ async function submitAutoReply() {
             <th class="px-4 py-2 font-medium">Tag</th>
             <th class="px-4 py-2 font-medium">Group</th>
             <th class="px-4 py-2 font-medium">Auto-reply</th>
+            <th class="px-4 py-2 font-medium">Email</th>
             <th class="px-4 py-2 font-medium"></th>
           </tr>
         </thead>
@@ -297,8 +360,22 @@ async function submitAutoReply() {
                 {{ n.settings?.auto_reply_enabled ? 'on' : 'off' }}
               </span>
             </td>
+            <td class="px-4 py-2">
+              <span
+                class="rounded-full px-2 py-0.5 text-xs"
+                :class="n.settings?.email_delivery_enabled ? 'bg-emerald-900/60 text-emerald-300' : 'bg-slate-800 text-slate-500'"
+              >
+                {{ n.settings?.email_delivery_enabled ? (n.settings?.email_delivery_mode === 'email_only' ? 'only' : 'on') : 'off' }}
+              </span>
+            </td>
             <td class="px-4 py-2 text-right">
               <div class="flex justify-end gap-2">
+                <button
+                  class="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+                  @click="openEmailDelivery(n)"
+                >
+                  Email
+                </button>
                 <button
                   class="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
                   @click="openAutoReply(n)"
@@ -537,6 +614,81 @@ async function submitAutoReply() {
         </button>
       </template>
     </AppModal>
+
+    <!-- Email delivery modal -->
+    <AppModal v-if="edNumber" :title="`Email delivery — ${formatNumber(edNumber.number)}`" @close="edNumber = null">
+      <div v-if="edLoading" class="text-sm text-slate-500">Loading…</div>
+      <div v-else-if="edConfig" class="space-y-4">
+        <div class="grid grid-cols-2 gap-2 rounded-md border border-slate-800 bg-slate-950 p-3 text-xs">
+          <div class="text-slate-500">Master switch (env)</div>
+          <div :class="edConfig.master_enabled ? 'text-emerald-400' : 'text-red-400'">
+            {{ edConfig.master_enabled ? 'on' : 'off' }}
+          </div>
+          <div class="text-slate-500">SMTP configured (env)</div>
+          <div :class="edConfig.smtp_configured ? 'text-emerald-400' : 'text-red-400'">
+            {{ edConfig.smtp_configured ? 'yes' : 'no' }}
+          </div>
+          <div class="text-slate-500">Effective enabled</div>
+          <div :class="edConfig.effective_enabled ? 'text-emerald-400' : 'text-slate-400'">
+            {{ edConfig.effective_enabled ? 'yes' : 'no' }}
+          </div>
+        </div>
+
+        <label class="flex items-center gap-2 text-sm text-slate-300">
+          <input v-model="edForm.enabled" type="checkbox" class="accent-indigo-500" />
+          Enable email delivery for this number
+        </label>
+
+        <div v-if="edForm.enabled" class="space-y-3">
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-400">
+              Recipients <span class="text-slate-600">(comma-separated)</span>
+            </label>
+            <input
+              v-model="edForm.addresses"
+              placeholder="ops@example.com, alerts@example.com"
+              class="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            />
+            <p v-if="edForm.addresses.trim() && !emailValid" class="mt-1 text-xs text-red-400">
+              One or more addresses look invalid.
+            </p>
+          </div>
+          <div>
+            <label class="mb-1 block text-xs font-medium text-slate-400">Delivery mode</label>
+            <div class="space-y-1.5 text-sm text-slate-300">
+              <label class="flex items-center gap-2">
+                <input v-model="edForm.mode" type="radio" value="both" class="accent-indigo-500" />
+                Email + normal endpoint
+              </label>
+              <label class="flex items-center gap-2">
+                <input v-model="edForm.mode" type="radio" value="email_only" class="accent-indigo-500" />
+                Email only
+              </label>
+            </div>
+            <p v-if="edForm.mode === 'email_only'" class="mt-1.5 text-xs text-amber-400">
+              Normal endpoint delivery (webhook / SMPP / MM4) will be suppressed for this number.
+            </p>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <button
+          class="rounded-md border border-slate-600 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+          @click="edNumber = null"
+        >
+          Close
+        </button>
+        <button
+          v-if="edConfig"
+          class="rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+          :disabled="edSaving || (edForm.enabled && !emailValid)"
+          @click="submitEmailDelivery"
+        >
+          {{ edSaving ? 'Saving…' : 'Save email delivery' }}
+        </button>
+      </template>
+    </AppModal>
+
     <!-- Bulk auto-reply modal -->
     <AppModal v-if="showBulkAr" :title="`Bulk auto-reply — ${selected.size} number(s)`" @close="showBulkAr = false">
       <div class="space-y-4">

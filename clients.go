@@ -100,7 +100,22 @@ type NumberSettings struct {
 	AutoReplyEnabled     bool   `json:"auto_reply_enabled" gorm:"default:false"`
 	AutoReplyMessage     string `json:"auto_reply_message"`                         // custom reply body (optional)
 	AutoReplyCooldownSec int    `json:"auto_reply_cooldown_secs" gorm:"default:60"` // per (from,to) cooldown
+
+	// === Email Delivery ===
+	// When enabled, inbound messages to this number are also delivered to the
+	// configured email address(es) asynchronously. Mode controls whether the
+	// normal endpoint delivery (webhook/SMPP/MM4) still happens.
+	EmailDeliveryEnabled   bool   `json:"email_delivery_enabled" gorm:"default:false"`
+	EmailDeliveryAddresses string `json:"email_delivery_addresses"`                  // comma-separated recipients
+	EmailDeliveryMode      string `json:"email_delivery_mode" gorm:"default:'both'"` // "both" | "email_only"
 }
+
+// EmailDeliveryModeBoth delivers to email AND the normal endpoint.
+// EmailDeliveryModeEmailOnly delivers to email and suppresses the normal endpoint.
+const (
+	EmailDeliveryModeBoth      = "both"
+	EmailDeliveryModeEmailOnly = "email_only"
+)
 
 // ResolveAutoReply returns the effective enabled flag and reply text for a
 // destination number. Honours the gateway-level master switch, per-number
@@ -120,6 +135,28 @@ func (gateway *Gateway) ResolveAutoReply(numberSettings *NumberSettings) (enable
 		return false, ""
 	}
 	return true, message
+}
+
+// ResolveEmailDelivery returns the effective enabled flag, recipient list, and
+// delivery mode for a destination number. Honours the gateway-level master
+// switch and SMTP configuration, then per-number settings. Empty/invalid
+// recipient lists resolve to disabled.
+func (gateway *Gateway) ResolveEmailDelivery(numberSettings *NumberSettings) (enabled bool, addresses []string, mode string) {
+	if !gateway.EmailDeliveryEnabled || !gateway.SMTPConfigured() {
+		return false, nil, ""
+	}
+	if numberSettings == nil || !numberSettings.EmailDeliveryEnabled {
+		return false, nil, ""
+	}
+	addresses = ParseEmailAddresses(numberSettings.EmailDeliveryAddresses)
+	if len(addresses) == 0 {
+		return false, nil, ""
+	}
+	mode = numberSettings.EmailDeliveryMode
+	if mode != EmailDeliveryModeEmailOnly {
+		mode = EmailDeliveryModeBoth
+	}
+	return true, addresses, mode
 }
 
 // getClientByID finds a client by its numeric ID (thread-safe)

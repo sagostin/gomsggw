@@ -200,9 +200,10 @@ func selfSignedCert(t *testing.T) tls.Certificate {
 	return cert
 }
 
-// fakeSMTPSession runs one SMTP session (EHLO → STARTTLS → EHLO → MAIL → RCPT →
-// DATA → QUIT) on the accepted connection and returns the DATA payload.
-func fakeSMTPSession(ln net.Listener, cert tls.Certificate) ([]byte, error) {
+// fakeSMTPSession runs one SMTP session (EHLO → [STARTTLS → EHLO] → MAIL →
+// RCPT → DATA → QUIT) on the accepted connection and returns the DATA payload.
+// When startTLS is false the session stays plaintext.
+func fakeSMTPSession(ln net.Listener, cert tls.Certificate, startTLS bool) ([]byte, error) {
 	conn, err := ln.Accept()
 	if err != nil {
 		return nil, err
@@ -210,72 +211,80 @@ func fakeSMTPSession(ln net.Listener, cert tls.Certificate) ([]byte, error) {
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
-	write := func(w *bufio.Writer, s string) error {
-		if _, err := w.WriteString(s + "\r\n"); err != nil {
+	writer := bufio.NewWriter(conn)
+	write := func(s string) error {
+		if _, err := writer.WriteString(s + "\r\n"); err != nil {
 			return err
 		}
-		return w.Flush()
+		return writer.Flush()
 	}
-	writer := bufio.NewWriter(conn)
 	readCmd := func() (string, error) {
 		line, err := reader.ReadString('\n')
 		return strings.TrimRight(line, "\r\n"), err
 	}
 
-	if err := write(writer, "220 fake-smtp ready"); err != nil {
+	if err := write("220 fake-smtp ready"); err != nil {
 		return nil, err
 	}
 	ehlo, err := readCmd()
 	if err != nil || !strings.HasPrefix(strings.ToUpper(ehlo), "EHLO") {
 		return nil, fmt.Errorf("expected EHLO, got %q (%v)", ehlo, err)
 	}
-	if err := write(writer, "250-localhost\r\n250-STARTTLS\r\n250 AUTH PLAIN"); err != nil {
-		return nil, err
+	if startTLS {
+		if err := write("250-localhost\r\n250-STARTTLS\r\n250 AUTH PLAIN"); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := write("250 localhost"); err != nil {
+			return nil, err
+		}
 	}
 
-	st, err := readCmd()
-	if err != nil || strings.ToUpper(st) != "STARTTLS" {
-		return nil, fmt.Errorf("expected STARTTLS, got %q (%v)", st, err)
-	}
-	if err := write(writer, "220 Go ahead"); err != nil {
-		return nil, err
-	}
+	if startTLS {
+		st, err := readCmd()
+		if err != nil || strings.ToUpper(st) != "STARTTLS" {
+			return nil, fmt.Errorf("expected STARTTLS, got %q (%v)", st, err)
+		}
+		if err := write("220 Go ahead"); err != nil {
+			return nil, err
+		}
 
-	tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}})
-	if err := tlsConn.Handshake(); err != nil {
-		return nil, err
-	}
+		tlsConn := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{cert}})
+		if err := tlsConn.Handshake(); err != nil {
+			return nil, err
+		}
 
-	reader = bufio.NewReader(tlsConn)
-	writer = bufio.NewWriter(tlsConn)
+		reader = bufio.NewReader(tlsConn)
+		writer = bufio.NewWriter(tlsConn)
 
-	ehlo, err = readCmd()
-	if err != nil || !strings.HasPrefix(strings.ToUpper(ehlo), "EHLO") {
-		return nil, fmt.Errorf("expected EHLO after TLS, got %q (%v)", ehlo, err)
-	}
-	if err := write(writer, "250 localhost"); err != nil {
-		return nil, err
+		ehlo, err = readCmd()
+		if err != nil || !strings.HasPrefix(strings.ToUpper(ehlo), "EHLO") {
+			return nil, fmt.Errorf("expected EHLO after TLS, got %q (%v)", ehlo, err)
+		}
+		if err := write("250 localhost"); err != nil {
+			return nil, err
+		}
 	}
 
 	mail, err := readCmd()
 	if err != nil || !strings.HasPrefix(strings.ToUpper(mail), "MAIL FROM") {
 		return nil, fmt.Errorf("expected MAIL FROM, got %q (%v)", mail, err)
 	}
-	if err := write(writer, "250 OK"); err != nil {
+	if err := write("250 OK"); err != nil {
 		return nil, err
 	}
 	rcpt, err := readCmd()
 	if err != nil || !strings.HasPrefix(strings.ToUpper(rcpt), "RCPT TO") {
 		return nil, fmt.Errorf("expected RCPT TO, got %q (%v)", rcpt, err)
 	}
-	if err := write(writer, "250 OK"); err != nil {
+	if err := write("250 OK"); err != nil {
 		return nil, err
 	}
 	dataCmd, err := readCmd()
 	if err != nil || strings.ToUpper(dataCmd) != "DATA" {
 		return nil, fmt.Errorf("expected DATA, got %q (%v)", dataCmd, err)
 	}
-	if err := write(writer, "354 End data with <CR><LF>.<CR><LF>"); err != nil {
+	if err := write("354 End data with <CR><LF>.<CR><LF>"); err != nil {
 		return nil, err
 	}
 
@@ -290,47 +299,64 @@ func fakeSMTPSession(ln net.Listener, cert tls.Certificate) ([]byte, error) {
 		}
 		data.WriteString(line)
 	}
-	if err := write(writer, "250 Queued"); err != nil {
+	if err := write("250 Queued"); err != nil {
 		return nil, err
 	}
 	if _, err := readCmd(); err != nil { // QUIT
 		return nil, err
 	}
-	if err := write(writer, "221 Bye"); err != nil {
+	if err := write("221 Bye"); err != nil {
 		return nil, err
 	}
 	return []byte(data.String()), nil
 }
 
-func TestSendEmail_StartTLS(t *testing.T) {
-	cert := selfSignedCert(t)
+// runFakeSMTP stands up a one-shot fake SMTP server on 127.0.0.1 and returns
+// the gateway pointed at it plus a channel that receives the session result.
+func runFakeSMTP(t *testing.T, startTLS bool) (*Gateway, <-chan struct {
+	data []byte
+	err  error
+}) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
-	defer ln.Close()
+	t.Cleanup(func() { ln.Close() })
 
 	host, portStr, err := net.SplitHostPort(ln.Addr().String())
 	require.NoError(t, err)
 	port, err := strconv.Atoi(portStr)
 	require.NoError(t, err)
 
-	type result struct {
+	done := make(chan struct {
 		data []byte
 		err  error
-	}
-	done := make(chan result, 1)
+	}, 1)
 	go func() {
-		data, err := fakeSMTPSession(ln, cert)
-		done <- result{data, err}
+		data, err := fakeSMTPSession(ln, selfSignedCert(t), startTLS)
+		done <- struct {
+			data []byte
+			err  error
+		}{data, err}
 	}()
 
 	g := &Gateway{
 		SMTPHost:            host,
 		SMTPPort:            port,
 		SMTPFrom:            "gw@example.com",
-		SMTPStartTLS:        true,
 		SMTPInsecureSkipTLS: true, // self-signed test cert
 	}
-	err = sendEmail(g, []string{"ops@example.com"}, []byte("Subject: test\r\n\r\nbody"))
+	if startTLS {
+		g.SMTPEncryption = "starttls"
+	} else {
+		g.SMTPEncryption = "none"
+	}
+	return g, done
+}
+
+func TestSendEmail_StartTLS(t *testing.T) {
+	g, done := runFakeSMTP(t, true)
+
+	err := sendEmail(g, []string{"ops@example.com"}, []byte("Subject: test\r\n\r\nbody"))
 	require.NoError(t, err)
 
 	select {
@@ -342,8 +368,48 @@ func TestSendEmail_StartTLS(t *testing.T) {
 	}
 }
 
+func TestSendEmail_Plaintext(t *testing.T) {
+	g, done := runFakeSMTP(t, false)
+
+	err := sendEmail(g, []string{"ops@example.com"}, []byte("Subject: plain\r\n\r\nbody"))
+	require.NoError(t, err, "encryption=none must deliver without STARTTLS")
+
+	select {
+	case res := <-done:
+		require.NoError(t, res.err)
+		assert.Contains(t, string(res.data), "Subject: plain")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for fake SMTP session")
+	}
+}
+
 func TestSendEmail_ConnectionRefused(t *testing.T) {
-	g := &Gateway{SMTPHost: "127.0.0.1", SMTPPort: 1, SMTPFrom: "gw@example.com", SMTPStartTLS: true}
+	g := &Gateway{SMTPHost: "127.0.0.1", SMTPPort: 1, SMTPFrom: "gw@example.com", SMTPEncryption: "starttls"}
 	err := sendEmail(g, []string{"ops@example.com"}, []byte("x"))
 	assert.Error(t, err, "delivery failure must surface an error (logged by caller)")
+}
+
+func TestParseSMTPEncryption(t *testing.T) {
+	t.Run("default is starttls", func(t *testing.T) {
+		assert.Equal(t, "starttls", parseSMTPEncryption())
+	})
+	t.Run("tls mode explicit", func(t *testing.T) {
+		t.Setenv("SMTP_TLS_MODE", "none")
+		assert.Equal(t, "none", parseSMTPEncryption())
+		t.Setenv("SMTP_TLS_MODE", "TLS")
+		assert.Equal(t, "tls", parseSMTPEncryption())
+	})
+	t.Run("tls mode wins over legacy flag", func(t *testing.T) {
+		t.Setenv("SMTP_TLS_MODE", "none")
+		t.Setenv("SMTP_STARTTLS", "true")
+		assert.Equal(t, "none", parseSMTPEncryption())
+	})
+	t.Run("legacy false maps to tls", func(t *testing.T) {
+		t.Setenv("SMTP_STARTTLS", "false")
+		assert.Equal(t, "tls", parseSMTPEncryption())
+	})
+	t.Run("legacy true maps to starttls", func(t *testing.T) {
+		t.Setenv("SMTP_STARTTLS", "true")
+		assert.Equal(t, "starttls", parseSMTPEncryption())
+	})
 }

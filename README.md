@@ -140,7 +140,7 @@ SMTP_PORT=587
 SMTP_USERNAME=        # optional
 SMTP_PASSWORD=        # optional
 SMTP_FROM=gateway@example.com
-SMTP_STARTTLS=true    # false = implicit TLS (e.g. port 465)
+SMTP_TLS_MODE=starttls    # starttls (default) | tls (implicit) | none (plaintext relay)
 
 # 2. Enable + customize on the specific number
 curl -X PUT http://gateway:3000/numbers/42/email-delivery \

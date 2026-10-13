@@ -63,7 +63,7 @@ type Gateway struct {
 	SMTPUsername         string // SMTP_USERNAME (optional)
 	SMTPPassword         string // SMTP_PASSWORD (optional)
 	SMTPFrom             string // SMTP_FROM — sender address
-	SMTPStartTLS         bool   // SMTP_STARTTLS — true (default) = STARTTLS, false = implicit TLS
+	SMTPEncryption       string // SMTP_TLS_MODE — "starttls" (default) | "tls" (implicit) | "none" (plaintext)
 	SMTPInsecureSkipTLS  bool   // SMTP_TLS_INSECURE — skip server certificate verification (testing / internal relays)
 }
 
@@ -223,7 +223,7 @@ func NewGateway() (*Gateway, error) {
 		SMTPUsername:         os.Getenv("SMTP_USERNAME"),
 		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
 		SMTPFrom:             os.Getenv("SMTP_FROM"),
-		SMTPStartTLS:         strings.ToLower(os.Getenv("SMTP_STARTTLS")) != "false" && os.Getenv("SMTP_STARTTLS") != "0",
+		SMTPEncryption:       parseSMTPEncryption(),
 		SMTPInsecureSkipTLS:  strings.ToLower(os.Getenv("SMTP_TLS_INSECURE")) == "true" || os.Getenv("SMTP_TLS_INSECURE") == "1",
 	}
 

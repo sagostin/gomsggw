@@ -387,8 +387,10 @@ mirrors (or replaces) webhook delivery for a specific number.
    feature is fully off if this is missing or false).
 2. Configure the SMTP server: `SMTP_HOST` and `SMTP_FROM` are required;
    `SMTP_PORT` (default 587), `SMTP_USERNAME` / `SMTP_PASSWORD` (optional
-   auth), `SMTP_STARTTLS` (default true; false = implicit TLS, e.g. port 465),
-   and `SMTP_TLS_INSECURE` (skip certificate verification — testing only).
+   auth), `SMTP_TLS_MODE` — `starttls` (default), `tls` (implicit TLS, e.g.
+   port 465), or `none` (plaintext, only for trusted internal relays) — and
+   `SMTP_TLS_INSECURE` (skip certificate verification — testing only). The
+   legacy `SMTP_STARTTLS=false` maps to `SMTP_TLS_MODE=tls`.
 3. Per-number: enable email delivery, set recipients, and choose a mode via
    `PUT /numbers/{id}/email-delivery`.
 

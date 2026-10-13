@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"strconv"
+	"strings"
 
 	"zultys-smpp-mm4/smpp/coding"
 )
@@ -16,6 +17,25 @@ func envIntOrDefault(key string, def int) int {
 		}
 	}
 	return def
+}
+
+// parseSMTPEncryption resolves the SMTP transport encryption mode.
+// SMTP_TLS_MODE takes precedence: "starttls" (default), "tls" (implicit TLS),
+// or "none" (plaintext — for trusted internal relays). Falls back to the
+// legacy SMTP_STARTTLS flag: true/unset → starttls, false → tls.
+func parseSMTPEncryption() string {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("SMTP_TLS_MODE"))) {
+	case "starttls":
+		return "starttls"
+	case "tls":
+		return "tls"
+	case "none":
+		return "none"
+	}
+	if val := strings.ToLower(strings.TrimSpace(os.Getenv("SMTP_STARTTLS"))); val == "false" || val == "0" {
+		return "tls"
+	}
+	return "starttls"
 }
 
 // StringInArray checks if a string exists in an array of strings

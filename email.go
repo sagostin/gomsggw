@@ -142,25 +142,42 @@ func buildEmailMessage(gateway *Gateway, m *MsgQueueItem, to []string) ([]byte, 
 	return buf.Bytes(), nil
 }
 
+// plainAuthPermissive implements SMTP PLAIN auth without net/smtp's
+// TLS-or-localhost requirement — needed when SMTPEncryption is "none" on a
+// trusted internal relay that still requires credentials.
+type plainAuthPermissive struct {
+	username string
+	password string
+}
+
+func (a plainAuthPermissive) Start(_ *smtp.ServerInfo) (string, []byte, error) {
+	return "PLAIN", []byte("\x00" + a.username + "\x00" + a.password), nil
+}
+
+func (a plainAuthPermissive) Next(_ []byte, more bool) ([]byte, error) {
+	if more {
+		return nil, fmt.Errorf("unexpected server challenge")
+	}
+	return nil, nil
+}
+
 // sendEmail delivers a pre-built RFC 5322 message to the given recipients via
-// the gateway's configured SMTP server. Supports STARTTLS (default) or
-// implicit TLS, with optional plain-auth credentials.
+// the gateway's configured SMTP server. Transport encryption is governed by
+// gateway.SMTPEncryption: "starttls" (default), "tls" (implicit TLS), or
+// "none" (plaintext — only for trusted internal relays).
 func sendEmail(gateway *Gateway, to []string, message []byte) error {
 	addr := net.JoinHostPort(gateway.SMTPHost, fmt.Sprintf("%d", gateway.SMTPPort))
 	tlsConfig := &tls.Config{ServerName: gateway.SMTPHost, InsecureSkipVerify: gateway.SMTPInsecureSkipTLS}
 
 	var client *smtp.Client
 	var err error
-	if gateway.SMTPStartTLS {
+	switch gateway.SMTPEncryption {
+	case "none":
 		client, err = smtp.Dial(addr)
 		if err != nil {
 			return fmt.Errorf("smtp dial: %w", err)
 		}
-		if err := client.StartTLS(tlsConfig); err != nil {
-			client.Close()
-			return fmt.Errorf("smtp starttls: %w", err)
-		}
-	} else {
+	case "tls":
 		conn, dialErr := tls.Dial("tcp", addr, tlsConfig)
 		if dialErr != nil {
 			return fmt.Errorf("smtp tls dial: %w", dialErr)
@@ -170,11 +187,25 @@ func sendEmail(gateway *Gateway, to []string, message []byte) error {
 			conn.Close()
 			return fmt.Errorf("smtp client: %w", err)
 		}
+	default: // "starttls"
+		client, err = smtp.Dial(addr)
+		if err != nil {
+			return fmt.Errorf("smtp dial: %w", err)
+		}
+		if err := client.StartTLS(tlsConfig); err != nil {
+			client.Close()
+			return fmt.Errorf("smtp starttls: %w", err)
+		}
 	}
 	defer client.Close()
 
 	if gateway.SMTPUsername != "" {
-		auth := smtp.PlainAuth("", gateway.SMTPUsername, gateway.SMTPPassword, gateway.SMTPHost)
+		var auth smtp.Auth
+		if gateway.SMTPEncryption == "none" {
+			auth = plainAuthPermissive{gateway.SMTPUsername, gateway.SMTPPassword}
+		} else {
+			auth = smtp.PlainAuth("", gateway.SMTPUsername, gateway.SMTPPassword, gateway.SMTPHost)
+		}
 		if err := client.Auth(auth); err != nil {
 			return fmt.Errorf("smtp auth: %w", err)
 		}
@@ -220,8 +251,8 @@ func (router *Router) DispatchEmail(m *MsgQueueItem, to []string) {
 				"recipients": strings.Join(to, ","),
 				"msgType":    string(m.Type),
 				"mediaCount": len(m.files),
+				"error":      err.Error(),
 			},
-			err,
 		))
 		return
 	}
@@ -238,8 +269,8 @@ func (router *Router) DispatchEmail(m *MsgQueueItem, to []string) {
 				"recipients": strings.Join(to, ","),
 				"smtpHost":   router.gateway.SMTPHost,
 				"msgType":    string(m.Type),
+				"error":      err.Error(),
 			},
-			err,
 		))
 		return
 	}

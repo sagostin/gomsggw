@@ -78,9 +78,6 @@ func buildEmailMessage(gateway *Gateway, m *MsgQueueItem, to []string) ([]byte, 
 	fmt.Fprintf(&body, "To: %s\r\n", m.To)
 	fmt.Fprintf(&body, "Type: %s\r\n", strings.ToUpper(string(m.Type)))
 	fmt.Fprintf(&body, "Received: %s\r\n", m.ReceivedTimestamp.Format(time.RFC1123Z))
-	if m.SourceCarrier != "" {
-		fmt.Fprintf(&body, "Carrier: %s\r\n", m.SourceCarrier)
-	}
 	body.WriteString("\r\n")
 	body.WriteString(m.message)
 	if len(mediaLinks) > 0 {

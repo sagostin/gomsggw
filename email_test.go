@@ -122,6 +122,7 @@ func TestBuildEmailMessage_TextOnly(t *testing.T) {
 		message:           "hello world",
 		ReceivedTimestamp: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC),
 		LogID:             "abc123",
+		SourceCarrier:     "telnyx", // must NOT leak into the email body
 	}
 	raw, err := buildEmailMessage(g, m, []string{"ops@example.com"})
 	require.NoError(t, err)
@@ -131,6 +132,8 @@ func TestBuildEmailMessage_TextOnly(t *testing.T) {
 	assert.Contains(t, msg, "Subject: SMS from +15555550100 to +15555550200")
 	assert.Contains(t, msg, "Content-Type: text/plain")
 	assert.Contains(t, msg, "hello world")
+	assert.NotContains(t, msg, "Carrier:", "carrier must not appear in the email body")
+	assert.NotContains(t, msg, "telnyx")
 	assert.NotContains(t, msg, "multipart/mixed", "no attachments means no multipart envelope")
 }
 

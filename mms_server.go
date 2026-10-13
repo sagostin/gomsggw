@@ -684,12 +684,20 @@ func (s *Session) handleMM4Message() error {
 		"to":             s.Headers.Get("To"),
 	})
 
+	// Shallow-copy the session client so transcode pipeline code can never
+	// mutate the shared in-memory cache entry (gateway.Clients).
+	var clientSnapshot *Client
+	if s.Client != nil {
+		c := *s.Client
+		clientSnapshot = &c
+	}
+
 	mm4Message := &MM4Message{
 		From:          s.Headers.Get("From"),
 		To:            s.Headers.Get("To"),
 		Content:       s.Data,
 		Headers:       s.Headers,
-		Client:        s.Client,
+		Client:        clientSnapshot,
 		TransactionID: transactionID,
 		MessageID:     messageID,
 	}

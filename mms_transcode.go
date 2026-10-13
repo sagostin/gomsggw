@@ -23,6 +23,12 @@ import (
 
 	_ "image/gif"
 	_ "image/jpeg"
+
+	// Register extra decoders so image.Decode (convertImageToPNG) handles
+	// formats beyond GIF/JPEG/PNG (e.g. WebP/BMP/TIFF served by Bicom).
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
+	_ "golang.org/x/image/webp"
 )
 
 // MMS Size Limits
@@ -171,12 +177,12 @@ func (s *MM4Server) transcodeMedia() {
 
 			ff, originalSizeBytes, err := mm4Message.processAndConvertFiles(lm)
 			if err != nil {
-				// scrub large / sensitive stuff before logging
+				// Scrub large payloads before logging. NOTE: never mutate
+				// mm4Message.Client here — it may point at the shared in-memory
+				// client cache (gateway.Clients); overwriting its Password
+				// previously broke auth for that client until the next reload.
 				mm4Message.Files = nil
 				mm4Message.Content = nil
-				if mm4Message.Client != nil {
-					mm4Message.Client.Password = "***"
-				}
 
 				errFields := safeClientInfo(mm4Message)
 				errFields["logID"] = mm4Message.TransactionID
@@ -376,9 +382,36 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, int, err
 			}
 		}
 
-		if strings.Contains(file.ContentType, "application/octet-stream") || file.ContentType == "" {
-			detected := detectMIMEType(decodedContent)
-			entryFields["detected_mime"] = detected
+		// Always sniff the actual bytes — declared Content-Type is frequently
+		// wrong (e.g. Bicom serving JPEG/WebP bytes labeled "image/png").
+		detected := detectMIMEType(decodedContent)
+		detectedBase := strings.ToLower(strings.TrimSpace(strings.Split(detected, ";")[0]))
+		declaredBase := strings.ToLower(strings.TrimSpace(strings.Split(file.ContentType, ";")[0]))
+		entryFields["detected_mime"] = detected
+
+		// An HTML/text body where binary media was declared means the media
+		// URL returned an error page, not media. Fail loudly instead of
+		// feeding it to an image decoder.
+		if (detectedBase == "text/html" || detectedBase == "text/plain") &&
+			(strings.HasPrefix(declaredBase, "image/") ||
+				strings.HasPrefix(declaredBase, "video/") ||
+				strings.HasPrefix(declaredBase, "audio/")) {
+			prefix := decodedContent
+			if len(prefix) > 16 {
+				prefix = prefix[:16]
+			}
+			entryFields["body_prefix_hex"] = fmt.Sprintf("%x", prefix)
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileNotMediaError",
+				logrus.ErrorLevel,
+				entryFields,
+				fmt.Errorf("declared %s but body is %s", file.ContentType, detected),
+			))
+			return nil, 0, fmt.Errorf("media content is %s, not %s (the media URL likely returned an error page)", detected, file.ContentType)
+		}
+
+		if declaredBase == "" || declaredBase == "application/octet-stream" {
 			file.ContentType = detected
 
 			lm.SendLog(lm.BuildLog(
@@ -387,6 +420,20 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, int, err
 				logrus.DebugLevel,
 				entryFields,
 			))
+		} else if detectedBase != declaredBase && detectedBase != "application/octet-stream" &&
+			(strings.HasPrefix(detectedBase, "image/") ||
+				strings.HasPrefix(detectedBase, "video/") ||
+				strings.HasPrefix(detectedBase, "audio/") ||
+				compatibleTypes[detectedBase]) {
+			// Declared type disagrees with the actual bytes — trust the bytes.
+			entryFields["declared_mime"] = file.ContentType
+			lm.SendLog(lm.BuildLog(
+				"Server.MM4.TranscodeMedia",
+				"FileMimeMismatch",
+				logrus.WarnLevel,
+				entryFields,
+			))
+			file.ContentType = detectedBase
 		}
 
 		entryFields["branch_content_type"] = file.ContentType
@@ -404,7 +451,15 @@ func (m *MM4Message) processAndConvertFiles(lm *LogManager) ([]MsgFile, int, err
 				entryFields,
 			))
 
-			if strings.Contains(file.ContentType, "jpeg") || strings.Contains(file.ContentType, "jpg") {
+			if strings.Contains(file.ContentType, "heic") || strings.Contains(file.ContentType, "heif") {
+				// HEIC/HEIF (iPhone photos) — decode via ffmpeg, then treat as PNG
+				convertedContent, err = convertHEICtoPNG(decodedContent)
+				newType = "image/png"
+				newExt = ".png"
+				if err == nil {
+					convertedContent, err = compressPNG(convertedContent, int(maxImageSize))
+				}
+			} else if strings.Contains(file.ContentType, "jpeg") || strings.Contains(file.ContentType, "jpg") {
 				convertedContent, err = compressJPEG(decodedContent, int(maxImageSize))
 				newType = "image/jpeg"
 				newExt = ".jpg"
@@ -654,6 +709,42 @@ func convertImageToPNG(content []byte) ([]byte, string, error) {
 	}
 
 	return buf.Bytes(), "image/png", nil
+}
+
+// convertHEICtoPNG converts HEIC/HEIF images (e.g. iPhone photos) to PNG using
+// ffmpeg. Requires an ffmpeg build with HEIF decoding support (libheif/libde265);
+// if unavailable, the ffmpeg error is returned so the caller can surface a
+// user-friendly unsupported-format message.
+func convertHEICtoPNG(content []byte) ([]byte, error) {
+	tempPath := os.Getenv("TRANSCODE_TEMP_PATH")
+	if tempPath == "" {
+		tempPath = os.TempDir() // Use OS temp directory as fallback
+	}
+
+	inputFile := filepath.Join(tempPath, uuid.New().String()+".heic")
+	outputFile := filepath.Join(tempPath, uuid.New().String()+".png")
+
+	if err := ioutil.WriteFile(inputFile, content, 0644); err != nil {
+		return nil, fmt.Errorf("failed to write temporary input file: %v", err)
+	}
+	defer os.Remove(inputFile)  // Ensure cleanup
+	defer os.Remove(outputFile) // Ensure cleanup
+
+	// Capture FFmpeg's stderr output for debugging
+	var stderr bytes.Buffer
+	err := ffmpeg.Input(inputFile).
+		Output(outputFile, ffmpeg.KwArgs{"frames:v": "1"}).
+		OverWriteOutput().ErrorToStdOut().WithErrorOutput(&stderr).Run()
+	if err != nil {
+		return nil, fmt.Errorf("FFmpeg HEIC conversion failed (ffmpeg build may lack HEIF support): %v\nFFmpeg stderr:\n%s", err, stderr.String())
+	}
+
+	pngContent, err := ioutil.ReadFile(outputFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read temporary output file: %v", err)
+	}
+
+	return pngContent, nil
 }
 
 // processVideoContent converts video content if needed.

@@ -303,12 +303,20 @@ func indexOf(s string, sep byte) int {
 func unauthorized(ctx iris.Context, gateway *Gateway, message string) {
 	// Log the unauthorized access attempt
 	var lm = gateway.LogManager
+	clientIP := ctx.Values().GetString("client_ip")
+	if clientIP == "" {
+		clientIP = ctx.RemoteAddr()
+	}
 	lm.SendLog(lm.BuildLog(
 		"Server.Web.AuthMiddleware",
 		"Unauthorized web client",
 		logrus.ErrorLevel,
 		map[string]interface{}{
-			"ip": ctx.Values().GetString("client_ip"),
+			"ip":        clientIP,
+			"method":    ctx.Method(),
+			"path":      ctx.Path(),
+			"userAgent": ctx.GetHeader("User-Agent"),
+			"reason":    message,
 		},
 	))
 
@@ -318,6 +326,40 @@ func unauthorized(ctx iris.Context, gateway *Gateway, message string) {
 	// Respond with 401 Unauthorized
 	ctx.StatusCode(http.StatusUnauthorized)
 	ctx.WriteString(message)
+}
+
+// logWebAuthFailure emits a detailed log for a failed web-client authentication
+// so auth breakage (e.g. Bicom) is diagnosable: which user, which auth method,
+// which URL, and exactly which check failed. Never logs the password/token.
+func logWebAuthFailure(ctx iris.Context, gateway *Gateway, reason string, username string, authMethod string, client *Client) {
+	lm := gateway.LogManager
+	clientIP := ctx.Values().GetString("client_ip")
+	if clientIP == "" {
+		clientIP = ctx.RemoteAddr()
+	}
+	fields := map[string]interface{}{
+		"ip":         clientIP,
+		"method":     ctx.Method(),
+		"path":       ctx.Path(),
+		"userAgent":  ctx.GetHeader("User-Agent"),
+		"reason":     reason,
+		"username":   username,
+		"authMethod": authMethod,
+	}
+	if client != nil {
+		fields["clientID"] = client.ID
+		fields["clientType"] = client.Type
+		if client.Settings != nil {
+			fields["apiFormat"] = client.Settings.APIFormat
+			fields["expectedAuthMethod"] = client.Settings.AuthMethod
+		}
+	}
+	lm.SendLog(lm.BuildLog(
+		"Server.Web.AuthMiddleware",
+		"WebClientAuthFailed",
+		logrus.ErrorLevel,
+		fields,
+	))
 }
 
 // SetupClientRoutes sets up the HTTP routes for client management.
@@ -1795,6 +1837,7 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 					authMethod = "api_key"
 					ok = true
 				} else {
+					logWebAuthFailure(ctx, gateway, "Invalid or expired API key", "", "api_key", nil)
 					unauthorized(ctx, gateway, "Invalid or expired API key")
 					return
 				}
@@ -1815,6 +1858,7 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 	}
 
 	if !ok {
+		logWebAuthFailure(ctx, gateway, "Missing or malformed Authorization header", username, authMethod, nil)
 		unauthorized(ctx, gateway, "Authentication required")
 		return
 	}
@@ -1825,6 +1869,7 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 		// API key auth: resolve client from key's ClientID
 		client = gateway.getClientByID(apiKey.ClientID)
 		if client == nil {
+			logWebAuthFailure(ctx, gateway, "API key's associated client not found", "", "api_key", nil)
 			unauthorized(ctx, gateway, "API key's associated client not found")
 			return
 		}
@@ -1845,6 +1890,7 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 	} else {
 		// Traditional auth: look up client by username
 		if username == "" {
+			logWebAuthFailure(ctx, gateway, "Empty username in credentials", "", authMethod, nil)
 			unauthorized(ctx, gateway, "Authentication required")
 			return
 		}
@@ -1855,12 +1901,14 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 		gateway.mu.RUnlock()
 
 		if !exists {
+			logWebAuthFailure(ctx, gateway, "Unknown username", username, authMethod, nil)
 			unauthorized(ctx, gateway, "Invalid credentials")
 			return
 		}
 
 		// Password check
 		if client.Password != password {
+			logWebAuthFailure(ctx, gateway, "Password mismatch", username, authMethod, client)
 			unauthorized(ctx, gateway, "Invalid credentials")
 			return
 		}
@@ -1868,6 +1916,7 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 
 	// Only web clients can use REST API - legacy clients must use SMPP
 	if client.Type != "" && client.Type != "web" {
+		logWebAuthFailure(ctx, gateway, "Legacy client attempted REST API access", username, authMethod, client)
 		ctx.StatusCode(iris.StatusForbidden)
 		ctx.JSON(iris.Map{
 			"status":  "error",
@@ -1884,6 +1933,7 @@ func (gateway *Gateway) clientAuthMiddleware(ctx iris.Context) {
 		}
 
 		if expectedAuth != authMethod {
+			logWebAuthFailure(ctx, gateway, fmt.Sprintf("Auth method mismatch: client requires %s", expectedAuth), username, authMethod, client)
 			ctx.StatusCode(iris.StatusUnauthorized)
 			ctx.JSON(iris.Map{
 				"status":  "error",
@@ -1974,7 +2024,11 @@ func fetchMediaFromURL(mediaURL string, timeout time.Duration) (content []byte, 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", "", fmt.Errorf("non-OK HTTP status: %s", resp.Status)
+		// Include a short body preview — error pages usually explain why
+		// (auth failure, expired media, etc.)
+		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
+		return nil, "", "", fmt.Errorf("non-OK HTTP status: %s (content-type: %q, body preview: %q)",
+			resp.Status, resp.Header.Get("Content-Type"), string(preview))
 	}
 
 	content, err = io.ReadAll(resp.Body)
@@ -2020,6 +2074,8 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 				logrus.InfoLevel,
 				map[string]interface{}{
 					"clientIP":    clientIP,
+					"method":      ctx.Method(),
+					"path":        ctx.Path(),
 					"authType":    authType,
 					"userAgent":   ctx.GetHeader("User-Agent"),
 					"contentType": ctx.GetHeader("Content-Type"),
@@ -2359,6 +2415,9 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 
 			// For MMS with files, route through transcoding pipeline (like MM4)
 			if msgType == MsgQueueItemType.MMS && len(files) > 0 {
+				// Shallow-copy the client so transcode pipeline code can never
+				// mutate the shared in-memory cache entry (gateway.Clients).
+				clientSnapshot := *client
 				// Create MM4Message for transcoding (similar to MM4 inbound flow)
 				mm4Message := &MM4Message{
 					From:          fromNumber,
@@ -2366,7 +2425,7 @@ func SetupMessageRoutes(app *iris.Application, gateway *Gateway) {
 					Files:         files,
 					TransactionID: logID,
 					MessageID:     logID,
-					Client:        client,
+					Client:        &clientSnapshot,
 				}
 
 				lm.SendLog(lm.BuildLog(

@@ -1139,8 +1139,8 @@ func (router *Router) DispatchWebhook(webhookURL string, item *MsgQueueItem, toC
 	}
 	defer resp.Body.Close()
 
-	// Read response body for logging
-	respBody, _ := io.ReadAll(resp.Body)
+	// Read response body for logging (capped — some servers return huge error pages)
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 
 	if resp.StatusCode >= 300 {
 		lm.SendLog(lm.BuildLog(
@@ -1151,7 +1151,10 @@ func (router *Router) DispatchWebhook(webhookURL string, item *MsgQueueItem, toC
 				"logID":        item.LogID,
 				"webhookURL":   webhookURL,
 				"apiFormat":    apiFormat,
+				"authType":     authType,
+				"toClient":     toClientName,
 				"statusCode":   resp.StatusCode,
+				"authRejected": resp.StatusCode == 401 || resp.StatusCode == 403,
 				"responseBody": string(respBody),
 			},
 		))
@@ -1167,6 +1170,8 @@ func (router *Router) DispatchWebhook(webhookURL string, item *MsgQueueItem, toC
 			"logID":        item.LogID,
 			"webhookURL":   webhookURL,
 			"apiFormat":    apiFormat,
+			"authType":     authType,
+			"toClient":     toClientName,
 			"statusCode":   resp.StatusCode,
 			"responseBody": string(respBody),
 		},
